@@ -12,6 +12,7 @@ import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 
 class ProviderQuotaBackendTest {
     @get:Rule val temporary = TemporaryFolder()
@@ -104,6 +105,23 @@ class ProviderQuotaBackendTest {
             assertEquals(2, requests.get())
             now += 901_000
             assertEquals("error", backend.get("openrouter", null, null).str("status"))
+        }
+    }
+
+    @Test(timeout = 10_000) fun `sequential polls recheck expiry instead of reusing a completed in-flight result`() {
+        val creds = credentials(Json.obj("openrouter" to Json.obj("type" to "api", "key" to "test")))
+        val requests = AtomicInteger()
+        val now = AtomicLong(1_800_000_000_000L)
+        ProviderQuotaBackend(creds, { _, _, _, _ -> metadata("openrouter") }, QuotaHttp {
+            requests.incrementAndGet()
+            response("""{"data":{"limit":100,"usage":25}}""")
+        }, clock = now::get).use { backend ->
+            repeat(1_000) { poll ->
+                val status = backend.get("openrouter", null, null)
+                assertEquals("Poll $poll returned an expired result", now.get(), status.long("checkedAt"))
+                assertEquals(poll + 1, requests.get())
+                now.addAndGet(30_001)
+            }
         }
     }
 

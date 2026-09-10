@@ -40,13 +40,16 @@ class ProviderQuotaBackend(
             val version = generation.get()
             try {
                 executor.execute {
-                    try { it.complete(load(key, version)) }
-                    catch (_: Exception) { it.complete(status(key, "error", "Provider quota request failed; retry on the next poll")) }
+                    val result = try { load(key, version) }
+                    catch (_: Exception) { status(key, "error", "Provider quota request failed; retry on the next poll") }
                     finally { inFlight.remove(key, it) }
+                    // Retire the poll before waking callers. Their next get must
+                    // recheck credentials and expiry instead of joining this result.
+                    it.complete(result)
                 }
             } catch (_: java.util.concurrent.RejectedExecutionException) {
-                it.complete(status(key, "error", "Provider quota backend is disposed"))
                 inFlight.remove(key, it)
+                it.complete(status(key, "error", "Provider quota backend is disposed"))
             }
         }
         return try { future.get(60, TimeUnit.SECONDS).deepCopy() }
