@@ -900,7 +900,6 @@ export function Chat() {
         onOpenCompletedSessions={openCompletedSessions}
         onOpenRunningSessions={openRunningSessions}
         onCreateSessionFromPicker={startNewChatDraft}
-        onSendFromPicker={() => setShowSessionPicker(false)}
         onCreateSession={startNewChatDraft}
       />
       <Show when={providerConnectionData()}>

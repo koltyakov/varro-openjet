@@ -106,7 +106,6 @@ export function ChatWorkspace(props: {
   onOpenCompletedSessions: () => void;
   onOpenRunningSessions: () => void;
   onCreateSessionFromPicker: () => void;
-  onSendFromPicker: () => void;
   onCreateSession: () => void;
 }) {
   let chatContentRef: HTMLDivElement | undefined;
@@ -323,8 +322,7 @@ export function ChatWorkspace(props: {
               onPrimarySessionsCountChange={setVisiblePrimarySessionsCount}
             />
             <div class="session-list-new-session">
-              {/* Sending has already selected the new session. Reveal it without resetting it. */}
-              <ChatInput newSession onBeforeSend={props.onSendFromPicker} />
+              <ChatInput newSession onBeforeSend={props.onCreateSessionFromPicker} />
             </div>
           </>
         }
