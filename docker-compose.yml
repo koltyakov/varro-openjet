@@ -17,6 +17,7 @@ x-common: &common
       # readonly in bash, so scripts/build.sh exports these names instead.
       BUILDER_UID: ${VARRO_UID:-1000}
       BUILDER_GID: ${VARRO_GID:-1000}
+      BUILD_ENV_HASH: ${VARRO_BUILD_ENV_HASH:-unknown}
   image: varro-openjet-build
   volumes:
     - gradle-cache:/home/builder/.gradle
@@ -62,14 +63,14 @@ services:
     stdin_open: true
     tty: true
 
-  # Plugin verifier and tests, useful before publishing.
+  # Kotlin and webview host tests. Run the Plugin Verifier on a dev machine.
   verify:
     <<: *common
     volumes:
       - gradle-cache:/home/builder/.gradle
       - npm-cache:/home/builder/.npm
       - .:/workspace
-    command: bash -lc "./gradlew --no-daemon test verifyPlugin"
+    command: bash -lc "./gradlew --no-daemon test"
 
 volumes:
   gradle-cache:

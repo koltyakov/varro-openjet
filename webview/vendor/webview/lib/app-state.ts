@@ -250,6 +250,8 @@ export interface AppStateInstance {
   setShowPermissionSettings: Setter<boolean>;
   composerFocusKey: Accessor<number>;
   setComposerFocusKey: Setter<number>;
+  openRunningSessionsKey: Accessor<number>;
+  setOpenRunningSessionsKey: Setter<number>;
   openAttentionSessionsKey: Accessor<number>;
   setOpenAttentionSessionsKey: Setter<number>;
   openCompletedSessionsKey: Accessor<number>;
@@ -509,6 +511,7 @@ export function createAppState(): AppStateInstance {
   const [showModels, setShowModels] = createSignal(false);
   const [showPermissionSettings, setShowPermissionSettings] = createSignal(false);
   const [composerFocusKey, setComposerFocusKey] = createSignal(0);
+  const [openRunningSessionsKey, setOpenRunningSessionsKey] = createSignal(0);
   const [openAttentionSessionsKey, setOpenAttentionSessionsKey] = createSignal(0);
   const [openCompletedSessionsKey, setOpenCompletedSessionsKey] = createSignal(0);
   const [sessionSearchFocusKey, setSessionSearchFocusKey] = createSignal(0);
@@ -592,6 +595,8 @@ export function createAppState(): AppStateInstance {
     setShowPermissionSettings,
     composerFocusKey,
     setComposerFocusKey,
+    openRunningSessionsKey,
+    setOpenRunningSessionsKey,
     openAttentionSessionsKey,
     setOpenAttentionSessionsKey,
     openCompletedSessionsKey,
@@ -686,6 +691,8 @@ export const showPermissionSettings = defaultAppState.showPermissionSettings;
 export const setShowPermissionSettings = defaultAppState.setShowPermissionSettings;
 export const composerFocusKey = defaultAppState.composerFocusKey;
 export const setComposerFocusKey = defaultAppState.setComposerFocusKey;
+export const openRunningSessionsKey = defaultAppState.openRunningSessionsKey;
+export const setOpenRunningSessionsKey = defaultAppState.setOpenRunningSessionsKey;
 export const openAttentionSessionsKey = defaultAppState.openAttentionSessionsKey;
 export const setOpenAttentionSessionsKey = defaultAppState.setOpenAttentionSessionsKey;
 export const openCompletedSessionsKey = defaultAppState.openCompletedSessionsKey;
@@ -739,6 +746,7 @@ export function resetDefaultAppState() {
   setShowModels(next.showModels());
   setShowPermissionSettings(next.showPermissionSettings());
   setComposerFocusKey(next.composerFocusKey());
+  setOpenRunningSessionsKey(next.openRunningSessionsKey());
   setOpenAttentionSessionsKey(next.openAttentionSessionsKey());
   setOpenCompletedSessionsKey(next.openCompletedSessionsKey());
   setSessionSearchFocusKey(next.sessionSearchFocusKey());

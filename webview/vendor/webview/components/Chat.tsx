@@ -5,6 +5,7 @@ import {
   showSessionPicker,
   setPersistentShowSessionPicker as setShowSessionPicker,
   showModels,
+  openRunningSessionsKey,
   openAttentionSessionsKey,
   openCompletedSessionsKey,
   sessionSearchFocusKey,
@@ -151,6 +152,7 @@ export function Chat() {
   const rawSessionIndicators = createMemo(() => deriveSessionIndicators(state.sessions));
   const sessionIndicators = createStableSessionIndicators(rawSessionIndicators);
   let publishedUnreadWorkspace: string | null = null;
+  let publishedUnreadSessionIds = '';
   const publishedUnreadStates = new Map<string, PublishedUnreadState>();
   let publishedCommandState = '';
   createEffect(() => {
@@ -164,7 +166,14 @@ export function Chat() {
     if (!workspacePath) return;
     if (publishedUnreadWorkspace !== workspacePath) {
       publishedUnreadWorkspace = workspacePath;
+      publishedUnreadSessionIds = '';
       publishedUnreadStates.clear();
+    }
+    const sessionIds = state.sessions.filter(isPrimarySession).map((session) => session.id).sort();
+    const serializedSessionIds = JSON.stringify(sessionIds);
+    if (serializedSessionIds !== publishedUnreadSessionIds) {
+      publishedUnreadSessionIds = serializedSessionIds;
+      postMessage({ type: 'session-unread-state/sync', payload: { sessionIds } });
     }
     for (const session of state.sessions) {
       if (!isPrimarySession(session)) continue;
@@ -481,6 +490,21 @@ export function Chat() {
       (session) => indicators.newlyCompletedIds.has(session.id)
     );
   });
+  let publishedCompletedSessionIds = '';
+  createEffect(() => {
+    const indicators = sessionIndicators();
+    const completedSessionIds = recentSessions()
+      .filter((session) => isPrimarySession(session) && indicators.newlyCompletedIds.has(session.id))
+      .map((session) => session.id)
+      .sort();
+    const serialized = JSON.stringify(completedSessionIds);
+    if (serialized === publishedCompletedSessionIds) return;
+    publishedCompletedSessionIds = serialized;
+    postMessage({
+      type: 'session-unread-state/summary',
+      payload: { completedSessionIds },
+    });
+  });
   const runningSessionsCount = () => headerSessionCounts().running;
   const attentionSessionsCount = () => headerSessionCounts().attention;
   const failedSessionsCount = () => headerSessionCounts().failed;
@@ -547,6 +571,16 @@ export function Chat() {
       setSubagentParentId(null);
     }
   });
+
+  createEffect(
+    on(
+      openRunningSessionsKey,
+      () => {
+        openRunningSessions();
+      },
+      { defer: true }
+    )
+  );
 
   createEffect(
     on(

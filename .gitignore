@@ -3,7 +3,7 @@ build/
 out/
 dist/
 .gradle/
-.kotlin/ 
+.kotlin/
 
 # Local platform artifacts resolved by the IntelliJ Platform Gradle plugin.
 .intellijPlatform/
@@ -56,3 +56,6 @@ replay_pid*
 # --- Reference checkouts -----------------------------------------------------
 # Upstream Varro and the JetBrains sample plugin, kept locally for comparison.
 tmp/
+
+# OpenCode & AI ignore local configs and artifacts
+.opencode/

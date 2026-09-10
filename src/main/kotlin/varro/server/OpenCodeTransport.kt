@@ -39,6 +39,7 @@ data class RequestOptions(
     val unscoped: Boolean = false,
     /** Override the directory this request is scoped to. */
     val directory: String? = null,
+    val timeoutMs: Long? = null,
 )
 
 /**
@@ -99,6 +100,13 @@ class OpenCodeTransport(
 
     /** Request ids currently in flight, so a restart can abort them. */
     private val inFlight = ConcurrentHashMap.newKeySet<CompletableFuture<*>>()
+    private val activeRequestCount = AtomicInteger(0)
+    private val lastMutationAt = AtomicLong(System.currentTimeMillis())
+
+    fun isQuiet(): Boolean = activeRequestCount.get() == 0 && pendingAttentionRequests.isEmpty() &&
+        System.currentTimeMillis() - lastMutationAt.get() >= 60_000
+
+    fun attentionCount(): Int = pendingAttentionRequests.values.toSet().size
 
     /** Attention requests (permissions/questions) awaiting a reply, mapped to their session. */
     private val pendingAttentionRequests = ConcurrentHashMap<String, String>()
@@ -124,6 +132,13 @@ class OpenCodeTransport(
         body: JsonElement? = null,
         options: RequestOptions = RequestOptions(),
     ): OpenCodeResponse {
+        activeRequestCount.incrementAndGet()
+        if (method.uppercase() !in setOf("GET", "HEAD")) lastMutationAt.set(System.currentTimeMillis())
+        try { return performRequest(method, path, body, options) }
+        finally { activeRequestCount.decrementAndGet() }
+    }
+
+    private fun performRequest(method: String, path: String, body: JsonElement?, options: RequestOptions): OpenCodeResponse {
         val directory = if (options.unscoped) {
             null
         } else {
@@ -133,7 +148,7 @@ class OpenCodeTransport(
 
         val normalizedMethod = method.uppercase()
         val builder = HttpRequest.newBuilder(URI.create(scoped.url))
-            .timeout(Duration.ofMillis(requestTimeoutMs(normalizedMethod, path)))
+            .timeout(Duration.ofMillis(options.timeoutMs ?: requestTimeoutMs(normalizedMethod, path)))
 
         OpenCodeRequestScope.directoryHeaders(scoped.directory).forEach(builder::header)
 

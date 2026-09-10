@@ -55,7 +55,7 @@ object Json {
 
     /** Context snapshots need explicit nulls to pass validation and clear stale selections. */
     fun stringifyMessage(message: JsonElement): String = when (message.asObjectOrNull().str("type")) {
-        "api/response", "provider-limit/updated", "context/update" -> message.toString()
+        "api/response", "provider-limit/updated", "context/update", "ralph/state", "queued-messages/sync" -> message.toString()
         else -> stringify(message)
     }
 

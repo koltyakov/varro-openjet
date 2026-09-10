@@ -79,8 +79,12 @@ class VarroStore : PersistentStateComponent<VarroStore.StoreState> {
         /** `Record<sessionId, { kind, unread, markerAt }>` - completed/plan-ready badges. */
         @JvmField var sessionUnreadState: String = "{}"
 
+        /** Completed session ids in the webview's visible Completed filter. */
+        @JvmField var completedSessionUnreadIds: String = "[]"
+
         /** Ralph orchestration runs, keyed by manager session id. */
         @JvmField var ralphRuns: String = "{}"
+        @JvmField var permissionRules: String = "{}"
     }
 
     private var state = StoreState()
@@ -173,9 +177,34 @@ class VarroStore : PersistentStateComponent<VarroStore.StoreState> {
         get() = readObject(state.sessionUnreadState)
         set(value) { state.sessionUnreadState = Json.stringify(value) }
 
+    @Synchronized
+    fun removeSessionUnreadState(sessionIds: Collection<String>) {
+        val unread = sessionUnreadState
+        var removed = false
+        sessionIds.forEach { removed = unread.remove(it) != null || removed }
+        if (removed) sessionUnreadState = unread
+        completedSessionUnreadIds = completedSessionUnreadIds - sessionIds.toSet()
+    }
+
+    @Synchronized
+    fun retainSessionUnreadState(sessionIds: Set<String>) {
+        val unread = sessionUnreadState
+        val removed = unread.keySet().removeIf { it !in sessionIds }
+        if (removed) sessionUnreadState = unread
+        completedSessionUnreadIds = completedSessionUnreadIds.filter { it in sessionIds }
+    }
+
+    var completedSessionUnreadIds: List<String>
+        get() = readArray(state.completedSessionUnreadIds).strings()
+        set(value) { state.completedSessionUnreadIds = Json.stringify(Json.array(value.distinct())) }
+
     var ralphRuns: JsonObject
         get() = readObject(state.ralphRuns)
         set(value) { state.ralphRuns = Json.stringify(value) }
+
+    var permissionRules: JsonObject
+        @Synchronized get() = readObject(state.permissionRules)
+        @Synchronized set(value) { state.permissionRules = Json.stringify(value) }
 
     var editorRoutes: JsonObject
         get() = readObject(state.editorRoutes)

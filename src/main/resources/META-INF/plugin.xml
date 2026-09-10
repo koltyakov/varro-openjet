@@ -73,6 +73,7 @@
             instance="varro.settings.VarroConfigurable"/>
 
         <notificationGroup id="Varro Notifications" displayType="BALLOON"/>
+        <statusBarWidgetFactory implementation="varro.toolwindow.VarroStatusWidgetFactory" id="VarroStatus"/>
         <fileEditorProvider implementation="varro.host.VarroChatEditorProvider"/>
         <virtualFileSystem key="varro-chat" implementationClass="varro.host.VarroChatFileSystem" physical="false"/>
     </extensions>

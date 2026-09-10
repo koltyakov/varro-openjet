@@ -164,16 +164,14 @@ class OpenCodeProcess(
         }
 
         return runCatching {
-            val process = commandLine.createProcess()
-            val output = process.inputStream.bufferedReader().readText() +
-                process.errorStream.bufferedReader().readText()
-            val finished = process.waitFor(UPGRADE_TIMEOUT_MS, TimeUnit.MILLISECONDS)
-            if (!finished) {
-                process.destroyForcibly()
+            val output = com.intellij.execution.process.CapturingProcessHandler(commandLine)
+                .runProcess(UPGRADE_TIMEOUT_MS.toInt())
+            if (output.isTimeout) {
                 UpgradeResult(false, "`$command` timed out after ${UPGRADE_TIMEOUT_MS / 1000}s.")
             } else {
                 cli.clearCache()
-                UpgradeResult(process.exitValue() == 0, output.ifBlank { "`$command` finished." })
+                UpgradeResult(output.exitCode == 0, (output.stdout + output.stderr).takeLast(MAX_CAPTURED_OUTPUT)
+                    .ifBlank { "`$command` finished." })
             }
         }.getOrElse { failure ->
             UpgradeResult(false, failure.message ?: "`$command` failed.")

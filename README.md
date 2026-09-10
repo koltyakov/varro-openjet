@@ -1,10 +1,12 @@
-# Varro OpenJet
+![Varro: OpenJet](https://raw.githubusercontent.com/koltyakov/varro-openjet/main/assets/banner.jpg)
+
+# Varro: OpenJet
 
 [Varro](https://github.com/koltyakov/varro) for JetBrains IDEs. Run [OpenCode](https://opencode.ai) in IntelliJ IDEA, WebStorm, PyCharm, GoLand, or another IntelliJ-platform IDE.
 
 The plugin reuses Varro's chat UI, with a Kotlin backend for editor integration, settings, persistence, and provider limits. It uses your existing OpenCode configuration for providers, models, agents, commands, skills, and MCP servers.
 
-The port is still in progress. See [porting status](docs/porting-status.md) for supported features and known gaps.
+![The Varro OpenJet workbench in a JetBrains IDE](https://raw.githubusercontent.com/koltyakov/varro-openjet/main/assets/demo.jpg)
 
 ## Getting started
 
@@ -61,7 +63,7 @@ Quota badges show remaining allowances and reset times when the provider exposes
 
 When a poll fails, Varro may show the last successful snapshot for up to 15 minutes. Quota caches are project-local. Antigravity needs a detected local language-server port or the `ANTIGRAVITY_BASE_URL` and `ANTIGRAVITY_CSRF_TOKEN` environment variables, with a loopback IP address in the URL.
 
-Usage reports open as Markdown documents and cover retained history across projects. `/stats` supports daily, weekly, monthly, and all-time accounting. The current report implementation handles up to 250 sessions; use `opencode stats` for larger histories.
+Usage reports open as Markdown documents and cover retained history across projects for today, the last 7 and 30 days, and optionally all time. They read the local OpenCode database without starting the server and include prompt counts, tokens, cache usage, and assistant duration by provider and model. If the database is missing, reports fall back to REST history for up to 250 sessions.
 
 ### Network and credentials
 
@@ -78,7 +80,7 @@ Docker provides the JDK, Gradle, and Node toolchain:
 ```bash
 ./scripts/build.sh          # build the working tree
 ./scripts/build.sh clean    # clean build inside the image
-./scripts/build.sh verify   # tests and IntelliJ plugin verifier
+./scripts/build.sh verify   # Kotlin and webview host tests
 ./scripts/build.sh shell    # open a shell in the build container
 ```
 
@@ -93,6 +95,8 @@ Install JDK 21 and the Node/npm versions listed in [`webview/package.json`](webv
 ./gradlew runIde            # launch a sandbox IDE
 ./gradlew test
 ```
+
+When needed, run the IntelliJ Plugin Verifier directly on a development machine with `./gradlew verifyPlugin`. Do not run it in Docker.
 
 The build uses `npm ci`. If you change webview dependencies, run `npm install` in `webview/` and commit the updated lockfile. Keep the Node/npm versions in `webview/package.json` and `Dockerfile` in sync.
 

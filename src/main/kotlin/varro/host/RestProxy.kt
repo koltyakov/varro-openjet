@@ -49,12 +49,18 @@ class RestProxy(
     private val services: HostServices,
     private val postResponse: (JsonObject) -> Unit,
     private val admitQueuedDispatch: (JsonObject) -> Boolean = { true },
+    private val completeQueuedDispatch: (JsonObject, Boolean, Boolean) -> Unit = { _, _, _ -> },
 ) {
     private val log = logger<RestProxy>()
 
     /** In-flight requests, keyed by the webview's cancel key. */
     private val activeRequests = ConcurrentHashMap<String, Int>()
     private val disposed = AtomicBoolean(false)
+    private val trash = SessionTrash(store, request = { method, path, body, directory ->
+        server.transport.request(method, path, body, RequestOptions(directory = directory)).data
+    }, journal = varro.store.JsonJournal(java.nio.file.Path.of(
+        com.intellij.openapi.application.PathManager.getConfigPath(), "varro", project.locationHash, "trash.json",
+    )))
 
     /**
      * Services the proxy needs from the rest of the host. Kept as an interface so
@@ -71,6 +77,8 @@ class RestProxy(
         fun updateOpenCodePermissions(body: JsonElement?): JsonObject
         fun judgePermission(body: JsonElement?): JsonObject
         fun judgeModel(providerId: String?, modelId: String?, variant: String?): JsonObject
+        fun permissionRules(sessionId: String, rules: JsonElement?, directory: String?): JsonArray
+        fun allowPermission(body: JsonObject, project: Boolean, directory: String?): JsonArray
         fun providerLimit(providerId: String, modelId: String?): JsonObject
         fun sessionDiffSummary(sessionId: String, directory: String?, revision: String?): JsonObject
     }
@@ -99,22 +107,30 @@ class RestProxy(
             }
         }
 
+        var admitted = false
+        var success = false
+        var rejected = false
         try {
             if (payload.obj("queuedMessageDispatch") != null && !admitQueuedDispatch(payload)) {
                 error("Queued message dispatch lease is no longer current")
             }
+            admitted = payload.obj("queuedMessageDispatch") != null && method == "POST"
             val data = if (path.startsWith(ApiRoutes.NAMESPACE)) {
                 handleVarroRequest(method, path, payload.get("body"))
             } else {
-                forward(method, path, payload.get("body"))
+                forward(method, path, payload.get("body"), payload.obj("queuedMessageDispatch") != null)
             }
+            success = true
+            if (admitted) completeQueuedDispatch(payload, true, false)
             if (cancelKey == null || activeRequests.containsKey(cancelKey)) respond(id, data = data)
         } catch (failure: Exception) {
+            rejected = Regex("^(400|401|403|404|405|413|415|422|429) ").containsMatchIn(failure.message.orEmpty())
             log.warn("api/request failed: $method ${path.substringBefore('?')}: ${failure.message}")
             if (cancelKey == null || activeRequests.containsKey(cancelKey)) {
                 respond(id, error = failure.message ?: "Request failed")
             }
         } finally {
+            if (admitted && !success) completeQueuedDispatch(payload, false, rejected)
             cancelKey?.let(activeRequests::remove)
         }
     }
@@ -145,8 +161,15 @@ class RestProxy(
 
     // --- OpenCode forwarding --------------------------------------------------
 
-    private fun forward(method: String, path: String, body: JsonElement?): JsonElement? {
+    private fun forward(method: String, path: String, body: JsonElement?, queuedDispatch: Boolean = false): JsonElement? {
         val request = ApiRoutes.parse(method, path)
+
+        if (queuedDispatch && method == "GET") {
+            val response = server.transport.request(method, path, options = RequestOptions(
+                directory = body.asObjectOrNull().str("workspaceDirectory"), captureNextCursor = true,
+            ))
+            return Json.obj("items" to response.data).apply { response.nextCursor?.let { addProperty("nextCursor", it) } }
+        }
 
         // `GET /session?limit=` is a paginated read in the client's contract even
         // though OpenCode answers with a plain array, so the host builds the page.
@@ -171,9 +194,9 @@ class RestProxy(
         val response = server.transport.request("GET", path)
         val sessions = response.data.asArrayOrNull() ?: JsonArray()
 
-        val recycled = store.recycleBin
-            .mapNotNull { it.asObjectOrNull().str("rootID") }
-            .toSet()
+        val recycled = store.recycleBin.flatMap {
+            it.asObjectOrNull()?.getAsJsonArray("sessions")?.mapNotNull { session -> session.asObjectOrNull().str("id") }.orEmpty()
+        }.toSet()
         val hidden = store.hiddenSessionIds
 
         val visible = sessions.filter { entry ->
@@ -250,19 +273,23 @@ class RestProxy(
             pathname.startsWith("${ApiRoutes.Endpoints.SESSION}/") ->
                 handleSessionEndpoint(method, request, body, q("directory"))
 
-            // Host-stored permission rules are not implemented in this port.
-            // These answer with the shapes the client validates, using each
-            // contract's own "unsupported" branch, so the UI reports the feature
-            // as unavailable instead of rejecting a malformed reply.
+            // Server process memory is distinct from persisted session/project rules.
             pathname == ApiRoutes.Endpoints.PERMISSION_SERVER_MEMORY -> Json.obj(
                 "supported" to false,
                 "rules" to JsonArray(),
                 "reason" to "Server-memory permissions are not implemented in Varro OpenJet.",
             )
 
-            pathname == ApiRoutes.Endpoints.PERMISSION_SESSION_RULES -> Json.obj("rules" to JsonArray())
-            pathname == ApiRoutes.Endpoints.PERMISSION_SESSION_ALLOW -> Json.obj("rules" to JsonArray())
-            pathname == ApiRoutes.Endpoints.PERMISSION_PROJECT_ALLOW -> Json.obj("rules" to JsonArray())
+            pathname == ApiRoutes.Endpoints.PERMISSION_SESSION_RULES -> services.permissionRules(
+                q("sessionId") ?: body.asObjectOrNull().text("sessionId") ?: error("Missing session id"),
+                if (method == "POST") body.asObjectOrNull()?.get("rules") ?: error("Missing rules") else null,
+                q("directory"),
+            )
+            pathname == ApiRoutes.Endpoints.PERMISSION_SESSION_ALLOW ||
+                pathname == ApiRoutes.Endpoints.PERMISSION_PROJECT_ALLOW -> services.allowPermission(
+                    body.asObjectOrNull() ?: error("Missing permission request"),
+                    pathname == ApiRoutes.Endpoints.PERMISSION_PROJECT_ALLOW, q("directory"),
+                )
 
             else -> throw IllegalArgumentException("Unsupported Varro API request: $pathname")
         }
@@ -372,7 +399,7 @@ class RestProxy(
 
             "rename-if-untitled" -> renameIfUntitled(sessionId, body, directory)
 
-            "delete" -> deleteSession(sessionId, directory)
+            "delete" -> { trash.recycle(sessionId, directory); Json.toElement(true) }
 
             else -> throw IllegalArgumentException("Unsupported session action: $action")
         }
@@ -407,46 +434,6 @@ class RestProxy(
         }.getOrElse { JsonNull.INSTANCE }
     }
 
-    /**
-     * Recycles a session tree rather than deleting it outright. Upstream keeps a
-     * restorable copy for a grace period, and the webview's recycle-bin view reads
-     * it back through `/varro/session-trash`.
-     */
-    private fun deleteSession(sessionId: String, directory: String?): JsonElement {
-        val session = runCatching {
-            server.transport.request(
-                "GET",
-                "/session/${encode(sessionId)}",
-                options = RequestOptions(directory = directory),
-            ).data.asObjectOrNull()
-        }.getOrNull()
-
-        val now = System.currentTimeMillis()
-        if (session != null) {
-            val entries = store.recycleBin
-            entries.add(
-                Json.obj(
-                    "rootID" to sessionId,
-                    "deletedAt" to now,
-                    "expiresAt" to now + TRASH_RETENTION_MS,
-                    "root" to session,
-                    "sessions" to JsonArray().apply { add(session) },
-                ),
-            )
-            store.recycleBin = pruneExpired(entries, now)
-        }
-
-        server.transport.request(
-            "DELETE",
-            "/session/${encode(sessionId)}",
-            options = RequestOptions(directory = directory),
-        )
-
-        // A recycled session should not keep occupying UI state.
-        store.pinnedSessionIds = store.pinnedSessionIds.filterNot { it == sessionId }
-        return Json.toElement(true)
-    }
-
     // --- Recycle bin ----------------------------------------------------------
 
     /**
@@ -458,39 +445,17 @@ class RestProxy(
      */
     private fun handleTrashCollection(method: String): JsonElement {
         if (method == "DELETE") {
-            store.recycleBin = JsonArray()
+            trash.empty()
             return Json.toElement(true)
         }
-        val pruned = pruneExpired(store.recycleBin, System.currentTimeMillis())
-        store.recycleBin = pruned
-        return pruned
+        return trash.list()
     }
 
     private fun handleTrashEntry(method: String, request: ApiRoutes.Request): JsonElement {
         val rootId = request.segments[request.segments.size - 2]
         val action = request.segments.last()
-        val entries = store.recycleBin
-        // Looked up purely to reject an unknown id rather than silently succeed.
-        entries.firstOrNull { it.asObjectOrNull().str("rootID") == rootId }
-            ?: throw IllegalArgumentException("404 Recycled session not found")
-
-        val remaining = JsonArray().apply {
-            entries.filter { it.asObjectOrNull().str("rootID") != rootId }.forEach(::add)
-        }
-
-        // Both actions answer with a boolean. "restore" only removes the
-        // tombstone: OpenCode already deleted the session, so the entry is the
-        // record that it existed, not a live copy.
-        store.recycleBin = remaining
+        trash.remove(rootId, action == "restore")
         return Json.toElement(true)
-    }
-
-    private fun pruneExpired(entries: JsonArray, now: Long): JsonArray = JsonArray().apply {
-        entries.filter { entry ->
-            val expiresAt = entry.asObjectOrNull()?.get("expiresAt")?.asJsonPrimitive
-                ?.takeIf { it.isNumber }?.asLong
-            expiresAt == null || expiresAt > now
-        }.forEach(::add)
     }
 
     /** Reads one session, scoped to [directory]. `null` when it cannot be read. */
@@ -506,9 +471,6 @@ class RestProxy(
         java.net.URLEncoder.encode(value, Charsets.UTF_8).replace("+", "%20")
 
     companion object {
-        /** How long a recycled session tree stays restorable. */
-        private const val TRASH_RETENTION_MS = 7L * 24 * 60 * 60 * 1000
-
         /** Titles OpenCode leaves as placeholders. */
         private val UNTITLED = Regex("""^(?:untitled|new session)$""", RegexOption.IGNORE_CASE)
     }

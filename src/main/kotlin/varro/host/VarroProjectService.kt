@@ -58,10 +58,8 @@ class VarroProjectService(private val project: Project) : Disposable {
     /** Attached webview surfaces. A project can have the tool window and editor tabs. */
     private val panels = CopyOnWriteArrayList<WebviewHost>()
     private val routes = java.util.concurrent.ConcurrentHashMap<String, JsonObject>()
+    private val busySessions = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
     private val proxies = java.util.concurrent.ConcurrentHashMap<WebviewHost, RestProxy>()
-    private val queueClaims = mutableMapOf<String, QueueClaim>()
-    private var nextLease = 0L
-    private data class QueueClaim(val viewId: String, val itemId: String, val lease: Long, var admitted: Boolean = false)
     @Volatile private var focusedHost: WebviewHost? = null
 
     private val started = AtomicBoolean(false)
@@ -72,6 +70,9 @@ class VarroProjectService(private val project: Project) : Disposable {
 
     val settings: VarroSettings = VarroSettings.getInstance()
     val store: VarroStore = VarroStore.getInstance(project)
+    private val queue = QueuedDispatches(java.nio.file.Path.of(
+        com.intellij.openapi.application.PathManager.getConfigPath(), "varro", project.locationHash, "queued-dispatches.json",
+    ), store.queuedMessages)
     private val modelStore = VarroModelStore.getInstance()
     val editor: EditorIntegration = EditorIntegration(project)
     val terminal: TerminalService = TerminalService(project)
@@ -89,9 +90,28 @@ class VarroProjectService(private val project: Project) : Disposable {
     private val hostServices = OpenCodeHostServices(project, server, editor, settings) { update ->
         broadcast("provider-limit/updated", update)
     }
+    private val ralphJournal = varro.store.JsonJournal(java.nio.file.Path.of(
+        com.intellij.openapi.application.PathManager.getConfigPath(), "varro", project.locationHash, "ralph.json",
+    ))
+    private val ralph = RalphRunner(
+        initial = ralphJournal.read(store.ralphRuns), workspace = project.basePath.orEmpty(),
+        persist = { runs -> ralphJournal.write(runs); store.ralphRuns = runs },
+        publish = { state -> broadcast("ralph/state", state) },
+        request = { method, path, body, directory ->
+            server.transport.request(method, path, body, varro.server.RequestOptions(directory = directory)).data
+        },
+        readPlan = { path, directory ->
+            val target = java.nio.file.Path.of(directory).resolve(path).normalize()
+            require(java.nio.file.Files.size(target) <= 2 * 1024 * 1024) { "Plan document is too large" }
+            java.nio.file.Files.readString(target)
+        },
+        onChildCreated = { child, mode -> store.updateSessionPermissionMode(child, Json.toElement(mode)) },
+    )
 
     init {
         store.migrateBrowserSessionSelections()
+        server.hasHostWork = { ralph.isActive() || queue.hasPending() || queue.messages().size() > 0 }
+        store.queuedMessages = queue.messages()
         val removeSelectionListener = store.addSelectionListener { selection ->
             when (selection) {
                 VarroStore.SessionSelection.PERMISSION_MODE ->
@@ -125,6 +145,13 @@ class VarroProjectService(private val project: Project) : Disposable {
             ) hostServices.clearProviderQuotaCache()
             broadcast("server/status", status.toJson())
             reportStatusFailure(status)
+            if (status is ServerStatus.Running && previous !is ServerStatus.Running) {
+                ApplicationManager.getApplication().executeOnPooledThread {
+                    queue.recover(::readQueuedHistory)
+                    syncQueue()
+                    ralph.reattach()
+                }
+            }
         }
 
         server.onEvent { event -> forwardServerEvent(event) }
@@ -163,25 +190,23 @@ class VarroProjectService(private val project: Project) : Disposable {
             viewStateProvider = { store.viewState(viewId) },
             onMessage = { message -> handleMessage(host, message) },
         )
-        proxies[host] = RestProxy(project, server, store, context, hostServices, host::post) { request ->
-            synchronized(queueClaims) {
-                val dispatch = request.obj("queuedMessageDispatch")
-                val sessionId = request.str("path")?.substringBefore('?')
-                    ?.let { Regex("^/session/([^/]+)/(prompt_async|message)$").matchEntire(it)?.groupValues?.get(1) }
-                val claim = queueClaims[sessionId]
-                val valid = request.str("method")?.uppercase() == "POST" && claim != null && !claim.admitted &&
-                    claim.viewId == viewId && claim.itemId == dispatch.str("itemId") &&
-                    claim.lease == dispatch.long("lease")
-                if (valid) claim.admitted = true
-                valid
-            }
-        }
+        proxies[host] = RestProxy(project, server, store, context, hostServices, host::post,
+            admitQueuedDispatch = { request -> queue.admit(viewId, request) },
+            completeQueuedDispatch = { request, success, rejected ->
+                queue.complete(request, success, rejected)
+                syncQueue()
+                if (!success && !rejected) notify(
+                    "Queued message delivery is uncertain. It has been paused to prevent duplicate work. Check session history before sending a replacement.",
+                    NotificationType.WARNING,
+                )
+            },
+        )
         panels.add(host)
         Disposer.register(host) {
             panels.remove(host)
             proxies.remove(host)?.dispose()
             if (focusedHost === host) focusedHost = null
-            synchronized(queueClaims) { queueClaims.entries.removeIf { it.value.viewId == viewId } }
+            queue.detach(viewId)
             broadcastEditorTabs()
         }
         broadcastEditorTabs()
@@ -193,6 +218,35 @@ class VarroProjectService(private val project: Project) : Disposable {
         panels.forEach { it.post(type, payload) }
 
     private fun broadcastEnvelope(message: JsonElement) = panels.forEach { it.post(message) }
+
+    private fun syncQueue() {
+        store.queuedMessages = queue.messages()
+        broadcast("queued-messages/sync", Json.obj("messages" to store.queuedMessages))
+    }
+
+    private fun readQueuedHistory(sessionId: String): JsonArray {
+        val messages = JsonArray()
+        var characters = 0L
+        var cursor: String? = null
+        val seen = mutableSetOf<String>()
+        do {
+            val path = "/session/${java.net.URLEncoder.encode(sessionId, Charsets.UTF_8)}/message?limit=200" +
+                (cursor?.let { "&before=${java.net.URLEncoder.encode(it, Charsets.UTF_8)}" } ?: "")
+            val page = server.transport.request("GET", path, options = varro.server.RequestOptions(
+                captureNextCursor = true, directory = server.transport.observedSessionDirectories()[sessionId],
+            ))
+            val items = page.data?.takeIf { it.isJsonArray }?.asJsonArray ?: error("Invalid queued-message history")
+            characters += items.toString().length
+            check(characters <= 64 * 1024 * 1024 && messages.size() + items.size() <= 10000) {
+                "Queued-message recovery history limit exceeded"
+            }
+            items.forEach(messages::add)
+            cursor = page.nextCursor
+            check(cursor == null || seen.add(cursor)) { "Queued-message history cursor did not advance" }
+            check(seen.size <= 1000) { "Queued-message recovery history limit exceeded" }
+        } while (cursor != null)
+        return messages
+    }
 
     private fun broadcastModelPreferences() {
         ApplicationManager.getApplication().messageBus.syncPublisher(VarroModelStore.TOPIC).preferencesChanged()
@@ -323,6 +377,26 @@ class VarroProjectService(private val project: Project) : Disposable {
             parsed.sequenceStart?.let { addProperty("sequenceStart", it) }
             parsed.properties?.let { add("properties", it) }
         }
+        val sessionId = parsed.properties.str("sessionID")
+        if (sessionId != null && parsed.type == "permission.asked") {
+            val model = ralph.permissionModel(sessionId)
+            val permissionId = parsed.properties.str("id")
+            if (model != null && permissionId != null) ApplicationManager.getApplication().executeOnPooledThread {
+                val result = hostServices.judgePermission(Json.obj("permission" to parsed.properties, "model" to model))
+                if (result.str("decision") in setOf("allow", "reject") && ralph.permissionModel(sessionId) != null) runCatching {
+                    server.transport.request("POST", "/permission/${java.net.URLEncoder.encode(permissionId, Charsets.UTF_8)}/reply",
+                        Json.obj("reply" to if (result.str("decision") == "allow") "once" else "reject"))
+                }.onFailure { log.info("Ralph permission reply failed", it) }
+            }
+        }
+        if (sessionId != null) when (parsed.type) {
+            "session.status" -> if (parsed.properties.obj("status").str("type") == "idle") busySessions.remove(sessionId) else busySessions.add(sessionId)
+            "session.idle", "session.error" -> busySessions.remove(sessionId)
+            "session.deleted" -> {
+                busySessions.remove(sessionId)
+                store.removeSessionUnreadState(listOf(sessionId))
+            }
+        }
         broadcast("server/event", payload)
     }
 
@@ -358,6 +432,7 @@ class VarroProjectService(private val project: Project) : Disposable {
         try {
             when (type) {
                 "ready" -> {
+                    host?.markReady()
                     broadcast("server/status", lastStatus.get().toJson())
                     broadcast("context/update", context.context)
                     broadcastConfig()
@@ -500,15 +575,24 @@ class VarroProjectService(private val project: Project) : Disposable {
                 "session-unread-state/update" -> {
                     val sessionId = payload.str("sessionId") ?: return
                     val unread = store.sessionUnreadState
-                    unread.add(
-                        sessionId,
-                        Json.obj(
+                    if (payload.bool("unread") == true) {
+                        unread.add(sessionId, Json.obj(
                             "kind" to payload.str("kind"),
-                            "unread" to (payload.bool("unread") ?: false),
+                            "unread" to true,
                             "markerAt" to payload.long("markerAt"),
-                        ),
-                    )
+                        ))
+                    } else {
+                        unread.remove(sessionId)
+                    }
                     store.sessionUnreadState = unread
+                }
+
+                "session-unread-state/sync" -> {
+                    store.retainSessionUnreadState(payload?.getAsJsonArray("sessionIds")?.strings()?.toSet().orEmpty())
+                }
+
+                "session-unread-state/summary" -> {
+                    store.completedSessionUnreadIds = payload?.getAsJsonArray("completedSessionIds")?.strings().orEmpty()
                 }
 
                 "model-preferences/update" -> payload.obj("preferences")?.let {
@@ -522,18 +606,8 @@ class VarroProjectService(private val project: Project) : Disposable {
 
                 "queued-messages/update" -> {
                     val messages = payload?.getAsJsonArray("messages") ?: JsonArray()
-                    synchronized(queueClaims) {
-                        val viewId = host?.viewId ?: "sidebar"
-                        val merged = JsonArray()
-                        store.queuedMessages.forEach { item ->
-                            if ((item.asObjectOrNull().str("ownerViewId") ?: "sidebar") != viewId) merged.add(item)
-                        }
-                        messages.forEach { item ->
-                            if ((item.asObjectOrNull().str("ownerViewId") ?: "sidebar") == viewId) merged.add(item)
-                        }
-                        store.queuedMessages = merged
-                        broadcast("queued-messages/sync", Json.obj("messages" to merged))
-                    }
+                    queue.update(host?.viewId ?: "sidebar", messages)
+                    syncQueue()
                 }
 
                 "queued-messages/claim" -> {
@@ -541,40 +615,21 @@ class VarroProjectService(private val project: Project) : Disposable {
                     val sessionId = payload.str("sessionId") ?: return
                     val itemId = payload.str("itemId") ?: return
                     val viewId = host?.viewId ?: return
-                    val claim = synchronized(queueClaims) {
-                        val item = store.queuedMessages.firstOrNull {
-                            val value = it.asObjectOrNull()
-                            value.str("sessionId") == sessionId &&
-                                (if (payload.str("mode") == "steer") value.str("id") == itemId else value.bool("paused") != true)
-                        }.asObjectOrNull()
-                        val existing = queueClaims[sessionId]
-                        when {
-                            existing != null -> existing.takeIf { it.viewId == viewId && it.itemId == itemId }
-                            item.str("id") == itemId && (item.str("ownerViewId") ?: "sidebar") == viewId ->
-                                QueueClaim(viewId, itemId, ++nextLease).also { queueClaims[sessionId] = it }
-                            else -> null
-                        }
-                    }
+                    val lease = queue.claim(viewId, sessionId, itemId, payload.str("mode") == "steer")
                     host.post(
                         "queued-messages/claim-result",
                         Json.obj(
                             "requestId" to requestId,
                             "itemId" to payload.str("itemId"),
                             "sessionId" to payload.str("sessionId"),
-                            "granted" to (claim != null),
-                            "lease" to claim?.lease,
+                            "granted" to (lease != null),
+                            "lease" to lease,
                         ),
                     )
                 }
 
-                "queued-messages/release" -> synchronized(queueClaims) {
-                    val sessionId = payload.str("sessionId")
-                    val claim = queueClaims[sessionId]
-                    if (claim?.viewId == host?.viewId && claim?.itemId == payload.str("itemId") &&
-                        claim?.lease == payload.long("lease")
-                    ) queueClaims.remove(sessionId)
-                    Unit
-                }
+                "queued-messages/release" -> queue.release(host?.viewId ?: return,
+                    payload.str("sessionId") ?: return, payload.str("itemId") ?: return, payload.long("lease"))
 
                 "recovery/interrupted-sessions-ack" -> {
                     val consumed = payload?.getAsJsonArray("consumedSessionIds")?.strings().orEmpty()
@@ -638,7 +693,7 @@ class VarroProjectService(private val project: Project) : Disposable {
 
                 "ralph/start", "ralph/stop", "ralph/pause", "ralph/resume",
                 "ralph/update-model", "ralph/sync",
-                -> broadcast("ralph/state", Json.obj("runs" to store.ralphRuns, "activeIds" to JsonArray()))
+                -> ralph.handle(type, payload)
 
                 else -> log.debug("Unhandled webview message: $type")
             }
@@ -646,6 +701,10 @@ class VarroProjectService(private val project: Project) : Disposable {
             log.warn("handleMessage($type) failed", failure)
             if (type in setOf("files/drop", "files/drop-content", "images/store", "pdfs/store")) {
                 notify("Could not attach file: ${failure.message}", NotificationType.ERROR)
+            }
+            if (type.startsWith("ralph/")) {
+                broadcast("ralph/state", ralph.snapshot())
+                notify("Could not update Ralph run: ${failure.message}", NotificationType.ERROR)
             }
         }
     }
@@ -694,8 +753,29 @@ class VarroProjectService(private val project: Project) : Disposable {
         sidebarCommand("command/focus-input")
     }
 
+    fun statusBarText(): String {
+        val attention = server.transport.attentionCount()
+        val unread = store.completedSessionUnreadIds.size
+        return when {
+            attention > 0 -> "Varro: $attention need attention"
+            lastStatus.get() is ServerStatus.Error -> "Varro: server error"
+            busySessions.isNotEmpty() || ralph.isActive() -> "Varro: running"
+            unread > 0 -> "Varro: $unread unread"
+            lastStatus.get() is ServerStatus.Starting -> "Varro: starting"
+            else -> "Varro"
+        }
+    }
+
     fun searchSessions() {
         sidebarCommand("command/search-sessions")
+    }
+
+    fun openCompletedSessions() {
+        sidebarCommand("command/open-completed-sessions")
+    }
+
+    fun openRunningSessions() {
+        sidebarCommand("command/open-running-sessions")
     }
 
     fun abort() { focusedHost?.post("command/abort") ?: sidebarCommand("command/abort") }
@@ -728,14 +808,17 @@ class VarroProjectService(private val project: Project) : Disposable {
 
     private fun exportSession(sessionId: String?) {
         if (sessionId == null) return
-        val response = runCatching {
-            server.transport.request("GET", "/session/${java.net.URLEncoder.encode(sessionId, Charsets.UTF_8)}/message")
-        }.getOrNull() ?: return
-        editor.openText(
-            content = Json.stringify(response.data),
-            title = "varro-session-$sessionId.json",
-            language = "json",
-        )
+        ApplicationManager.getApplication().executeOnPooledThread {
+            try {
+                val path = "/session/${java.net.URLEncoder.encode(sessionId, Charsets.UTF_8)}"
+                val session = server.transport.request("GET", path).data.asObjectOrNull() ?: error("Missing session")
+                val messages = server.transport.request("GET", "$path/message").data
+                    ?.takeIf { it.isJsonArray }?.asJsonArray ?: error("Missing transcript")
+                editor.openText(SessionTranscript.render(session, messages), "varro-session-$sessionId.md", "markdown")
+            } catch (failure: Exception) {
+                notify("Could not export session: ${failure.message}", NotificationType.ERROR)
+            }
+        }
     }
 
     fun generateUsageReport(includeAllTime: Boolean = false) {
@@ -896,6 +979,7 @@ class VarroProjectService(private val project: Project) : Disposable {
     }
 
     override fun dispose() {
+        ralph.close()
         hostServices.dispose()
         proxies.values.forEach { it.dispose() }
         proxies.clear()

@@ -72,7 +72,7 @@ class WebviewHost(
      */
     private val pendingOutbound = ConcurrentLinkedQueue<String>()
 
-    private val loaded = AtomicBoolean(false)
+    private val ready = AtomicBoolean(false)
     private val disposed = AtomicBoolean(false)
     private val messages = java.util.concurrent.Executors.newSingleThreadExecutor { task ->
         Thread(task, "Varro messages $viewId").apply { isDaemon = true }
@@ -134,7 +134,7 @@ class WebviewHost(
     fun post(message: JsonElement) {
         if (disposed.get()) return
         val json = Json.stringifyMessage(message)
-        if (loaded.get()) sendNow(json) else pendingOutbound.add(json)
+        if (ready.get()) sendNow(json) else pendingOutbound.add(json)
     }
 
     fun post(type: String, payload: Any? = Unit) = post(Json.message(type, payload))
@@ -154,6 +154,12 @@ class WebviewHost(
             val next = pendingOutbound.poll() ?: break
             sendNow(next)
         }
+    }
+
+    fun markReady() {
+        if (disposed.get()) return
+        ready.set(true)
+        flushPending()
     }
 
     // --- Asset serving --------------------------------------------------------
@@ -220,8 +226,6 @@ class WebviewHost(
             object : CefLoadHandlerAdapter() {
                 override fun onLoadEnd(cefBrowser: CefBrowser?, frame: CefFrame?, httpStatusCode: Int) {
                     if (frame?.isMain != true) return
-                    loaded.set(true)
-                    flushPending()
                 }
 
                 override fun onLoadError(
@@ -241,7 +245,7 @@ class WebviewHost(
 
     /** Builds the page shell; invoked by the asset handler on every document load. */
     private fun renderDocument(): String {
-        loaded.set(false)
+        ready.set(false)
         return runCatching {
             WebviewHtml.render(
                 theme = ThemeBridge.current(),
@@ -259,7 +263,7 @@ class WebviewHost(
     /** Rebuilds the document from current state. Used after a theme or config change. */
     fun reload() {
         if (disposed.get()) return
-        loaded.set(false)
+        ready.set(false)
         pendingOutbound.clear()
         browser.loadURL(WebviewAssets.INDEX_URL)
     }

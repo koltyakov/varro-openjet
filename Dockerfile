@@ -30,6 +30,7 @@ RUN apt-get update \
 # package-lock.json against each other on every build.
 ARG NODE_VERSION=24.21.0
 ARG NPM_VERSION=10.9.9
+ARG BUILD_ENV_HASH=unknown
 RUN set -eux; \
     case "$(dpkg --print-architecture)" in \
       amd64) NODE_ARCH=x64 ;; \
@@ -43,6 +44,7 @@ RUN set -eux; \
     test "$(node --version)" = "v${NODE_VERSION}"; \
     test "$(npm --version)" = "${NPM_VERSION}"; \
     java -version
+LABEL io.varro.build-env-hash="${BUILD_ENV_HASH}"
 
 # Build as a non-root user so artifacts written to a bind mount are owned by the
 # invoking user rather than root. The uid/gid are overridable so the mounted

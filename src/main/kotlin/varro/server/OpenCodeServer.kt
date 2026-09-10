@@ -4,6 +4,8 @@ import com.google.gson.JsonElement
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.diagnostic.logger
 import varro.settings.VarroSettings
+import varro.protocol.asObjectOrNull
+import varro.protocol.str
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledExecutorService
@@ -56,6 +58,18 @@ class OpenCodeServer(
     private val disposeGeneration = AtomicInteger(0)
     private val startInFlight = AtomicBoolean(false)
     private val serverVersion = AtomicReference<String?>(null)
+    @Volatile var hasHostWork: () -> Boolean = { false }
+    private val maintenance = IdleMaintenance(
+        enabled = { settings.serverAutoUpdate && process.isManaged && status.get() is ServerStatus.Running && phase.get() == Phase.IDLE },
+        idle = ::isIdleForMaintenance,
+        upgrade = {
+            val result = process.upgrade()
+            if (!result.succeeded) log.info("OpenCode background update failed: ${result.output.take(2000)}")
+            else log.info("OpenCode background CLI update finished. The updated version will be used on the next server start.")
+            result.succeeded
+        },
+    )
+    private val maintenanceStarted = AtomicBoolean(false)
 
     private val statusListeners = ConcurrentHashMap.newKeySet<(ServerStatus) -> Unit>()
     private val eventListeners = ConcurrentHashMap.newKeySet<(JsonElement) -> Unit>()
@@ -270,6 +284,20 @@ class OpenCodeServer(
         // to healthy, so the UI never claims live updates it does not have.
         setStatus(ServerStatus.Running(url(), EventStreamState.DEGRADED))
         transport.startEventStream(OpenCodeRequestScope.normalizeDirectory(workspaceCwd()))
+        if (maintenanceStarted.compareAndSet(false, true)) scheduler.scheduleWithFixedDelay({
+            runCatching { maintenance.tick() }.onFailure { log.info("OpenCode maintenance check failed", it) }
+        }, 60, 60, TimeUnit.SECONDS)
+    }
+
+    private fun isIdleForMaintenance(): Boolean {
+        if (hasHostWork() || !transport.isQuiet()) return false
+        val directories = (transport.observedSessionDirectories().values + listOfNotNull(workspaceCwd())).toSet()
+        if (directories.isEmpty()) return false
+        return directories.all { directory ->
+            val statuses = transport.request("GET", "/session/status", options = RequestOptions(directory = directory))
+                .data.asObjectOrNull() ?: return@all false
+            statuses.entrySet().all { it.value.asObjectOrNull().str("type") == "idle" }
+        }
     }
 
     private fun missingCliStatus(info: OpenCodeCommandInfo): ServerStatus.Error =

@@ -1,13 +1,11 @@
 import { beforeEach, expect, it, vi } from 'vitest';
 import type { PermissionMode } from '../vendor/shared/protocol';
-import type { PermissionRule } from '../vendor/shared/opencode-types';
-import { getSessionPermissionRulesForMode, inferSessionPermissionMode } from '../vendor/shared/permission-rules';
 
 const app = vi.hoisted(() => ({
   draft: 'auto' as PermissionMode,
   state: {
     sessionPermissionModes: {} as Record<string, PermissionMode>,
-    sessions: [] as { id: string; parentID?: string; permission?: PermissionRule[] }[],
+    sessions: [] as { id: string; parentID?: string }[],
   },
 }));
 vi.mock('../vendor/webview/lib/app-state', () => ({
@@ -28,60 +26,33 @@ beforeEach(() => {
   app.state.sessionPermissionModes = {};
 });
 
-it.each(['auto', 'full'] as const)('recognizes the %s preset stored by another client', (mode) => {
-  const permission = getSessionPermissionRulesForMode(mode, 'create');
-  expect(inferSessionPermissionMode(permission)).toBe(mode);
-  app.state.sessions = [{ id: 'external', permission }];
-  expect(getPermissionModeForSession('external')).toBe(mode);
-});
-
-it('recognizes a universal allow rule and respects last-match ordering', () => {
-  const allow: PermissionRule = { permission: '*', pattern: '*', action: 'allow' };
-  const deny: PermissionRule = { permission: 'bash', pattern: '*', action: 'deny' };
-  expect(inferSessionPermissionMode([allow])).toBe('full');
-  expect(inferSessionPermissionMode([deny, allow])).toBe('full');
-  expect(inferSessionPermissionMode([allow, deny])).toBe('default');
-});
-
-it('does not label custom permissions as Auto or Full', () => {
-  app.draft = 'full';
-  for (const permission of [
-    [{ permission: 'bash', pattern: '*', action: 'deny' } as PermissionRule],
-    [...getSessionPermissionRulesForMode('auto', 'create'),
-      { permission: 'bash', pattern: 'git *', action: 'allow' } as PermissionRule],
-  ]) {
-    app.state.sessions = [{ id: 'external', permission }];
-    expect(getPermissionModeForSession('external')).toBe('default');
-  }
-});
-
-it('uses the current selection when external sessions have no permission rules', () => {
-  app.state.sessions = [{ id: 'missing' }, { id: 'empty', permission: [] }];
+it('uses the current selection for drafts and defaults existing sessions', () => {
+  app.state.sessions = [{ id: 'existing' }];
   for (const mode of ['default', 'auto', 'full'] as const) {
     app.draft = mode;
-    expect(getPermissionModeForSession('missing')).toBe(mode);
-    expect(getPermissionModeForSession('empty')).toBe(mode);
     expect(getPermissionModeForSession(null)).toBe(mode);
+    expect(getPermissionModeForSession('existing')).toBe('default');
+    expect(getPermissionModeForSession('missing')).toBe('default');
   }
 });
 
-it('keeps an explicit saved mode ahead of inference and fallback', () => {
+it('uses an explicit saved mode', () => {
   app.state.sessionPermissionModes.external = 'default';
-  app.state.sessions = [{ id: 'external', permission: getSessionPermissionRulesForMode('full', 'create') }];
   expect(getPermissionModeForSession('external')).toBe('default');
 });
 
-it('inherits parent permissions unless the child has its own rules', () => {
+it('inherits a parent mode unless the child has its own mode', () => {
   app.state.sessions = [
-    { id: 'parent', permission: getSessionPermissionRulesForMode('full', 'create') },
+    { id: 'parent' },
     { id: 'child', parentID: 'parent' },
   ];
+  app.state.sessionPermissionModes.parent = 'full';
   expect(getPermissionModeForSession('child')).toBe('full');
-  app.state.sessions[1]!.permission = getSessionPermissionRulesForMode('auto', 'create');
+  app.state.sessionPermissionModes.child = 'auto';
   expect(getPermissionModeForSession('child')).toBe('auto');
 });
 
 it('falls back without looping on cyclic parent references', () => {
   app.state.sessions = [{ id: 'a', parentID: 'b' }, { id: 'b', parentID: 'a' }];
-  expect(getPermissionModeForSession('a')).toBe('auto');
+  expect(getPermissionModeForSession('a')).toBe('default');
 });

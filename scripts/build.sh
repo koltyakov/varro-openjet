@@ -5,7 +5,7 @@
 #
 #   ./scripts/build.sh              # incremental build against the working tree
 #   ./scripts/build.sh clean        # clean build
-#   ./scripts/build.sh verify       # tests + IntelliJ plugin verifier
+#   ./scripts/build.sh verify       # Kotlin and webview host tests
 #   ./scripts/build.sh shell        # interactive shell in the build container
 #   ./scripts/build.sh gradle <...> # arbitrary Gradle invocation
 #
@@ -23,12 +23,26 @@ if ! docker compose version >/dev/null 2>&1; then
   exit 1
 fi
 
-# Exported so docker-compose.yml can match the container user to the host user;
-# without this, bind-mounted output is root-owned on Linux. `UID`/`GID` are
-# readonly in bash, so the compose file reads these names instead.
-VARRO_UID="$(id -u)"
-VARRO_GID="$(id -g)"
-export VARRO_UID VARRO_GID
+# Docker Desktop remaps bind-mount ownership; native Linux Docker does not.
+if [ "$(uname -s)" = "Linux" ]; then
+  VARRO_UID="$(id -u)"
+  VARRO_GID="$(id -g)"
+else
+  VARRO_UID=1000
+  VARRO_GID=1000
+fi
+# Rebuild only when inputs to the image's toolchain/dependency layer change.
+# Source-only changes stay on the fast bind-mounted incremental path.
+BUILD_ENV_INPUTS="$(cksum Dockerfile webview/package.json webview/package-lock.json)"
+VARRO_BUILD_ENV_HASH="$(printf '%s\n%s:%s\n' "$BUILD_ENV_INPUTS" "$VARRO_UID" "$VARRO_GID" | cksum | cut -d ' ' -f 1)"
+export VARRO_UID VARRO_GID VARRO_BUILD_ENV_HASH
+
+IMAGE_BUILD_ENV_HASH="$(docker image inspect varro-openjet-build \
+  --format '{{ index .Config.Labels "io.varro.build-env-hash" }}' 2>/dev/null || true)"
+if [ "$IMAGE_BUILD_ENV_HASH" != "$VARRO_BUILD_ENV_HASH" ]; then
+  echo "==> Refreshing build image"
+  docker compose --progress plain build shell
+fi
 
 mkdir -p dist
 
@@ -53,7 +67,7 @@ case "${command}" in
     docker compose run --rm build
     ;;
   verify)
-    echo "==> Tests and plugin verifier"
+    echo "==> Kotlin and webview host tests"
     docker compose run --rm verify
     ;;
   shell)
