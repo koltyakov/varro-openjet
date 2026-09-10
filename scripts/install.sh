@@ -152,7 +152,7 @@ fi
 # --- Build --------------------------------------------------------------------
 if [ "$BUILD" -eq 1 ]; then
   echo "==> Building"
-  ./scripts/build.sh >/dev/null
+  ./scripts/build.sh
 fi
 
 ARTIFACT="$(ls -t dist/*.zip 2>/dev/null | head -1 || true)"

@@ -1,6 +1,7 @@
 package varro.host.quota
 
 import com.google.gson.JsonObject
+import varro.host.VarroBuild
 import varro.protocol.*
 import java.net.URI
 import java.net.URLEncoder
@@ -125,7 +126,7 @@ internal class QuotaAdapters(
                 val key = credentials.token(provider, auth) ?: credentials.copilotFallback()
                     ?: throw QuotaFailure("No GitHub Copilot credentials available", 401)
                 val payload = json("https://api.github.com/copilot_internal/user", key, mapOf(
-                    "Editor-Version" to "JetBrains/2026.2", "Editor-Plugin-Version" to "varro/0.1.0"))
+                    "Editor-Version" to "JetBrains/2026.2", "Editor-Plugin-Version" to "varro/${VarroBuild.version}"))
                 available(QuotaParsers.copilot(payload, now),
                     if (payload.str("access_type_sku") == "free_limited_copilot") "Free" else payload.string("copilot_plan")?.let(::label))
             }

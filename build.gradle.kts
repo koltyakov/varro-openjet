@@ -1,5 +1,6 @@
 import org.jetbrains.intellij.platform.gradle.TestFrameworkType
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+import org.jetbrains.kotlin.gradle.dsl.JvmDefaultMode
 
 plugins {
     id("java")
@@ -60,7 +61,11 @@ intellijPlatform {
 
     pluginVerification {
         ides {
-            recommended()
+            // Cover every supported branch, including the oldest JCEF runtime.
+            create("IU", "2025.2.6.3")
+            create("IU", "2025.3.6.1")
+            create("IU", "2026.1.5")
+            create("IU", "2026.2.2")
         }
     }
 }
@@ -140,8 +145,12 @@ val buildWebview = tasks.register<Exec>("buildWebview") {
     }
 }
 
-tasks.named("processResources") {
+tasks.processResources {
     dependsOn(buildWebview)
+    inputs.property("pluginVersion", project.version.toString())
+    filesMatching("varro-build.properties") {
+        expand("version" to project.version.toString())
+    }
 }
 
 val testWebviewHost = tasks.register<Exec>("testWebviewHost") {
@@ -160,6 +169,9 @@ tasks.named("check") {
 tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach {
     compilerOptions {
         jvmTarget = JvmTarget.JVM_21
+        // Inherit platform interface defaults instead of emitting compatibility
+        // bridges that appear to override internal ToolWindowFactory methods.
+        jvmDefault = JvmDefaultMode.NO_COMPATIBILITY
     }
 }
 

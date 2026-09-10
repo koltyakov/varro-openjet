@@ -2,12 +2,9 @@ package varro.host
 
 import com.intellij.openapi.diagnostic.logger
 import org.cef.callback.CefCallback
-import org.cef.callback.CefResourceReadCallback
-import org.cef.callback.CefResourceSkipCallback
 import org.cef.handler.CefResourceHandler
-import org.cef.misc.BoolRef
+import org.cef.handler.CefResourceHandlerAdapter
 import org.cef.misc.IntRef
-import org.cef.misc.LongRef
 import org.cef.misc.StringRef
 import org.cef.network.CefRequest
 import org.cef.network.CefResponse
@@ -125,61 +122,22 @@ object WebviewAssets {
      * from an IO thread, and buffering keeps the handler free of partial-read
      * state that a cancelled navigation could strand.
      *
-     * CEF has two generations of this interface. `open`/`read`/`skip` are the
-     * current ones; `processRequest`/`readResponse` are the deprecated pair that
-     * older builds still call. Both are implemented and share the same cursor, so
-     * whichever the runtime picks behaves identically.
+     * Use the adapter's fallback to `processRequest`/`readResponse`. Its current
+     * `open`/`read` defaults tell CEF to call this older pair. Implementing the
+     * newer methods here would reference callback classes absent before 2026.2.
      */
-    class Handler(private val resolved: Resolved?) : CefResourceHandler {
+    class Handler(private val resolved: Resolved?) : CefResourceHandlerAdapter() {
         private var stream: InputStream? = null
 
-        // --- Current API ------------------------------------------------------
-
-        override fun open(request: CefRequest?, handleRequest: BoolRef?, callback: CefCallback?): Boolean {
-            if (resolved == null) {
-                // Handling it with a 404 beats letting CEF fall through to the
-                // network, which would try to resolve the synthetic host for real.
-                handleRequest?.set(true)
-                return true
-            }
-            stream = ByteArrayInputStream(resolved.bytes)
-            // `true` means the response is ready now; no async continuation needed.
-            handleRequest?.set(true)
-            return true
-        }
-
-        override fun read(
-            dataOut: ByteArray?,
-            bytesToRead: Int,
-            bytesRead: IntRef?,
-            callback: CefResourceReadCallback?,
-        ): Boolean = readInto(dataOut, bytesToRead, bytesRead)
-
-        override fun skip(
-            bytesToSkip: Long,
-            bytesSkipped: LongRef?,
-            callback: CefResourceSkipCallback?,
-        ): Boolean {
-            val source = stream ?: return false
-            val skipped = runCatching { source.skip(bytesToSkip) }.getOrDefault(0L)
-            bytesSkipped?.set(skipped)
-            return skipped > 0
-        }
-
-        // --- Deprecated API, kept for older CEF builds ------------------------
-
-        @Deprecated("Superseded by open(); kept for CEF runtimes that still call it.")
+        @Deprecated("CEF compatibility fallback, also used by the current adapter.")
         override fun processRequest(request: CefRequest?, callback: CefCallback?): Boolean {
-            if (resolved == null) {
-                callback?.cancel()
-                return false
-            }
-            stream = ByteArrayInputStream(resolved.bytes)
+            // Missing resources still get a 404 from getResponseHeaders.
+            stream = resolved?.let { ByteArrayInputStream(it.bytes) }
             callback?.Continue()
             return true
         }
 
-        @Deprecated("Superseded by read(); kept for CEF runtimes that still call it.")
+        @Deprecated("CEF compatibility fallback, also used by the current adapter.")
         override fun readResponse(
             dataOut: ByteArray?,
             bytesToRead: Int,

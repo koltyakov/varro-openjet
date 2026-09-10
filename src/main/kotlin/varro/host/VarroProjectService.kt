@@ -850,13 +850,10 @@ class VarroProjectService(private val project: Project) : Disposable {
     }
 
     fun showAbout() {
-        val plugin = com.intellij.ide.plugins.PluginManagerCore.getPlugin(
-            com.intellij.openapi.extensions.PluginId.getId("dev.koltyakov.varro-openjet"),
-        )
         val ide = com.intellij.openapi.application.ApplicationInfo.getInstance()
         editor.openText(
             """
-            # Varro OpenJet ${plugin?.version.orEmpty()}
+            # Varro OpenJet ${VarroBuild.version}
 
             OpenCode workbench for JetBrains IDEs. Port of [Varro for VS Code](https://github.com/koltyakov/varro).
 

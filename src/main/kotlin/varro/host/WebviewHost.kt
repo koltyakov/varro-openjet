@@ -90,8 +90,7 @@ class WebviewHost(
             dispatchMessage(message)
         }
         browser.jbCefClient.addDragHandler({ cefBrowser, data, _ ->
-            val paths = java.util.Vector<String>()
-            data.getFilePaths(paths)
+            val paths = JcefDragFiles.paths(data)
             cefBrowser.executeJavaScript("window.__varroNativeDropPaths = ${Json.stringify(paths)};", WebviewAssets.INDEX_URL, 0)
             false
         }, browser.cefBrowser)

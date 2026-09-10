@@ -1,6 +1,6 @@
 <idea-plugin>
     <id>dev.koltyakov.varro-openjet</id>
-    <name>Varro OpenJet</name>
+    <name>Varro: OpenJet</name>
     <vendor url="https://github.com/koltyakov/varro-openjet">Andrew Koltyakov</vendor>
 
     <description><![CDATA[
@@ -41,6 +41,20 @@
                 OpenCode authentication, install and upgrade commands.</li>
         </ul>
     ]]></description>
+
+    <change-notes><![CDATA[
+        <h3>0.1.1</h3>
+        <ul>
+            <li>Fixed embedded browser resource loading and file drag-and-drop compatibility
+                with IntelliJ IDEA 2025.2, 2025.3 and 2026.1.</li>
+            <li>Fixed provider quota requests on IntelliJ IDEA 2025.2 while keeping redirects blocked.</li>
+            <li>Removed internal API dependencies and unnecessary generated interface overrides.</li>
+            <li>Verified compatibility with IntelliJ IDEA 2025.2.6.3, 2025.3.6.1, 2026.1.5 and 2026.2.2.</li>
+        </ul>
+        <h3>0.1.0</h3>
+        <p>Initial release of the OpenCode workbench for JetBrains IDEs, with project-aware chat,
+            parallel sessions, plan and change review, model and permission controls, and usage reporting.</p>
+    ]]></change-notes>
 
     <depends>com.intellij.modules.platform</depends>
 

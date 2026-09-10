@@ -1,7 +1,6 @@
 {
   "name": "varro-openjet-webview",
   "private": true,
-  "version": "0.1.0",
   "type": "module",
   "description": "Build workspace for the Varro webview running inside JetBrains JCEF.",
   "repository": "https://github.com/koltyakov/varro-openjet",
@@ -31,7 +30,7 @@
     "material-icon-theme": "5.38.1",
     "tailwindcss": "4.3.3",
     "typescript": "7.0.2",
-    "vite": "8.2.2",
+    "vite": "8.3.0",
     "vite-plugin-solid": "2.11.14",
     "vitest": "5.0.0"
   },

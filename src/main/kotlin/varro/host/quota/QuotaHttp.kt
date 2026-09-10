@@ -2,6 +2,8 @@ package varro.host.quota
 
 import com.google.gson.JsonObject
 import com.intellij.util.io.HttpRequests
+import com.intellij.util.io.RequestBuilder
+import varro.host.VarroBuild
 import varro.protocol.Json
 import varro.protocol.asObjectOrNull
 import java.net.HttpURLConnection
@@ -34,12 +36,16 @@ class IdeQuotaHttp : QuotaHttp {
         require(request.headers.values.none { value -> value.any { it == '\r' || it == '\n' || it == '\u0000' } }) { "Invalid provider quota header" }
         val builder = if (request.body == null) HttpRequests.request(request.url)
             else HttpRequests.post(request.url, request.contentType)
+        // 252 has no followRedirects switch. redirectLimit(1) below allows only
+        // the initial request and fails on redirects without forwarding auth.
+        // Newer IDEs can return the redirect response instead of throwing.
+        followRedirects?.invoke(builder, false)
         return builder.connectTimeout(10_000).readTimeout(15_000).redirectLimit(1)
-            .followRedirects(false).throwStatusCodeException(false).gzip(false)
+            .throwStatusCodeException(false).gzip(false)
             .tuner { connection ->
                 (connection as HttpURLConnection).instanceFollowRedirects = false
                 connection.setRequestProperty("Accept", "application/json")
-                connection.setRequestProperty("User-Agent", "Varro-OpenJet/0.1.0")
+                connection.setRequestProperty("User-Agent", "Varro-OpenJet/${VarroBuild.version}")
                 request.headers.forEach(connection::setRequestProperty)
             }.connect { connection ->
                 request.body?.let { connection.write(it) }
@@ -53,7 +59,14 @@ class IdeQuotaHttp : QuotaHttp {
             }
     }
 
-    companion object { private const val MAX_RESPONSE_BYTES = 1024 * 1024 }
+    companion object {
+        private const val MAX_RESPONSE_BYTES = 1024 * 1024
+        private val followRedirects = try {
+            RequestBuilder::class.java.getMethod("followRedirects", Boolean::class.javaPrimitiveType)
+        } catch (_: NoSuchMethodException) {
+            null
+        }
+    }
 }
 
 internal fun isLoopbackUrl(value: String): Boolean = runCatching {

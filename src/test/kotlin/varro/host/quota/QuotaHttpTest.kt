@@ -1,9 +1,11 @@
 package varro.host.quota
 
 import com.sun.net.httpserver.HttpServer
+import com.intellij.util.io.RequestBuilder
 import org.junit.Assert.*
 import org.junit.Test
 import java.net.InetSocketAddress
+import java.io.IOException
 import java.util.concurrent.atomic.AtomicInteger
 
 class QuotaHttpTest {
@@ -20,9 +22,11 @@ class QuotaHttpTest {
         server.createContext("/unauthorized") { exchange ->
             exchange.sendResponseHeaders(401, 2); exchange.responseBody.use { it.write("{}".toByteArray()) }
         }
-        server.createContext("/redirect") { exchange ->
-            exchange.responseHeaders.add("Location", "/target")
-            exchange.sendResponseHeaders(302, -1); exchange.close()
+        for (code in listOf(301, 302, 303, 307, 308)) {
+            server.createContext("/redirect/$code") { exchange ->
+                exchange.responseHeaders.add("Location", "/target")
+                exchange.sendResponseHeaders(code, -1); exchange.close()
+            }
         }
         server.createContext("/target") { exchange -> targetHits.incrementAndGet(); exchange.sendResponseHeaders(200, -1); exchange.close() }
         server.start()
@@ -31,7 +35,16 @@ class QuotaHttpTest {
             val http = IdeQuotaHttp()
             assertEquals(200, http.send(QuotaRequest("$base/post", mapOf("Authorization" to "Bearer fixture"), "{}".toByteArray())).code)
             assertEquals(401, http.send(QuotaRequest("$base/unauthorized")).code)
-            assertEquals(302, http.send(QuotaRequest("$base/redirect", mapOf("Authorization" to "Bearer fixture"))).code)
+            val canReturnRedirect = RequestBuilder::class.java.methods.any { it.name == "followRedirects" }
+            for (code in listOf(301, 302, 303, 307, 308)) {
+                val request = QuotaRequest("$base/redirect/$code", mapOf("Authorization" to "Bearer fixture"))
+                if (canReturnRedirect) {
+                    assertEquals(code, http.send(request).code)
+                } else {
+                    // 252 rejects redirects by exhausting its one-request limit.
+                    assertThrows(IOException::class.java) { http.send(request) }
+                }
+            }
             assertEquals(0, targetHits.get())
         } finally { server.stop(0) }
     }

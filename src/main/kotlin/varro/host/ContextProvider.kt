@@ -3,7 +3,7 @@ package varro.host
 import com.google.gson.JsonArray
 import com.google.gson.JsonObject
 import com.intellij.analysis.problemsView.toolWindow.ProblemsView
-import com.intellij.codeInsight.daemon.impl.DaemonCodeAnalyzerImpl
+import com.intellij.codeInsight.daemon.impl.DaemonCodeAnalyzerEx
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.editor.Editor
@@ -269,7 +269,7 @@ class ContextProvider(private val project: Project) : Disposable {
 
         var total = 0
         runCatching {
-            DaemonCodeAnalyzerImpl.processHighlights(
+            DaemonCodeAnalyzerEx.processHighlights(
                 document,
                 project,
                 HighlightSeverity.INFORMATION,
