@@ -2,36 +2,36 @@
 
 How Varro OpenJet maps upstream Varro onto the IntelliJ Platform.
 
-## The porting decision
+## Reusing the webview
 
-Upstream Varro is roughly:
+The port keeps the upstream browser UI and implements the IDE host in Kotlin:
 
-| Layer | Size | Ported? |
-| --- | --- | --- |
-| `src/webview` (Solid + Tailwind chat UI) | ~80k lines + 17k CSS | **Reused verbatim** |
-| `src/shared` (protocol, domain types, helpers) | ~7k lines | **Reused verbatim** by the webview; selectively reimplemented in Kotlin for the host |
-| `src/extension` (VS Code host) | ~42k lines | IDE integration and provider quota backend reimplemented in Kotlin |
+| Upstream layer | This port |
+| --- | --- |
+| `src/webview`, Solid and Tailwind chat UI | Vendored browser sources |
+| `src/shared`, protocol, domain types and helpers | Vendored for the webview; host behavior implemented in Kotlin |
+| `src/extension`, VS Code host | Kotlin IDE integration, persistence, session orchestration and provider quotas |
 
-Reusing the webview is what makes the port tractable, and it is possible because upstream keeps a genuinely narrow host seam. `src/webview` contains no `import 'vscode'` anywhere, and the entire host contract is installed by one inline bootstrap in `src/extension/webview-html.ts`:
+The browser UI talks to its host through globals. Upstream's VS Code bootstrap installs this contract:
 
 ```js
 const vscode = acquireVsCodeApi();
-window.__initialWebviewState = { … };
+window.__initialWebviewState = initialState;
 window.__initialTheme = window.__initialWebviewState.theme;
 window.__sendToExtension = (msg) => vscode.postMessage(msg);
 window.__vscodeWebviewState = { getState, setState };
 ```
 
-Host-to-webview traffic is plain `window.postMessage`, which `src/webview/lib/bridge.ts` listens for.
+Upstream host-to-webview traffic uses `window.postMessage`, which `src/webview/lib/bridge.ts` listens for. The JetBrains bridge delivers the same message events through `window.__varroReceive`.
 
-Rewriting the UI in Swing or Compose would have meant reimplementing the transcript virtualization, streaming renderer, Markdown/Mermaid pipeline, composer, model pickers and permission surfaces - and then maintaining two divergent UIs forever. Reusing it means upstream UI work flows into this port through a re-vendor.
+`webview/upstream.json` selects the sync source and excludes upstream test files. Its current ref is `main`; `webview/vendor/UPSTREAM.json` records the commit copied by the last sync. Normal builds use that committed snapshot. JetBrains adaptations belong in the host and bridge; syncing replaces the vendored directories.
 
 ## Layout
 
 ```
 webview/
-  vendor/webview     upstream src/webview, unchanged
-  vendor/shared      upstream src/shared, unchanged
+  vendor/webview     vendored upstream src/webview
+  vendor/shared      vendored upstream src/shared
   src/host-bridge.ts the JetBrains bridge shim
   src/project-storage.ts project-backed browser preferences
   vite.config.mts    builds into src/main/resources/webview/
@@ -51,14 +51,14 @@ src/main/kotlin/varro/
 
 1. The user opens the **Varro** tool window. `VarroToolWindowFactory` asks `VarroProjectService` for a webview surface.
 2. `WebviewHost` creates a `JBCefBrowser`, a `JBCefJSQuery` for the inbound channel, and a request handler for assets, then loads `http://varro.localhost/index.html`.
-3. The request handler calls back into `WebviewHtml.render(...)`, which generates the page shell with the theme variables, the boot snapshot and the bridge primitive inlined - the same way VS Code inlines them.
-4. `src/host-bridge.ts` installs the four globals, then imports the vendored entry point.
+3. The request handler calls `WebviewHtml.render(...)` to generate the page shell with theme variables, the boot snapshot and the bridge primitive.
+4. `src/host-bridge.ts` installs the messaging and per-view state channels, project-backed storage, and navigation and drag handling before importing the vendored entry point.
 5. The webview mounts and sends `ready`.
 6. `VarroProjectService` replays status, context, config and persisted state, then calls `ensureServerStarted()`.
 7. `OpenCodeServer` probes health, adopts or spawns `opencode serve`, and opens the SSE stream.
 8. The webview loads sessions, agents, providers and MCP status through `api/request`.
 
-Server startup stays lazy, exactly as upstream: constructing the service does no OpenCode work, so IDE startup is unaffected and several project windows can share one server.
+Server startup is lazy. Several projects can connect to one server. Automatic startup can be disabled while still allowing connection to an existing server.
 
 ## Component map
 
@@ -82,26 +82,61 @@ Server startup stays lazy, exactly as upstream: constructing the service does no
 | `util/opencode-request.ts` | `server/OpenCodeRequestScope.kt` |
 | `commit-message-service.ts` | `host/CommitMessageService.kt` |
 | `provider-limit-service.ts`, `provider-limits/` | `host/ProviderQuotaBackend.kt` and `host/quota/` |
-| Workspace Memento stores | `store/VarroStore.kt` |
+| Workspace Memento stores | `store/VarroStore.kt`, `store/JsonJournal.kt` |
+| Shared model preferences | `store/VarroModelStore.kt` |
+| Model assignments | `host/ModelRoutingService.kt` |
+| Permission rules and review | `host/PermissionService.kt`, `host/ProjectPermissionConfig.kt`, `host/PermissionJudge.kt` |
+| Queued sends and Ralph orchestration | `host/QueuedDispatches.kt`, `host/RalphRunner.kt` |
+| Recycle bin and transcript export | `host/SessionTrash.kt`, `host/SessionTranscript.kt` |
+| Session summaries and usage reports | `host/SessionSummaryService.kt`, `host/LocalSessionSummary.kt`, `host/UsageReport.kt`, `host/LocalUsageDatabase.kt` |
 | `package.json` `contributes.configuration` | `settings/VarroSettings.kt`, `VarroConfigurable.kt` |
 
 ## Webview hosting
 
 **Asset serving.** A `CefRequestHandler` on the browser's own `JBCefClient` intercepts the synthetic origin and answers from plugin resources. A custom CEF *scheme* would have to be registered before the platform initializes CEF, which a plugin cannot reliably order; a per-client request handler works against an already-running CEF and is plain JCEF API.
 
-A synthetic origin is used rather than `loadHTML` because the bundle is a real ES-module graph - dynamic `import()` needs a resolvable base URL - and because a stable origin gives the page a durable `localStorage` partition, which is where upstream's `BrowserPersistence` keeps composer drafts and UI preferences.
+The synthetic origin gives dynamic `import()` a resolvable base URL. `webview.version` contains a bundle hash used for cache invalidation after updates. Browser cache storage is not the persistence backend. The bridge replaces `localStorage` with a project-backed implementation, and drafts use the separate per-view state channel.
 
-**Messaging.** Webview to host is a `JBCefJSQuery`, injected into the page shell as `window.__varroHostSend`. Host to webview is `executeJavaScript` calling `window.__varroReceive`, which the shim re-dispatches as a `MessageEvent`. Outbound messages produced before the document finishes loading are queued and flushed on `onLoadEnd` - the host starts pushing status the moment the server comes up, routinely before first paint.
+**Messaging.** Webview to host is a `JBCefJSQuery`, injected as `window.__varroHostSend`. Host to webview is `executeJavaScript` calling `window.__varroReceive`, which the shim re-dispatches as a `MessageEvent`. Outbound messages produced before the document finishes loading are queued and flushed on `onLoadEnd`.
 
-**Theme.** `ThemeBridge` derives the ~79 `--vscode-*` custom properties the webview reads from IntelliJ UI keys, the editor color scheme and the console ANSI palette. Every upstream variable already carries a CSS fallback and `lib/theme.ts` re-derives readable foregrounds at runtime against whatever background it finds, so the mapping only has to be plausible, not exhaustive. Theme changes are pushed as a variable update rather than a reload, which would discard scroll position and unsent composer text.
+**Theme.** `ThemeBridge` derives `--vscode-*` custom properties from IntelliJ UI keys, the editor color scheme and the console ANSI palette. Theme changes update variables without reloading the page.
+
+## Persistence and recovery
+
+| State | Owner and storage |
+| --- | --- |
+| IDE settings and shared model preferences | Application-level `VarroSettings` and `VarroModelStore`, in the IDE configuration's `varro-openjet.xml` |
+| Session models, permission modes, pins, plan state, unread state and project UI preferences | Project-level `VarroStore`, in the project's `varro-openjet.xml` storage |
+| Drafts and view snapshots | `VarroStore.viewStates`, keyed by view ID, through `host/view-state` |
+| Editor chat routes | `VarroStore.editorRoutes` |
+| Queued dispatches, Ralph runs and recycle-bin entries | JSON journals under `<IDE config>/varro/<project location hash>/`, with project-store snapshots |
+| Attachments | `<IDE system>/varro/attachments/<project location hash>/` |
+
+`project-storage.ts` serves synchronous reads from the boot snapshot and mirrors writes through `host/storage`. The host broadcasts changes to other views. `VarroStore` broadcasts session model and permission-mode changes through selection listeners. `VarroModelStore` uses an application message-bus topic to sync model preferences across projects.
+
+Legacy browser session selections migrate into the project store before boot snapshots are built. Legacy project model preferences migrate into the application store only if shared preferences have not been established.
+
+`QueuedDispatches` journals admission before sending and reconciles dispatches with OpenCode history after reconnecting. It does not automatically retry ambiguous sends. `RalphRunner` journals orchestration state and reattaches when the server becomes available. `SessionTrash` records a session tree before archiving it; restore unarchives it, while permanent deletion removes it from OpenCode. Recycle-bin retention is 7 days, with expiry processed when the bin is listed.
+
+## Model and permission controls
+
+`ModelRoutingService` writes small-model and agent-model assignments through OpenCode's global configuration API. Commit-message and auto-approve model assignments update `VarroSettings`.
+
+`PermissionService` applies session rules to OpenCode before acknowledging a save. `ProjectPermissionConfig` writes project rules to an existing `opencode.jsonc`, otherwise `opencode.json`. It preserves other configuration fields but rewrites the document as JSON, so JSONC comments and formatting are not retained.
+
+`PermissionJudge` handles known read-only tools locally and can review other requests through a hidden child session with tools denied except structured output. It asks on invalid responses or review failures. The model selection checks the configured judge model, OpenCode's `small_model`, then a supplied fallback.
+
+## Session summaries and usage
+
+`SessionSummaryService` tries local SQLite history through `LocalSessionSummary` and can fall back to REST. `SessionSummary` computes session-tree token totals, duration and file changes. `UsageReport` reads retained cross-project history through `LocalUsageDatabase` without starting OpenCode, with a bounded REST fallback when local history is unavailable.
 
 ## Authorization boundary
 
-`ApiRoutes` is a faithful port of upstream's `isAllowedApiRequest`. Every route states its methods and exactly which query keys it tolerates, because several OpenCode endpoints change scope entirely based on a query parameter. Requests are validated on the **still-encoded** path segments, so `%2f` cannot smuggle a separator into a captured id.
+`ApiRoutes` implements the route allowlist corresponding to upstream's `isAllowedApiRequest`. Each route states its methods and accepted query keys, because several OpenCode endpoints change scope based on query parameters. Validation checks encoded path segments, so `%2f` cannot insert a separator into a captured ID.
 
 Two request kinds share the channel:
 
-- Paths under `/varro` are the host's own namespace, answered locally from IDE state and the stores.
+- Paths under `/varro` are the host's namespace. Handlers use IDE state, stores, local history and OpenCode requests as needed.
 - Everything else is forwarded to OpenCode after the allowlist approves it.
 
 ## Provider quota backend
@@ -116,13 +151,13 @@ Caches are model/workspace scoped and fingerprint credential identity before reu
 
 `npm run build` builds only the browser bundle. Kotlin tests cover the quota backend, and `npm run test:host` checks the webview quota event contract. The Kotlin port used [upstream quota sources at revision `6f0d0f9ffd1f`](https://github.com/koltyakov/varro/tree/6f0d0f9ffd1f69290bdcd5c1ab0c7dca6e94c8ef/src/extension) as its reference.
 
-## Simplifications from the VS Code original
+## Server ownership and workspace scope
 
-These are deliberate, and each has a reason:
+**Project roots.** The catalog uses the JetBrains project's primary root and content roots. The history scope can be `directory`, `descendants` or `project`.
 
-**Multi-root workspaces.** VS Code workspaces have several independent folders, and upstream carries substantial machinery to aggregate session catalogs across them and authorize cross-root access. A JetBrains project has one primary root; the catalog is scoped to it plus the project's content roots, which removes the cross-root authorization layer while keeping the same visible behaviour.
+**Server ownership.** A project owns only the process it spawned. Varro connects to an existing healthy, compatible server and can send chat and configuration requests to it, but does not stop that process. Managed startup retries subsequent ports after a port-in-use failure. There is no cross-process ownership lease.
 
-**Server ownership leases.** Upstream writes a lease file so several VS Code windows can negotiate which one owns a spawned server, and can take ownership of an orphan. Here, a project owns only the server it spawned; a server already listening is adopted read-only and is never stopped by this IDE. That is the conservative direction - stopping someone else's server would take down their sessions.
+**CLI maintenance.** `IdleMaintenance` installs background CLI updates only for managed servers when enabled and idle. Busy sessions, queued messages and active Ralph runs prevent maintenance. The updated CLI is used on the next start.
 
 **Event routing.** Upstream routes detailed events to the endpoint owning their execution directory and projects safe lifecycle summaries elsewhere. Here an event is forwarded when it belongs to this project's directory or carries no directory at all.
 
@@ -130,8 +165,9 @@ These are deliberate, and each has a reason:
 
 The IntelliJ Platform's threading rules do not match Node's single-threaded host, so the boundaries are explicit:
 
-- `JBCefJSQuery` handlers run on a CEF IO thread that must not block, so inbound messages are dispatched to a pooled thread.
+- `JBCefJSQuery` callbacks enqueue inbound messages on a per-view single-thread executor, preserving their order.
 - The SSE stream owns a dedicated daemon thread, because reads block.
-- REST calls run on whatever thread handles the message; they are already off the EDT.
+- `api/request` work moves to the IDE pooled executor so REST calls do not block the view's ordered message queue.
 - Editor and UI work is marshalled with `invokeLater`/`invokeAndWait`; context snapshots are built inside a `ReadAction`.
-- Editor context refreshes are coalesced - caret and selection listeners fire per keystroke, and the composer only reads the snapshot when a message is sent.
+- Editor context refreshes are coalesced because caret and selection listeners can fire per keystroke.
+- Quota polling uses virtual threads; Ralph orchestration uses its own executor.

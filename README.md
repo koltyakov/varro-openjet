@@ -14,7 +14,7 @@ You'll need:
 
 - A JetBrains IDE in the supported build range, 252 through 262, with a JCEF-enabled runtime. The plugin is built against IntelliJ IDEA 2026.2.2.
 - OpenCode CLI 1.16.0 or newer, available on `PATH` or configured in Settings > Tools > Varro.
-- An OpenCode provider set up with `opencode auth login`.
+- An OpenCode provider set up with `opencode auth login` or `/connect` in chat.
 
 If you haven't installed OpenCode yet, follow its [installation guide](https://opencode.ai/docs) or use npm:
 
@@ -25,7 +25,9 @@ opencode auth login
 
 Download the plugin ZIP from [GitHub Releases](https://github.com/koltyakov/varro-openjet/releases), or build it using the instructions below. Open Settings > Plugins > Install Plugin from Disk and select the ZIP. Restart the IDE and open the Varro tool window on the right.
 
-Varro starts OpenCode at `127.0.0.1:4096` when needed. If a server is already listening, it connects to that server instead.
+Varro starts OpenCode at `127.0.0.1:4096` when needed. If a compatible, healthy OpenCode server is already listening, it connects to that server instead. A managed server can try subsequent ports when its port is occupied. You can change the port or disable automatic startup in Settings > Tools > Varro.
+
+Background CLI updates are enabled by default and run only for a managed server while sessions and host work are idle. The updated CLI takes effect on the next server start. Varro only stops servers it started.
 
 ### Installing from a checkout
 
@@ -45,6 +47,8 @@ Run the same command to update, then restart the IDE. The script targets IDEs wi
 
 Chat in the tool window or open a session in an editor tab. Editor tabs support IntelliJ's usual split and move controls. Drafts and session routes are saved per view.
 
+Model preferences are shared across projects in the same IDE. Each session's selected model and permission mode are project-owned and sync between the tool window and editor tabs. Project UI preferences survive browser reloads and IDE restarts.
+
 To add context, drop files or directories into the composer, or choose **Add to Varro Context** from the editor or Project view. The current-document chip toggles automatic context and remembers your choice per project. Switching to a chat tab keeps the last source editor as context, including unsaved edits.
 
 | Action | Shortcut |
@@ -55,7 +59,17 @@ To add context, drop files or directories into the composer, or choose **Add to 
 
 Other actions are under Tools > Varro and in Find Action. The tool-window options menu includes new editor chats, the file-diff toggle, settings, usage reports, and About. Commit-message generation is available in the commit toolbar.
 
-Settings are under **Settings > Tools > Varro**. You can configure the server path and port, permission mode, chat layout, fonts, and commit-message model. A font size of `0` follows the IDE's font settings.
+Settings are under **Settings > Tools > Varro**. You can configure server startup and updates, the default permission mode, chat layout, fonts, and models for commit messages and permission review. The initial permission mode is `auto`; `default` follows OpenCode's rules, and `full` allows a session to act without confirmation. A font size of `0` follows the IDE's font settings.
+
+The Agents settings control the runtime-only read-only `Ask` agent, automatic compaction, reserved context tokens, and fallback titles for untitled sessions. Ask and automatic compaction are enabled by default; fallback titles are disabled.
+
+### Sessions and model controls
+
+- Queue messages while a session is running. The host persists queued dispatches and reconciles them with message history after reconnecting. It does not automatically retry a send whose outcome is uncertain.
+- Deleted session trees go to the recycle bin for 7 days. Restore them there, or permanently delete them by emptying the bin. Expired entries are removed when the bin is read.
+- Ralph runs support start, pause, resume, stop, and model changes. The host journals their state and reattaches after reconnecting to OpenCode.
+- The Models menu can assign OpenCode's small model and agent models in global OpenCode configuration. Commit-message and auto-approve model assignments are saved in IDE settings.
+- Permission controls can save rules for a session or the project. Project rules update the project's `opencode.jsonc` if present, otherwise `opencode.json`.
 
 ### Provider limits and usage
 
@@ -93,12 +107,15 @@ Install JDK 21 and the Node/npm versions listed in [`webview/package.json`](webv
 ```bash
 ./gradlew buildPlugin       # build/distributions/varro-openjet-<version>.zip
 ./gradlew runIde            # launch a sandbox IDE
-./gradlew test
+./gradlew test              # Kotlin and webview host tests
+./gradlew check buildPlugin # CI-equivalent checks and packaging
 ```
 
 When needed, run the IntelliJ Plugin Verifier directly on a development machine with `./gradlew verifyPlugin`. Do not run it in Docker.
 
 The build uses `npm ci`. If you change webview dependencies, run `npm install` in `webview/` and commit the updated lockfile. Keep the Node/npm versions in `webview/package.json` and `Dockerfile` in sync.
+
+For Kotlin-only iteration, `-PskipWebview=true` skips webview dependency installation, bundling, and host tests. Use it only after building the webview resources. `clean` removes those resources, so rebuild them before packaging.
 
 ### CI and releases
 
@@ -119,16 +136,18 @@ Release publishing uses the built-in `GITHUB_TOKEN`; no additional secrets are n
 
 The chat UI runs in IntelliJ's embedded JCEF browser. Kotlin handles the host messages and connects to OpenCode over REST and SSE. See [architecture](docs/architecture.md) for the component map and bridge protocol.
 
+See [contributing](CONTRIBUTING.md) for the development workflow, checks, and sandbox verification. For CLI, server, browser, or quota problems, see [troubleshooting](docs/troubleshooting.md).
+
 Upstream UI sources live in `webview/vendor/`. To refresh them, run these commands from `webview/`:
 
 ```bash
-npm run sync                              # fetch upstream and update vendored sources
+npm run sync                                # fetch upstream and update vendored sources
 VARRO_SOURCE=/path/to/varro npm run sync    # use a local Varro checkout
 ```
 
-The pinned revision is recorded in `webview/vendor/UPSTREAM.json`.
+[`webview/upstream.json`](webview/upstream.json) selects the repository and ref, currently `main`, and the files to copy. Sync replaces the vendored directories and records the resolved commit in `webview/vendor/UPSTREAM.json`. Normal builds use the committed vendor snapshot without fetching upstream. Review vendor changes before committing a sync.
 
-`npm run test:host` tests the JetBrains webview bridge and quota event contract. The Kotlin quota backend is covered by `./gradlew test` from the repository root.
+Run `npm run test:host` from `webview/` to test project storage, editor context, session permission modes, and the quota event contract. `npm run typecheck` checks TypeScript, and `npm run watch` rebuilds browser assets as you edit. The Kotlin host tests run with `./gradlew test` from the repository root, which also runs the webview host tests unless `skipWebview` is set.
 
 ## License
 
