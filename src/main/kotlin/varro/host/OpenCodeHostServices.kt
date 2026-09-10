@@ -8,7 +8,6 @@ import com.intellij.openapi.project.guessProjectDir
 import com.intellij.util.EnvironmentUtil
 import varro.protocol.Json
 import varro.protocol.asObjectOrNull
-import varro.protocol.num
 import varro.protocol.obj
 import varro.protocol.str
 import varro.host.quota.QuotaCredentials
@@ -145,60 +144,15 @@ class OpenCodeHostServices(
 
     // --- Session diff summary -------------------------------------------------
 
-    /**
-     * Summarizes what a session changed: files touched, lines added and removed,
-     * token use and duration. Derived from OpenCode's own diff and message data so
-     * the numbers match what the session actually did.
-     */
-    override fun sessionDiffSummary(sessionId: String, directory: String?, revision: String?): JsonObject {
-        val encoded = java.net.URLEncoder.encode(sessionId, Charsets.UTF_8).replace("+", "%20")
+    private val sessionSummaries = SessionSummaryService(
+        readLocal = LocalSessionSummary(LocalUsageDatabase.defaultPath(EnvironmentUtil.getEnvironmentMap()))::read,
+        request = { path, directory ->
+            server.transport.request("GET", path, options = RequestOptions(directory = directory)).data
+        },
+    )
 
-        val diffs = runCatching {
-            server.transport.request(
-                "GET",
-                "/session/$encoded/diff",
-                options = RequestOptions(directory = directory),
-            ).data
-        }.getOrNull()
-
-        var files = 0
-        var additions = 0
-        var deletions = 0
-        diffs?.let { element ->
-            val entries = when {
-                element.isJsonArray -> element.asJsonArray
-                element.isJsonObject -> element.asJsonObject.getAsJsonArray("diffs")
-                else -> null
-            }
-            entries?.forEach { entry ->
-                val record = entry.asObjectOrNull() ?: return@forEach
-                files += 1
-                additions += record.num("additions")?.toInt() ?: 0
-                deletions += record.num("deletions")?.toInt() ?: 0
-            }
-        }
-
-        val session = runCatching {
-            server.transport.request(
-                "GET",
-                "/session/$encoded",
-                options = RequestOptions(directory = directory),
-            ).data.asObjectOrNull()
-        }.getOrNull()
-
-        val time = session.obj("time")
-        val created = time.num("created")?.toLong() ?: 0L
-        val updated = time.num("updated")?.toLong() ?: created
-
-        return Json.obj(
-            "files" to files,
-            "additions" to additions,
-            "deletions" to deletions,
-            "tokens" to 0,
-            "durationMs" to (updated - created).coerceAtLeast(0),
-            "activeStartedAt" to null,
-        )
-    }
+    override fun sessionDiffSummary(sessionId: String, directory: String?, revision: String?): JsonObject =
+        sessionSummaries.read(sessionId, directory)
 
     companion object {
         /**
