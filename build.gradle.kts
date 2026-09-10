@@ -175,5 +175,4 @@ tasks.test {
 
 tasks.clean {
     delete(webviewOutputDir)
-    delete(layout.projectDirectory.dir("src/main/resources/quota"))
 }

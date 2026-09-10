@@ -75,4 +75,4 @@ The webview is not re-tested here; it ships with upstream's own suite, which the
 
 `ProviderQuotaBackendTest` and `host/quota/` tests exercise native provider fixtures, isolated credential lookup and refresh, workspace/cache isolation, stale-result retirement, rate-limit backoff, nullable wire fields, and local HTTP transport. The webview contract test checks that quota events pass the upstream parser. Tests use temporary credentials and local HTTP fixtures, never real accounts.
 
-The upstream TypeScript quota suite remains available through `npm run test:quota` as a reference. It is no longer part of the plugin build and does not test the shipped Kotlin backend. Antigravity process discovery currently uses the advertised extension-server port or explicit loopback environment configuration; upstream's OS-specific listening-port scan is not ported. Cross-process quota snapshot sharing is also not ported.
+Antigravity process discovery currently uses the advertised extension-server port or explicit loopback environment configuration; upstream's OS-specific listening-port scan is not ported. Cross-process quota snapshot sharing is also not ported.

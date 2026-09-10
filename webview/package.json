@@ -8,8 +8,6 @@
   "scripts": {
     "sync": "node scripts/sync-upstream.mjs",
     "build": "vite build",
-    "sync:quota": "node scripts/sync-quota.mjs",
-    "test:quota": "vitest run --config vitest.quota.config.mts",
     "test:host": "vitest run --config vitest.host.config.mts",
     "watch": "vite build --watch",
     "typecheck": "tsc --noEmit"

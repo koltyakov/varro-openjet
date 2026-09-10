@@ -28,7 +28,6 @@ class UsageReport(private val request: (String, RequestOptions) -> OpenCodeRespo
             page.forEach { value -> value.asObjectOrNull()?.let { session ->
                 session.str("id")?.let { sessions[it] = session }
             } }
-            check(sessions.size <= 250) { "Usage history exceeds 250 sessions. Use OpenCode's local `opencode stats` command for this report." }
             cursor = response.nextCursor
             check(cursor == null || cursors.add(cursor)) { "OpenCode repeated a session pagination cursor" }
         } while (cursor != null)

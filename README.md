@@ -109,13 +109,7 @@ VARRO_SOURCE=/path/to/varro npm run sync    # use a local Varro checkout
 
 The pinned revision is recorded in `webview/vendor/UPSTREAM.json`.
 
-Upstream quota sources are also retained as references for the Kotlin port. They are not part of the plugin runtime. Refresh them separately with:
-
-```bash
-VARRO_SOURCE=/path/to/varro npm run sync:quota
-```
-
-Their revision is recorded in `webview/vendor/extension/UPSTREAM.json`. `npm run test:host` tests the JetBrains webview bridge; `npm run test:quota` runs the upstream reference suite. The shipped Kotlin quota backend is covered by `./gradlew test` from the repository root.
+`npm run test:host` tests the JetBrains webview bridge and quota event contract. The Kotlin quota backend is covered by `./gradlew test` from the repository root.
 
 ## License
 

@@ -37,7 +37,7 @@ class VarroToolWindowFactory : ToolWindowFactory, DumbAware {
         content.isCloseable = false
         content.component = buildPanel(project, service, content)
         toolWindow.contentManager.addContent(content)
-        registerTitleActions(toolWindow, service)
+        registerTitleActions(toolWindow)
     }
 
     private fun buildPanel(
@@ -95,15 +95,13 @@ class VarroToolWindowFactory : ToolWindowFactory, DumbAware {
         return panel
     }
 
-    private fun registerTitleActions(toolWindow: ToolWindow, service: VarroProjectService) {
+    private fun registerTitleActions(toolWindow: ToolWindow) {
         val actions = listOfNotNull(
-            ActionManager.getInstance().getAction("Varro.NewSession"),
             ActionManager.getInstance().getAction("Varro.SearchSessions"),
-            ActionManager.getInstance().getAction("Varro.RestartServer"),
         )
         if (actions.isNotEmpty()) toolWindow.setTitleActions(actions)
         toolWindow.setAdditionalGearActions(com.intellij.openapi.actionSystem.DefaultActionGroup().apply {
-            listOf("Varro.NewEditor", "Varro.ToggleFileDiffs", "Varro.Settings", "Varro.Usage", "Varro.About")
+            listOf("Varro.ToggleFileDiffs", "Varro.Settings", "Varro.Usage", "Varro.About")
                 .mapNotNull { ActionManager.getInstance().getAction(it) }.forEach { add(it) }
         })
     }

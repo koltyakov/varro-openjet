@@ -95,6 +95,31 @@ class PortedFeaturesTest {
         assertTrue(report.contains("2 sessions scanned"))
     }
 
+    @Test fun `usage scans more than 250 sessions across pages without truncating totals`() {
+        val now = 1_800_000_000_000L
+        val scanned = mutableListOf<String>()
+        val report = UsageReport { path, _ ->
+            if (path.startsWith("/experimental/session")) {
+                val lastPage = path.contains("cursor=")
+                val ids = if (lastPage) 250..300 else 1..250
+                OpenCodeResponse(Json.array(ids.map { Json.obj("id" to "session-$it") }),
+                    if (lastPage) null else "next")
+            } else {
+                scanned.add(path)
+                OpenCodeResponse(Json.array(listOf(Json.obj("info" to Json.obj(
+                    "id" to "message", "role" to "assistant", "parentID" to "prompt",
+                    "providerID" to "provider", "modelID" to "model",
+                    "time" to Json.obj("created" to now - 1000),
+                    "tokens" to Json.obj("input" to 1), "cost" to 0.25,
+                )))))
+            }
+        }.build(false, now)
+        assertEquals(300, scanned.size)
+        assertEquals(300, scanned.toSet().size)
+        assertTrue(report.contains("300 sessions scanned"))
+        assertTrue(report.contains("| provider/model | 300 | 300 | 0 | 0 | 0 | 0 | 75.0000 |"))
+    }
+
     @Test fun `usage reports missing history instead of silently counting it as zero`() {
         val report = UsageReport { path, _ ->
             if (path.startsWith("/experimental")) OpenCodeResponse(Json.array(listOf(Json.obj("id" to "missing"))))

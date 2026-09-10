@@ -786,6 +786,7 @@ class VarroProjectService(private val project: Project) : Disposable {
             IDE diagnostics are available under Help | Show Log in Finder/Explorer.
             """.trimIndent(),
             "About Varro OpenJet.md", "markdown",
+            previewOnly = true,
         )
     }
 

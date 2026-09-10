@@ -32,7 +32,6 @@ Rewriting the UI in Swing or Compose would have meant reimplementing the transcr
 webview/
   vendor/webview     upstream src/webview, unchanged
   vendor/shared      upstream src/shared, unchanged
-  vendor/extension   upstream quota sources and tests, retained as porting references
   src/host-bridge.ts the JetBrains bridge shim
   src/project-storage.ts project-backed browser preferences
   vite.config.mts    builds into src/main/resources/webview/
@@ -115,7 +114,7 @@ Caches are model/workspace scoped and fingerprint credential identity before reu
 
 `Json.stringifyMessage` preserves explicit null fields in API responses and quota events. The webview rejects quota windows when required nullable fields such as `limit` and `resetAt` are omitted.
 
-`npm run build` builds only the browser bundle. The upstream quota sources remain in `vendor/extension/` as references, with their revision recorded in `UPSTREAM.json`. Kotlin tests cover the shipped backend; the reference TypeScript suite is available separately through `npm run test:quota`.
+`npm run build` builds only the browser bundle. Kotlin tests cover the quota backend, and `npm run test:host` checks the webview quota event contract. The Kotlin port used [upstream quota sources at revision `6f0d0f9ffd1f`](https://github.com/koltyakov/varro/tree/6f0d0f9ffd1f69290bdcd5c1ab0c7dca6e94c8ef/src/extension) as its reference.
 
 ## Simplifications from the VS Code original
 

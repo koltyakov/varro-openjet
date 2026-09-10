@@ -8,7 +8,9 @@ import com.intellij.openapi.editor.ScrollType
 import com.intellij.openapi.fileChooser.FileChooser
 import com.intellij.openapi.fileChooser.FileChooserDescriptorFactory
 import com.intellij.openapi.fileEditor.FileEditorManager
+import com.intellij.openapi.fileEditor.FileEditorStateLevel
 import com.intellij.openapi.fileEditor.OpenFileDescriptor
+import com.intellij.openapi.fileEditor.TextEditorWithPreview
 import com.intellij.openapi.fileTypes.FileTypeManager
 import com.intellij.openapi.fileTypes.PlainTextFileType
 import com.intellij.openapi.project.Project
@@ -93,7 +95,7 @@ class EditorIntegration(private val project: Project) {
      * output rather than scrolling it in place, so this is the escape hatch to the
      * full text.
      */
-    fun openText(content: String, title: String, language: String?) {
+    fun openText(content: String, title: String, language: String?, previewOnly: Boolean = false) {
         ApplicationManager.getApplication().invokeLater {
             val fileType = when (language) {
                 "json" -> FileTypeManager.getInstance().getFileTypeByExtension("json")
@@ -105,7 +107,16 @@ class EditorIntegration(private val project: Project) {
             val file = LightVirtualFile(sanitizeTitle(title), fileType, content).apply {
                 isWritable = false
             }
-            FileEditorManager.getInstance(project).openFile(file, true)
+            val editors = FileEditorManager.getInstance(project).openFile(file, true)
+            if (previewOnly) editors.filterIsInstance<TextEditorWithPreview>().forEach { editor ->
+                val state = editor.getState(FileEditorStateLevel.FULL) as? TextEditorWithPreview.MyFileEditorState
+                    ?: return@forEach
+                // Apply a per-editor state without changing the user's global Markdown layout.
+                editor.setState(TextEditorWithPreview.MyFileEditorState(
+                    TextEditorWithPreview.Layout.SHOW_PREVIEW,
+                    state.firstState, state.secondState, state.isVerticalSplit,
+                ))
+            }
         }
     }
 
