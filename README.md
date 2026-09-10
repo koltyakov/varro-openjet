@@ -1,197 +1,122 @@
 # Varro OpenJet
 
-A port of [Varro](https://github.com/koltyakov/varro) - the OpenCode workbench for VS Code - to JetBrains IDEs.
+[Varro](https://github.com/koltyakov/varro) for JetBrains IDEs. Run [OpenCode](https://opencode.ai) in IntelliJ IDEA, WebStorm, PyCharm, GoLand, or another IntelliJ-platform IDE.
 
-Varro OpenJet runs [OpenCode](https://opencode.ai) inside IntelliJ IDEA, WebStorm, PyCharm, GoLand and the other IntelliJ-platform IDEs. It adds project-aware chat, parallel sessions, plan and change review, model and permission controls, and commit-message generation.
+The plugin reuses Varro's chat UI, with a Kotlin backend for editor integration, settings, persistence, and provider limits. It uses your existing OpenCode configuration for providers, models, agents, commands, skills, and MCP servers.
 
-OpenCode stays responsible for agents, providers, models, commands, skills and MCP servers. Varro OpenJet reads that configuration and provides an IDE interface for it, so the same setup works in the OpenCode TUI, in VS Code through Varro, and here.
+The port is still in progress. See [porting status](docs/porting-status.md) for supported features and known gaps.
 
-## How the port works
+## Getting started
 
-Varro's chat interface is ~80,000 lines of Solid and Tailwind, and it has no VS Code dependencies at all: it talks to its host through exactly four `window` globals and ordinary `postMessage` events.
+You'll need:
 
-```
-window.__initialWebviewState   boot snapshot, inlined by the host
-window.__initialTheme          theme kind
-window.__sendToExtension(msg)  webview -> host
-window.__vscodeWebviewState    synchronous key/value store
-```
+- A JetBrains IDE in the supported build range, 252 through 262, with a JCEF-enabled runtime. The plugin is built against IntelliJ IDEA 2026.2.2.
+- OpenCode CLI 1.16.0 or newer, available on `PATH` or configured in Settings > Tools > Varro.
+- An OpenCode provider set up with `opencode auth login`.
 
-This port reuses the upstream webview and implements the IDE host in Kotlin against the IntelliJ Platform. Provider quota reporting also reuses Varro's TypeScript service and adapters, packaged as a Node.js helper that the Kotlin host starts on demand.
+If you haven't installed OpenCode yet, follow its [installation guide](https://opencode.ai/docs) or use npm:
 
-```
-┌─ IntelliJ Platform ──────────────────────────────────────┐
-│                                                          │
-│  VarroProjectService ── OpenCodeServer ──► opencode serve│
-│         │                    │  REST + SSE               │
-│         │                    │                           │
-│    ┌────┴─────┐         RestProxy ── allowlist           │
-│    │ Webview  │              │                           │
-│    │  Host    │◄─────────────┘                           │
-│    │ (JCEF)   │                                          │
-│    └────┬─────┘                                          │
-│         │  window.__varroHostSend / __varroReceive       │
-│  ┌──────▼───────────────────────────────┐                │
-│  │  Varro webview (vendored, unchanged) │                │
-│  └──────────────────────────────────────┘                │
-└──────────────────────────────────────────────────────────┘
+```bash
+npm install -g opencode-ai
+opencode auth login
 ```
 
-The upstream sources live in [`webview/vendor/`](webview/vendor/), vendored by [`webview/scripts/sync-upstream.mjs`](webview/scripts/sync-upstream.mjs). See [docs/architecture.md](docs/architecture.md) for the full design and [docs/porting-status.md](docs/porting-status.md) for what is and is not implemented yet.
+Build the plugin using the instructions below, then open Settings > Plugins > Install Plugin from Disk and select the ZIP. Restart the IDE and open the Varro tool window on the right.
+
+Varro starts OpenCode at `127.0.0.1:4096` when needed. If a server is already listening, it connects to that server instead.
+
+### Installing from a checkout
+
+The install script can build the plugin and install it into your detected JetBrains IDEs:
+
+```bash
+./scripts/install.sh                         # build and install
+./scripts/install.sh --no-build              # install the ZIP already in dist/
+./scripts/install.sh --list                  # list detected IDEs
+./scripts/install.sh --ide IntelliJIdea2026.2 # install into one IDE
+./scripts/install.sh --uninstall
+```
+
+Run the same command to update, then restart the IDE. The script targets IDEs within the plugin's supported build range.
+
+## Using Varro
+
+Chat in the tool window or open a session in an editor tab. Editor tabs support IntelliJ's usual split and move controls. Drafts and session routes are saved per view.
+
+To add context, drop files or directories into the composer, or choose **Add to Varro Context** from the editor or Project view. The current-document chip toggles automatic context and remembers your choice per project. Switching to a chat tab keeps the last source editor as context, including unsaved edits.
+
+| Action | Shortcut |
+| --- | --- |
+| Focus Varro Chat | `Ctrl+Alt+V` / `Cmd+Alt+V` |
+| Add to Varro Context | `Ctrl+Shift+K` / `Cmd+Shift+K` |
+| Hide the tool window | `Shift+Escape` |
+
+Other actions are under Tools > Varro and in Find Action. The tool-window options menu includes new editor chats, the file-diff toggle, settings, usage reports, and About. Commit-message generation is available in the commit toolbar.
+
+Settings are under **Settings > Tools > Varro**. You can configure the server path and port, permission mode, chat layout, fonts, and commit-message model. A font size of `0` follows the IDE's font settings.
+
+### Provider limits and usage
+
+Quota badges show remaining allowances and reset times when the provider exposes them. The Kotlin adapters support Anthropic/Claude Code, OpenAI Codex, GitHub Copilot, OpenRouter, Gemini, Antigravity, Ollama Cloud, OpenCode Go, Z.ai, MiniMax, Kimi, and xAI. They use existing credentials and the IDE's HTTP proxy and certificate settings. No Node.js helper is required.
+
+When a poll fails, Varro may show the last successful snapshot for up to 15 minutes. Quota caches are project-local. Antigravity needs a detected local language-server port or the `ANTIGRAVITY_BASE_URL` and `ANTIGRAVITY_CSRF_TOKEN` environment variables, with a loopback IP address in the URL.
+
+Usage reports open as Markdown documents and cover retained history across projects. `/stats` supports daily, weekly, monthly, and all-time accounting. The current report implementation handles up to 250 sessions; use `opencode stats` for larger histories.
+
+### Network and credentials
+
+Chat requests go through the local OpenCode server. Provider-limit polling contacts provider quota endpoints directly, using credentials held in the IDE host. Credentials are not sent to the webview. Supported OAuth adapters can refresh expired tokens.
+
+Webview API requests pass through a [route allowlist](src/main/kotlin/varro/host/ApiRoutes.kt), and terminal setup commands use a fixed allowlist. Commit-message generation reads staged or unstaged changes without mixing them, staging files, or creating commits.
 
 ## Building
 
-The build runs in Docker, so no JDK, Gradle or Node installation is needed on the host:
+### Docker
+
+Docker provides the JDK, Gradle, and Node toolchain:
 
 ```bash
-./scripts/build.sh          # incremental build against the working tree
+./scripts/build.sh          # build the working tree
 ./scripts/build.sh clean    # clean build inside the image
-./scripts/build.sh verify   # tests plus the IntelliJ plugin verifier
-./scripts/build.sh shell    # interactive shell in the build container
+./scripts/build.sh verify   # tests and IntelliJ plugin verifier
+./scripts/build.sh shell    # open a shell in the build container
 ```
 
-The installable plugin lands in `dist/varro-openjet-<version>.zip`.
+The plugin ZIP is written to `dist/varro-openjet-<version>.zip`. The first build downloads the IntelliJ Platform, which is over a gigabyte. Later builds reuse the Docker volume cache.
 
-A cold build downloads the IntelliJ Platform (over a gigabyte). `docker-compose.yml` keeps it in a named volume, so only the first build pays that cost.
+### Local build
 
-<details>
-<summary>Building without Docker</summary>
-
-With a JDK 21 and Node 22+ on the host (Gradle comes from the wrapper):
+Install JDK 21 and the Node/npm versions listed in [`webview/package.json`](webview/package.json). [Volta](https://volta.sh) selects the pinned Node/npm versions automatically. Gradle uses the included wrapper.
 
 ```bash
-./gradlew buildPlugin       # -> build/distributions/*.zip
-./gradlew runIde            # launch a sandbox IDE with the plugin installed
+./gradlew buildPlugin       # build/distributions/varro-openjet-<version>.zip
+./gradlew runIde            # launch a sandbox IDE
 ./gradlew test
 ```
 
-</details>
+The build uses `npm ci`. If you change webview dependencies, run `npm install` in `webview/` and commit the updated lockfile. Keep the Node/npm versions in `webview/package.json` and `Dockerfile` in sync.
 
-### Webview toolchain
+## Development
 
-Node and npm are pinned to exact versions, in three places that must agree:
+The chat UI runs in IntelliJ's embedded JCEF browser. Kotlin handles the host messages and connects to OpenCode over REST and SSE. See [architecture](docs/architecture.md) for the component map and bridge protocol.
 
-| Where | What it pins |
-| --- | --- |
-| `webview/package.json` → `volta` | the host toolchain, applied automatically by [Volta](https://volta.sh) |
-| `webview/package.json` → `engines` | a hard floor for anyone without Volta |
-| `Dockerfile` → `NODE_VERSION` / `NPM_VERSION` | the container toolchain, verified after install |
-
-npm serializes `package-lock.json` differently between versions, so an unpinned
-toolchain rewrites the lockfile on every build — the host and the container
-fighting over it. With Volta installed, `cd webview` switches you to the pinned
-pair automatically; without it, `engines` will at least fail loudly.
-
-Both the Gradle task and the Docker build use `npm ci`, which installs the
-committed lockfile exactly and fails when it has drifted from `package.json`.
-After deliberately changing a dependency, run `npm install` once to update the
-lockfile and commit it.
-
-### Refreshing the vendored webview
+Upstream UI sources live in `webview/vendor/`. To refresh them, run these commands from `webview/`:
 
 ```bash
-cd webview
-npm run sync                       # clone/refresh upstream and re-vendor
-VARRO_SOURCE=/path/to/varro npm run sync   # or vendor from a local checkout
+npm run sync                              # fetch upstream and update vendored sources
+VARRO_SOURCE=/path/to/varro npm run sync    # use a local Varro checkout
 ```
 
-The pinned upstream revision is recorded in `webview/vendor/UPSTREAM.json`.
+The pinned revision is recorded in `webview/vendor/UPSTREAM.json`.
 
-The sync also vendors the quota backend and its tests. To update only those files:
+Upstream quota sources are also retained as references for the Kotlin port. They are not part of the plugin runtime. Refresh them separately with:
 
 ```bash
 VARRO_SOURCE=/path/to/varro npm run sync:quota
 ```
 
-Its revision is recorded separately in `webview/vendor/extension/UPSTREAM.json`.
-
-## Installing
-
-### From the CLI
-
-```bash
-./scripts/install.sh              # build, then install into every supported IDE
-./scripts/install.sh --no-build   # install the artifact already in dist/
-./scripts/install.sh --list       # show detected IDEs and which have it installed
-./scripts/install.sh --ide IntelliJIdea2026.2
-./scripts/install.sh --uninstall
-```
-
-This unpacks into the IDE's own plugins directory
-(`~/Library/Application Support/JetBrains/<IDE>/plugins` on macOS,
-`~/.local/share/JetBrains/<IDE>/plugins` on Linux). Updating is the same command:
-the old copy is removed first, so no stale jar can linger on the classpath.
-
-Only IDEs inside the plugin's declared build range are targeted, since older ones
-would just report an incompatible plugin at startup. `--all` overrides that.
-
-A JetBrains IDE reads its plugins directory only at startup, so **restart the IDE**
-afterwards. On macOS:
-
-```bash
-osascript -e 'quit app "IntelliJ IDEA"' && sleep 3 && open -a 'IntelliJ IDEA'
-```
-
-### From the IDE
-
-**Settings | Plugins | ⚙ | Install Plugin from Disk…** and pick the zip from `dist/`.
-
-### First run
-
-1. Install the OpenCode CLI: `npm install -g opencode-ai` (1.16.0 or newer).
-2. Configure a provider: `opencode auth login`.
-3. Open the **Varro** tool window on the right.
-
-Varro OpenJet starts OpenCode on `127.0.0.1:4096` the first time the tool window
-needs it, and adopts a server that is already listening so several IDE windows can
-share one.
-
-## Requirements
-
-- An IntelliJ-platform IDE **2025.2 or newer** (build 252-262), with the JCEF runtime. Built and verified against IntelliJ IDEA 2026.2.2.
-- The [OpenCode CLI](https://opencode.ai/docs) 1.16.0 or newer, on `PATH` or set in **Settings | Tools | Varro**.
-- A configured OpenCode provider.
-- Node.js 22 or newer on the IDE host for provider quota reporting. Varro searches the IDE's environment and common install locations. An explicit executable path can be set under **Settings | Tools | Varro | Provider quotas Node.js path**.
-
-### Provider limits
-
-Quota badges and reset times use the same backend as Varro, including Anthropic/Claude Code, OpenAI Codex, GitHub Copilot, OpenRouter, Gemini, Antigravity, Ollama Cloud, OpenCode Go and Claude plans, Z.ai, MiniMax, Kimi, and xAI. Availability depends on the provider and credentials, as it does upstream.
-
-The helper reads the existing OpenCode and provider credential stores. It retains Varro's token refresh, per-model/workspace caching, shared quota snapshots, rate-limit backoff, and last-successful snapshot fallback. Provider changes and server restarts invalidate its state; closing the project stops it.
-
-## Settings
-
-**Settings | Tools | Varro** mirrors upstream's `varro.*` settings: server port and CLI path, automatic start and update, default permission mode, sessions-pane side, chat and code font sizes, and the models used for the auto-approve judge and commit messages.
-
-Font sizes default to `0`, meaning "follow the IDE", rather than duplicating a number the user already chose in the IDE settings.
-
-## Actions and shortcuts
-
-| Action | Default shortcut |
-| --- | --- |
-| Focus Varro Chat | `Ctrl+Alt+V` / `Cmd+Alt+V` |
-| Add to Varro Context | `Ctrl+Shift+K` / `Cmd+Shift+K` |
-| New Varro Session | - |
-| Search Varro Sessions | - |
-| Stop Varro Run | - |
-| Restart OpenCode Server | - |
-| Generate Commit Message with Varro | in the commit toolbar |
-
-`Shift+Escape` hides the tool window while focus is inside the chat.
-
-## Security notes
-
-- The plugin talks only to a local OpenCode server on `127.0.0.1`. It sends nothing to any other host itself; OpenCode makes the provider requests using the credentials configured with the OpenCode CLI.
-- The plugin never reads, stores or forwards API keys.
-- Requests from the webview pass an explicit route allowlist ([`ApiRoutes.kt`](src/main/kotlin/dev/koltyakov/varrojet/host/ApiRoutes.kt)) before reaching OpenCode, so the host cannot be used as an open proxy onto the OpenCode API.
-- Terminal commands the chat can request are restricted to a fixed allowlist of OpenCode authentication, install and upgrade commands.
-- Commit-message generation never mixes staged and unstaged changes, never stages, and never commits.
-
-## Credits
-
-- [Varro](https://github.com/koltyakov/varro) - the original VS Code extension, whose webview this reuses.
-- [OpenCode](https://opencode.ai) - the agent this is a front end for.
+Their revision is recorded in `webview/vendor/extension/UPSTREAM.json`. `npm run test:host` tests the JetBrains webview bridge; `npm run test:quota` runs the upstream reference suite. The shipped Kotlin quota backend is covered by `./gradlew test` from the repository root.
 
 ## License
 
-[MIT](LICENSE). The vendored webview is MIT-licensed upstream Varro code.
+[MIT](LICENSE). The vendored [Varro](https://github.com/koltyakov/varro) UI is also MIT-licensed. [OpenCode](https://opencode.ai) supplies the agent runtime.

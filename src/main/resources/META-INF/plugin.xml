@@ -33,10 +33,10 @@
 
         <h3>Network and credential disclosure</h3>
         <ul>
-            <li>The plugin talks only to a local OpenCode server on <code>127.0.0.1</code>
-                (port 4096 by default). It sends nothing to any other host itself.</li>
-            <li>OpenCode makes the model provider requests, using the credentials you configured
-                with the OpenCode CLI. The plugin never reads, stores or forwards API keys.</li>
+            <li>Chat requests go through the local OpenCode server on <code>127.0.0.1</code>
+                (port 4096 by default). Native provider-limit polling also contacts provider quota endpoints.</li>
+            <li>Provider-limit polling uses existing provider credentials in the IDE host, including
+                supported OAuth refresh. The webview receives quota counters and statuses, not credentials.</li>
             <li>Terminal commands the chat can request are restricted to a fixed allowlist of
                 OpenCode authentication, install and upgrade commands.</li>
         </ul>
@@ -59,20 +59,22 @@
         <toolWindow id="Varro"
                     anchor="right"
                     icon="/icons/varro.svg"
-                    factoryClass="dev.koltyakov.varrojet.toolwindow.VarroToolWindowFactory"
+                    factoryClass="varro.toolwindow.VarroToolWindowFactory"
                     canCloseContents="false"/>
 
-        <applicationService serviceImplementation="dev.koltyakov.varrojet.settings.VarroSettings"/>
-        <projectService serviceImplementation="dev.koltyakov.varrojet.store.VarroStore"/>
-        <projectService serviceImplementation="dev.koltyakov.varrojet.host.VarroProjectService"/>
+        <applicationService serviceImplementation="varro.settings.VarroSettings"/>
+        <projectService serviceImplementation="varro.store.VarroStore"/>
+        <projectService serviceImplementation="varro.host.VarroProjectService"/>
 
         <applicationConfigurable
             parentId="tools"
             id="Varro"
             displayName="Varro"
-            instance="dev.koltyakov.varrojet.settings.VarroConfigurable"/>
+            instance="varro.settings.VarroConfigurable"/>
 
         <notificationGroup id="Varro Notifications" displayType="BALLOON"/>
+        <fileEditorProvider implementation="varro.host.VarroChatEditorProvider"/>
+        <virtualFileSystem key="varro-chat" implementationClass="varro.host.VarroChatFileSystem" physical="false"/>
     </extensions>
 
     <actions>
@@ -80,7 +82,7 @@
             <add-to-group group-id="ToolsMenu" anchor="last"/>
 
             <action id="Varro.FocusChat"
-                    class="dev.koltyakov.varrojet.actions.FocusChatAction"
+                    class="varro.actions.FocusChatAction"
                     text="Focus Varro Chat"
                     description="Reveal the Varro tool window and focus the composer">
                 <keyboard-shortcut keymap="$default" first-keystroke="ctrl alt V"/>
@@ -89,48 +91,59 @@
             </action>
 
             <action id="Varro.NewSession"
-                    class="dev.koltyakov.varrojet.actions.NewSessionAction"
+                    class="varro.actions.NewSessionAction"
                     icon="AllIcons.General.Add"
                     text="New Varro Session"
                     description="Start a new OpenCode session"/>
 
+            <action id="Varro.NewEditor" class="varro.actions.NewEditorAction"
+                    text="New Varro Chat in Editor" icon="AllIcons.Actions.MoveToWindow"/>
+            <action id="Varro.ToggleFileDiffs" class="varro.actions.ToggleFileDiffsAction"
+                    text="Show File Diffs" description="Show line-by-line changes in chat"/>
+            <action id="Varro.Settings" class="varro.actions.OpenSettingsAction"
+                    text="Varro Settings" icon="AllIcons.General.Settings"/>
+            <action id="Varro.Usage" class="varro.actions.UsageAction"
+                    text="OpenCode Usage Report"/>
+            <action id="Varro.About" class="varro.actions.AboutAction"
+                    text="About Varro OpenJet"/>
+
             <action id="Varro.SearchSessions"
-                    class="dev.koltyakov.varrojet.actions.SearchSessionsAction"
+                    class="varro.actions.SearchSessionsAction"
                     icon="AllIcons.Actions.Search"
                     text="Search Varro Sessions"
                     description="Search this project's OpenCode sessions"/>
 
             <action id="Varro.PreviousSession"
-                    class="dev.koltyakov.varrojet.actions.PreviousSessionAction"
+                    class="varro.actions.PreviousSessionAction"
                     text="Previous Varro Session"
                     description="Open the previous session"/>
 
             <action id="Varro.NextSession"
-                    class="dev.koltyakov.varrojet.actions.NextSessionAction"
+                    class="varro.actions.NextSessionAction"
                     text="Next Varro Session"
                     description="Open the next session"/>
 
             <action id="Varro.Abort"
-                    class="dev.koltyakov.varrojet.actions.AbortAction"
+                    class="varro.actions.AbortAction"
                     icon="AllIcons.Actions.Suspend"
                     text="Stop Varro Run"
                     description="Stop the active OpenCode run"/>
 
             <action id="Varro.RestartServer"
-                    class="dev.koltyakov.varrojet.actions.RestartServerAction"
+                    class="varro.actions.RestartServerAction"
                     icon="AllIcons.Actions.Restart"
                     text="Restart OpenCode Server"
                     description="Restart the OpenCode server this IDE manages"/>
 
             <action id="Varro.OpenDevTools"
-                    class="dev.koltyakov.varrojet.actions.OpenDevToolsAction"
+                    class="varro.actions.OpenDevToolsAction"
                     icon="AllIcons.Xml.Browsers.Chromium"
                     text="Open Varro Developer Tools"
                     description="Open the embedded browser's developer tools"/>
         </group>
 
         <action id="Varro.AddToContext"
-                class="dev.koltyakov.varrojet.actions.AddToContextAction"
+                class="varro.actions.AddToContextAction"
                 icon="/icons/varro.svg"
                 text="Add to Varro Context"
                 description="Send the current file or selection to the Varro composer">

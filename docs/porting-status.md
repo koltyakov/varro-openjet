@@ -11,16 +11,18 @@ What is implemented, what is partial, and what is not started. Upstream Varro's 
 | OpenCode CLI discovery | PATH plus the global install locations a desktop-launched IDE does not inherit; configured-path handling; install-method detection for repair instructions; version reading. |
 | Server lifecycle | Lazy start, adoption of an already-running server, version floor check, port-in-use retry walk, health polling, crash reporting, graceful-then-forced shutdown, restart. |
 | Transport | REST with per-route timeouts and workspace scoping; SSE with `Last-Event-ID` resume, jittered exponential backoff and degraded-stream reporting. |
-| Provider quota limits | Upstream quota service, all vendor adapters, and shared quota coordinator run in a bundled Node.js helper. Kotlin routes metadata/auth requests and quota updates, invalidates state on provider/server changes, and stops the helper on disposal. Requires Node.js 22+ on the IDE host. |
+| Provider quota limits | Native Kotlin adapters and parsers use IntelliJ HTTP, existing credentials, scoped caches, credential-aware invalidation, rate-limit backoff, OAuth refresh, and last-successful snapshot fallback. API responses and quota events retain required nullable fields. No Node helper or runtime requirement. |
 | Event handling | All envelope shapes (direct, `sync` wrapper, versioned names); attention and session-directory caches. |
 | Request authorization | Full port of the route allowlist, including query constraints and encoded-separator rejection. |
-| Editor context | Active file, selection, unsaved buffer, diagnostics, content roots; coalesced updates. |
+| Editor context | Active file, selection, unsaved buffer, diagnostics, content roots; coalesced updates after caret, selection, and document changes. Retains the source editor while a chat or report tab is selected. The composer's current-document toggle persists per project. |
 | Editor integration | Open file at line, reveal directory, read-only tool output, diff view, file picker, ranked file search, plan documents. |
-| Persistence | Permission modes, session models, plan state, model preferences, pinned sessions, queued messages, recycle bin, history scope, view state. |
+| Persistence | Permission modes, session models, plan state, model preferences, pinned sessions, queued messages, recycle bin, history scope, view state. Browser preferences use project storage; sidebar and editor drafts have separate view IDs. Reads legacy wrapped draft snapshots. |
+| Editor chat tabs | Native IntelliJ file editors support splitting and moving chat tabs. Stable `varro-chat` VFS URLs allow IntelliJ to retain them in its editor layout. Session routes and drafts persist per view. Closing a tab disposes its browser. |
+| Drag-and-drop attachments | JCEF exposes original local paths to the upstream drop handler. File-content, image, and PDF storage requests save durable copies under the IDE system directory. File picker and Project view context actions also support directories. |
 | Host API namespace | `workspace-file`, `workspace-file/pick`, `workspace-path/resolve`, `plan/open`, `opencode-config`, `session-history-scope`, `session/*` (activate, pin, reorder-pin, permission-mode, rename-if-untitled, delete, diff-summary), `session-trash/*`. |
 | Commit messages | Staged-or-unstaged (never mixed), recent-style following, replace confirmation, hidden helper session, never stages or commits. |
 | Settings | Full settings page mirroring upstream's `varro.*`, with IDE-following font defaults. |
-| Actions | Focus, new session, search, abort, previous/next session, restart server, add to context, devtools, generate commit message. |
+| Actions | Focus, new session, new editor chat, search, abort, previous/next session, restart server, add to context, devtools, generate commit message, file-diff toggle, settings, about, and usage. Tool-window options expose the additional actions. |
 | Terminal | Allowlisted setup commands with a clipboard fallback when the terminal plugin is unavailable. |
 
 ## Partial
@@ -31,18 +33,16 @@ What is implemented, what is partial, and what is not started. Upstream Varro's 
 | Session diff summary | Files, additions, deletions and duration are computed. Token counts and the nested context breakdown are not. |
 | Recycle bin | Entries are recorded and listed, and `restore` clears the tombstone. OpenCode deletes the session for real, so restore does not resurrect it - upstream has the same constraint. |
 | Session export | Exports the raw message JSON into a read-only tab rather than upstream's formatted Markdown transcript. |
+| Usage reports | Read-only Markdown reports for 24 hours, 7 days, 30 days, and optional all time, grouped by provider/model with prompts, tokens, cache usage, and recorded cost. Uses Varro's retained-history REST approach, capped at 250 sessions. Larger histories need `opencode stats`; direct local-database aggregation is not ported. Failed history reads are listed in the report. |
+| Queued-message leases | Per-view queue ownership, response routing, and live dispatch leases prevent competing views from claiming the same prompt. Full durable admission and crash-recovery accounting is not ported. |
 
 ## Not started
 
 | Area | Why it matters | Notes |
 | --- | --- | --- |
 | Ralph loops | Plan-driven iteration with verification and repair. | Protocol messages are accepted and answered with an empty state so the UI does not hang; the runner itself (`ralph-runner-core.ts`, ~1k lines plus host wiring) is not ported. |
-| Usage reports (`/stats`) | Cross-project token and cost accounting. | Reads OpenCode's retained history; the action reports that it is unavailable and points at `opencode stats`. |
-| Editor-tab surfaces | Chats side by side in editor tabs. | `session/open-in-editor` currently focuses the session in the tool window. `WebviewHost.Surface` already models the distinction. |
-| Drag-and-drop attachments | Dropping files and images into the composer. | `files/drop`, `files/drop-content`, `pdfs/store`, `images/store` are not wired to a JCEF drop target. |
 | Background CLI auto-update | Upgrading OpenCode while idle. | `OpenCodeProcess.upgrade()` exists and works; the maintenance loop that decides when to call it does not. |
 | Status bar widget | Attention indicator when the tool window is hidden. | Failures surface as balloon notifications instead. |
-| Queued-message leases | Multi-surface arbitration of queued prompts. | With a single surface, claims are always granted; correct today, insufficient once editor tabs land. |
 | Permission rule storage | Session/project allow rules stored by the host. | Returns empty, which the webview reads as "no local rules". Rules configured in OpenCode still apply. |
 
 ## Known risks
@@ -51,7 +51,7 @@ What is implemented, what is partial, and what is not started. Upstream Varro's 
 
 **Vendored-webview drift.** The bridge contract is four globals and a `postMessage` shape. If upstream changes it, a re-vendor will produce a blank panel until `src/host-bridge.ts` is updated. The contract has been stable, but it is not a published API.
 
-**Protocol coverage.** The host accepts every `WebviewMessage` type, but some are intentionally inert (`commands/state`, `webview/focus`, `permission/reveal`, `editor/route-changed`). These drive VS Code affordances with no JetBrains counterpart and the webview does not wait on them.
+**Protocol coverage.** Some messages remain inert, including `commands/state` and `permission/reveal`. Editor routes and webview focus now drive native tab routing and active-view actions.
 
 ## Testing
 
@@ -71,4 +71,8 @@ their constructors, so nothing can fire before the owner is fully built. Current
 
 The webview is not re-tested here; it ships with upstream's own suite, which the vendoring script excludes from the bundle.
 
-The quota backend includes its upstream service, coordinator, utility, and adapter tests. `npm run test:quota` in `webview/` runs them, and Gradle's `test` and `check` tasks include them unless `-PskipWebview=true` is set. `ProviderQuotaBackendTest` also launches the packaged helper with an isolated credential directory to check the Kotlin/Node round trip, quota windows, cache invalidation, workspace isolation, crash recovery, and shutdown.
+`PortedFeaturesTest` covers draft restoration and isolation, attachment paths and size validation, and read-only usage pagination and aggregation. `npm run test:host` in `webview/` tests the project-storage bridge and sibling-view updates. Gradle includes these bridge tests unless `-PskipWebview=true` is set. Native editor-tab and drag-and-drop interaction still needs a running IntelliJ IDE.
+
+`ProviderQuotaBackendTest` and `host/quota/` tests exercise native provider fixtures, isolated credential lookup and refresh, workspace/cache isolation, stale-result retirement, rate-limit backoff, nullable wire fields, and local HTTP transport. The webview contract test checks that quota events pass the upstream parser. Tests use temporary credentials and local HTTP fixtures, never real accounts.
+
+The upstream TypeScript quota suite remains available through `npm run test:quota` as a reference. It is no longer part of the plugin build and does not test the shipped Kotlin backend. Antigravity process discovery currently uses the advertised extension-server port or explicit loopback environment configuration; upstream's OS-specific listening-port scan is not ported. Cross-process quota snapshot sharing is also not ported.

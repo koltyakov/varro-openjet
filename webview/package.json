@@ -7,12 +7,12 @@
   "repository": "https://github.com/koltyakov/varro-openjet",
   "scripts": {
     "sync": "node scripts/sync-upstream.mjs",
-    "build": "vite build && npm run build:quota",
-    "build:quota": "vite build --config vite.quota.config.mts",
+    "build": "vite build",
     "sync:quota": "node scripts/sync-quota.mjs",
     "test:quota": "vitest run --config vitest.quota.config.mts",
+    "test:host": "vitest run --config vitest.host.config.mts",
     "watch": "vite build --watch",
-    "typecheck": "tsc --noEmit && tsc --project tsconfig.quota.json"
+    "typecheck": "tsc --noEmit"
   },
   "comments": {
     "versions": "Dependency versions are pinned to the upstream Varro revision recorded in upstream.json so the vendored sources build against the libraries they were written for.",

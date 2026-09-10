@@ -23,10 +23,12 @@
  * stays byte-identical to upstream.
  */
 
+import { installProjectStorage } from './project-storage';
+
 type HostWindow = Window & {
   __varroHostSend?: (json: string) => void;
   __varroInitialViewState?: Record<string, unknown>;
-  __initialWebviewState?: { theme?: unknown };
+  __initialWebviewState?: { theme?: unknown; browserStorage?: Record<string, string> };
   __initialTheme?: unknown;
   __sendToExtension?: (message: unknown) => void;
   __vscodeWebviewState?: {
@@ -34,6 +36,7 @@ type HostWindow = Window & {
     setState(state: Record<string, unknown>): void;
   };
   __varroReceive?: (payload: unknown) => void;
+  __varroNativeDropPaths?: string[];
 };
 
 const hostWindow = window as HostWindow;
@@ -119,6 +122,25 @@ function guardNavigation() {
   );
 
   window.addEventListener('dragover', (event) => event.preventDefault());
+  document.addEventListener('drop', (event) => {
+    if (!event.isTrusted) return;
+    event.preventDefault();
+    const paths = hostWindow.__varroNativeDropPaths ?? [];
+    hostWindow.__varroNativeDropPaths = [];
+    if (!paths.length) return;
+    const files = Array.from(event.dataTransfer?.files ?? []);
+    if (files.length) {
+      // Chromium hides File.path. JCEF supplies the original local paths without
+      // copying project files to temporary attachments. Keep PDF handling upstream.
+      files.forEach((file) => {
+        const path = paths.find((path) => path.replace(/\\/g, '/').split('/').pop() === file.name);
+        if (path) Object.defineProperty(file, 'path', { value: path, configurable: true });
+      });
+    } else {
+      event.stopImmediatePropagation();
+      hostWindow.__sendToExtension?.({ type: 'files/drop', payload: { paths } });
+    }
+  }, true);
   document.addEventListener('submit', (event) => event.preventDefault(), true);
 }
 
@@ -132,6 +154,8 @@ function installInternalDragBridge() {
   let source: HTMLElement | null = null;
   let hovered: Element | null = null;
   let transfer: DataTransfer | null = null;
+  let dragImage: { element: Element; offsetX: number; offsetY: number } | null = null;
+  let dragPreview: HTMLElement | null = null;
   let pointerID = -1;
   let originX = 0;
   let originY = 0;
@@ -160,11 +184,50 @@ function installInternalDragBridge() {
     if (source) source.draggable = true;
   }
 
+  function showDragPreview(event: PointerEvent) {
+    const image = dragImage?.element ?? source;
+    if (!image) return;
+
+    const bounds = image.getBoundingClientRect();
+    const preview = image.cloneNode(true) as HTMLElement;
+    preview.setAttribute('aria-hidden', 'true');
+    Object.assign(preview.style, {
+      position: 'fixed',
+      zIndex: '2147483647',
+      top: '0',
+      left: '0',
+      width: `${bounds.width}px`,
+      maxHeight: 'min(240px, 70vh)',
+      overflow: 'hidden',
+      boxSizing: 'border-box',
+      margin: '0',
+      pointerEvents: 'none',
+      opacity: '0.9',
+      background: 'var(--color-vscode-sidebar)',
+      border: '1px solid var(--color-vscode-accent)',
+      borderRadius: 'var(--radius-control)',
+      boxShadow: 'var(--shadow-popover)',
+    });
+    document.body.append(preview);
+    dragPreview = preview;
+    moveDragPreview(event);
+  }
+
+  function moveDragPreview(event: PointerEvent) {
+    if (!dragPreview) return;
+    const offsetX = dragImage?.offsetX ?? 0;
+    const offsetY = dragImage?.offsetY ?? 0;
+    dragPreview.style.transform = `translate3d(${event.clientX - offsetX}px, ${event.clientY - offsetY}px, 0)`;
+  }
+
   function clear() {
     restoreSource();
+    dragPreview?.remove();
     source = null;
     hovered = null;
     transfer = null;
+    dragImage = null;
+    dragPreview = null;
     pointerID = -1;
     dragging = false;
   }
@@ -193,15 +256,22 @@ function installInternalDragBridge() {
       if (!dragging) {
         if (Math.hypot(event.clientX - originX, event.clientY - originY) < DRAG_THRESHOLD) return;
         transfer = new DataTransfer();
+        const setDragImage = transfer.setDragImage.bind(transfer);
+        transfer.setDragImage = (element, offsetX, offsetY) => {
+          dragImage = { element, offsetX, offsetY };
+          setDragImage(element, offsetX, offsetY);
+        };
         dragging = dispatch(source, 'dragstart', event);
         if (!dragging) {
           clear();
           return;
         }
+        showDragPreview(event);
         suppressClick = true;
       }
 
       event.preventDefault();
+      moveDragPreview(event);
       const next = document.elementFromPoint(event.clientX, event.clientY);
       if (next !== hovered) {
         if (hovered) dispatch(hovered, 'dragleave', event, next);
@@ -273,6 +343,7 @@ function forwardHostShortcuts() {
 
 installSendChannel();
 installViewStateChannel();
+installProjectStorage(hostWindow);
 installReceiveChannel();
 guardNavigation();
 installInternalDragBridge();

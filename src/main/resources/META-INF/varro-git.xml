@@ -3,7 +3,7 @@
          real `git diff`, so it is scoped to IDEs that actually have Git. -->
     <actions>
         <action id="Varro.GenerateCommitMessage"
-                class="dev.koltyakov.varrojet.actions.GenerateCommitMessageAction"
+                class="varro.actions.GenerateCommitMessageAction"
                 icon="/icons/varro.svg"
                 text="Generate Commit Message with Varro"
                 description="Describe the staged changes, or the working tree when nothing is staged">
