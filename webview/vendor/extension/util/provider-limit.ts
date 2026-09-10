@@ -1,0 +1,488 @@
+/* oxlint-disable anti-slop/no-runtime-typeof, anti-slop/no-unknown-parameters, anti-slop/no-unsafe-dictionary-type -- Provider API, header, and credential values are decoded before use. */
+/* oxlint-disable anti-slop/no-known-value-widening, anti-slop/require-safety-comment-for-type-assertion -- SAFETY: Provider assertions follow credential and numeric quota validation. */
+import { join } from 'path';
+import type {
+  ProviderLimitStatus,
+  ProviderLimitUnit,
+  ProviderLimitWindow,
+} from '../../shared/protocol';
+import { resolveOpenCodeDataDirectory } from '../../shared/opencode-data-directory';
+import { asRecord, getString } from '../../shared/type-utils';
+
+export type ProviderAuthRecord =
+  | { type: 'oauth'; access: string; refresh?: string; expires?: number; accountId?: string }
+  | { type: 'api' | 'wellknown'; key: string };
+
+type ProviderModel = {
+  api?: {
+    url?: string;
+  };
+};
+
+export type ProviderMetadata = {
+  id: string;
+  options?: Record<string, unknown>;
+  models: Record<string, ProviderModel>;
+  [key: string]: unknown;
+};
+
+const OPENCODE_OAUTH_DUMMY_KEY = 'opencode-oauth-dummy-key';
+
+const PROVIDER_LIMIT_PROBE_BASES: Record<string, string> = {
+  openai: 'https://api.openai.com/v1',
+  'github-copilot': 'https://api.githubcopilot.com',
+  xai: 'https://api.x.ai/v1',
+};
+
+const PROVIDER_LIMIT_PROBE_HOSTS: Record<string, string> = {
+  openai: 'api.openai.com',
+  'github-copilot': 'api.githubcopilot.com',
+  xai: 'api.x.ai',
+};
+
+const DIRECT_WINDOW_DEFS: Array<{ key: string; label: string; unit: ProviderLimitUnit }> = [
+  { key: 'requests', label: 'Requests', unit: 'requests' },
+  { key: 'tokens', label: 'Tokens', unit: 'tokens' },
+  { key: 'messages', label: 'Messages', unit: 'messages' },
+  { key: 'credits', label: 'Credits', unit: 'credits' },
+  { key: 'usd', label: 'USD', unit: 'usd' },
+];
+
+const DIRECT_CONTAINER_KEYS = ['quota', 'usage', 'rateLimit', 'rateLimits', 'limits', 'billing'];
+
+export function getOpenCodeAuthFilePath(env = process.env, home?: string) {
+  return join(resolveOpenCodeDataDirectory(env, home), 'auth.json');
+}
+
+export function parseRateLimitResetAt(value: unknown, checkedAt: number) {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    if (value > 1_000_000_000_000) return Math.round(value);
+    if (value > 1_000_000_000) return Math.round(value * 1000);
+    return checkedAt + Math.round(value * 1000);
+  }
+
+  if (typeof value !== 'string') return null;
+  const normalized = value.trim().toLowerCase().replace(/\s+/g, '');
+  if (!normalized) return null;
+
+  if (/^\d+(?:\.\d+)?$/.test(normalized)) {
+    return parseRateLimitResetAt(Number(normalized), checkedAt);
+  }
+
+  const duration = parseDurationMs(normalized);
+  if (duration != null) return checkedAt + duration;
+
+  const parsed = Date.parse(value);
+  return Number.isNaN(parsed) ? null : parsed;
+}
+
+export function parseProviderLimitHeaders(
+  headers: Headers,
+  checkedAt: number
+): ProviderLimitWindow[] {
+  const windows: ProviderLimitWindow[] = [];
+
+  const requests = buildHeaderWindow(
+    headers,
+    checkedAt,
+    'requests',
+    'Requests',
+    'requests',
+    'x-ratelimit-limit-requests',
+    'x-ratelimit-remaining-requests',
+    'x-ratelimit-reset-requests'
+  );
+  if (requests) windows.push(requests);
+
+  const tokens = buildHeaderWindow(
+    headers,
+    checkedAt,
+    'tokens',
+    'Tokens',
+    'tokens',
+    'x-ratelimit-limit-tokens',
+    'x-ratelimit-remaining-tokens',
+    'x-ratelimit-reset-tokens'
+  );
+  if (tokens) windows.push(tokens);
+
+  const generic =
+    buildHeaderWindow(
+      headers,
+      checkedAt,
+      'limit',
+      'Limit',
+      'unknown',
+      'ratelimit-limit',
+      'ratelimit-remaining',
+      'ratelimit-reset'
+    ) ||
+    buildHeaderWindow(
+      headers,
+      checkedAt,
+      'limit',
+      'Limit',
+      'unknown',
+      'x-ratelimit-limit',
+      'x-ratelimit-remaining',
+      'x-ratelimit-reset'
+    );
+
+  if (generic) windows.push(generic);
+  return windows;
+}
+
+export function extractOpenCodeProviderLimit(
+  provider: ProviderMetadata,
+  modelID: string | null,
+  checkedAt: number
+): ProviderLimitStatus | null {
+  if (modelID) {
+    const modelWindows = extractDirectLimitWindows(provider.models[modelID], checkedAt);
+    if (modelWindows.length > 0) {
+      return {
+        providerID: provider.id,
+        modelID,
+        status: 'available',
+        source: 'opencode',
+        checkedAt,
+        windows: modelWindows,
+        note: 'Read from OpenCode metadata',
+      };
+    }
+  }
+
+  const providerWindows = extractDirectLimitWindows(provider, checkedAt);
+  if (providerWindows.length === 0) return null;
+
+  return {
+    providerID: provider.id,
+    modelID,
+    status: 'available',
+    source: 'opencode',
+    checkedAt,
+    windows: providerWindows,
+    note: 'Read from OpenCode metadata',
+  };
+}
+
+export function extractOpenCodeConsoleLimit(
+  payload: unknown,
+  providerID: string,
+  modelID: string | null,
+  checkedAt: number
+): ProviderLimitStatus | null {
+  const record = asRecord(payload);
+  const managed = Array.isArray(record?.consoleManagedProviders)
+    ? record.consoleManagedProviders.filter((item): item is string => typeof item === 'string')
+    : [];
+  if (managed.length > 0 && !managed.includes(providerID)) return null;
+
+  const windows = extractDirectLimitWindows(record, checkedAt);
+  if (windows.length === 0) return null;
+
+  return {
+    providerID,
+    modelID,
+    status: 'available',
+    source: 'opencode',
+    checkedAt,
+    windows,
+    note: 'Read from OpenCode experimental console metadata',
+  };
+}
+
+export function buildProviderLimitProbe(
+  provider: ProviderMetadata,
+  authStore: Record<string, ProviderAuthRecord>
+) {
+  const baseUrl = getProviderApiBaseUrl(provider);
+  const token = resolveProviderAuthToken(provider, authStore);
+  if (!baseUrl || !token) return null;
+
+  const headers: Record<string, string> = {
+    Accept: 'application/json',
+    Authorization: `Bearer ${token}`,
+  };
+
+  if (provider.id === 'github-copilot') {
+    headers['User-Agent'] = 'Varro/0.1.0';
+    headers['Editor-Version'] = 'vscode/1.91.0';
+    headers['Editor-Plugin-Version'] = 'varro/0.1.0';
+  }
+
+  return {
+    url: `${baseUrl.replace(/\/+$/, '')}/models`,
+    headers,
+  };
+}
+
+export function parseProviderAuthStore(raw: string): Record<string, ProviderAuthRecord> {
+  const parsed = JSON.parse(raw) as unknown;
+  const record = asRecord(parsed);
+  if (!record) return {};
+
+  const authStore: Record<string, ProviderAuthRecord> = {};
+  for (const [providerID, value] of Object.entries(record)) {
+    const auth = asRecord(value);
+    if (!auth) continue;
+
+    if (auth.type === 'oauth' && typeof auth.access === 'string' && auth.access.trim()) {
+      const accountId = getString(auth.accountId ?? auth.account_id);
+      const oauth: ProviderAuthRecord = {
+        type: 'oauth',
+        access: auth.access.trim(),
+      };
+      const refresh = getString(auth.refresh);
+      if (refresh && oauth.type === 'oauth') oauth.refresh = refresh;
+      if (
+        typeof auth.expires === 'number' &&
+        Number.isFinite(auth.expires) &&
+        oauth.type === 'oauth'
+      ) {
+        oauth.expires = auth.expires;
+      }
+      if (accountId && oauth.type === 'oauth') oauth.accountId = accountId;
+      authStore[providerID] = oauth;
+      continue;
+    }
+
+    if (
+      (auth.type === 'api' || auth.type === 'wellknown') &&
+      typeof auth.key === 'string' &&
+      auth.key.trim()
+    ) {
+      authStore[providerID] = { type: auth.type, key: auth.key.trim() };
+    }
+  }
+
+  return authStore;
+}
+
+function extractDirectLimitWindows(value: unknown, checkedAt: number) {
+  const windows: ProviderLimitWindow[] = [];
+  const seen = new Set<string>();
+
+  const pushWindow = (window: ProviderLimitWindow | null) => {
+    if (!window || seen.has(window.id)) return;
+    seen.add(window.id);
+    windows.push(window);
+  };
+
+  const record = asRecord(value);
+  if (!record) return windows;
+
+  for (const def of DIRECT_WINDOW_DEFS) {
+    pushWindow(
+      buildDirectWindow(def.key, def.label, def.unit, asRecord(record[def.key]), checkedAt)
+    );
+  }
+
+  pushWindow(buildDirectWindow('limit', 'Limit', 'unknown', record, checkedAt));
+
+  for (const containerKey of DIRECT_CONTAINER_KEYS) {
+    const container = record[containerKey];
+    if (Array.isArray(container)) {
+      for (const item of container) {
+        const itemRecord = asRecord(item);
+        if (!itemRecord) continue;
+        const id =
+          getString(itemRecord.id) || getString(itemRecord.name) || getString(itemRecord.type);
+        const unit = inferLimitUnit(id);
+        pushWindow(
+          buildDirectWindow(
+            id || containerKey,
+            toLabel(id || containerKey),
+            unit,
+            itemRecord,
+            checkedAt
+          )
+        );
+      }
+      continue;
+    }
+
+    const containerRecord = asRecord(container);
+    if (!containerRecord) continue;
+
+    pushWindow(
+      buildDirectWindow(
+        containerKey,
+        toLabel(containerKey),
+        inferLimitUnit(containerKey),
+        containerRecord,
+        checkedAt
+      )
+    );
+
+    for (const [key, nested] of Object.entries(containerRecord)) {
+      pushWindow(
+        buildDirectWindow(key, toLabel(key), inferLimitUnit(key), asRecord(nested), checkedAt)
+      );
+    }
+  }
+
+  return windows;
+}
+
+function buildHeaderWindow(
+  headers: Headers,
+  checkedAt: number,
+  id: string,
+  label: string,
+  unit: ProviderLimitUnit,
+  limitHeader: string,
+  remainingHeader: string,
+  resetHeader: string
+) {
+  const remaining = parseFiniteNumber(headers.get(remainingHeader));
+  if (remaining == null) return null;
+
+  const window: ProviderLimitWindow = {
+    id,
+    label,
+    unit,
+    remaining,
+    limit: parseFiniteNumber(headers.get(limitHeader)),
+    resetAt: parseRateLimitResetAt(headers.get(resetHeader), checkedAt),
+  };
+  return window;
+}
+
+function buildDirectWindow(
+  id: string,
+  label: string,
+  unit: ProviderLimitUnit,
+  record: Record<string, unknown> | null,
+  checkedAt: number
+) {
+  if (!record) return null;
+
+  const remaining =
+    parseFiniteNumber(record.remaining) ??
+    parseFiniteNumber(record.left) ??
+    parseFiniteNumber(record.available) ??
+    parseFiniteNumber(record.remainingCount);
+  if (remaining == null) return null;
+
+  const percent = parseWindowPercent(record);
+
+  const window: ProviderLimitWindow = {
+    id,
+    label,
+    unit,
+    remaining,
+    limit:
+      parseFiniteNumber(record.limit) ??
+      parseFiniteNumber(record.max) ??
+      parseFiniteNumber(record.total) ??
+      parseFiniteNumber(record.quota) ??
+      null,
+    resetAt: parseRateLimitResetAt(
+      record.resetAt ?? record.reset ?? record.resetsAt ?? record.reset_after,
+      checkedAt
+    ),
+  };
+  if (percent != null) window.percent = percent;
+  return window;
+}
+
+function getProviderApiBaseUrl(provider: ProviderMetadata) {
+  const baseUrl = PROVIDER_LIMIT_PROBE_BASES[provider.id];
+  if (!baseUrl || !usesOfficialProviderApiHost(provider)) return null;
+  return baseUrl;
+}
+
+function usesOfficialProviderApiHost(provider: ProviderMetadata) {
+  const expectedHost = PROVIDER_LIMIT_PROBE_HOSTS[provider.id];
+  if (!expectedHost) return false;
+
+  for (const model of Object.values(provider.models)) {
+    const apiUrl = model.api?.url?.trim();
+    if (!apiUrl) continue;
+    try {
+      if (new URL(apiUrl).hostname !== expectedHost) return false;
+    } catch {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+function resolveProviderAuthToken(
+  provider: ProviderMetadata,
+  authStore: Record<string, ProviderAuthRecord>
+) {
+  const auth = authStore[provider.id];
+  if (auth?.type === 'oauth') return auth.access;
+  if (auth && 'key' in auth) return auth.key;
+
+  const apiKey = getString(asRecord(provider.options)?.apiKey);
+  if (!apiKey || apiKey === OPENCODE_OAUTH_DUMMY_KEY) return null;
+  return apiKey;
+}
+
+function parseDurationMs(value: string) {
+  const matches = [...value.matchAll(/(\d+(?:\.\d+)?)(ms|s|m|h|d)/g)];
+  if (matches.length === 0 || matches.map((match) => match[0]).join('') !== value) {
+    return null;
+  }
+
+  let total = 0;
+  for (const [, amountText, unit] of matches) {
+    const amount = Number(amountText);
+    if (!Number.isFinite(amount)) return null;
+    if (unit === 'ms') total += amount;
+    else if (unit === 's') total += amount * 1000;
+    else if (unit === 'm') total += amount * 60_000;
+    else if (unit === 'h') total += amount * 3_600_000;
+    else if (unit === 'd') total += amount * 86_400_000;
+  }
+  return Math.round(total);
+}
+
+function parseFiniteNumber(value: unknown) {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value !== 'string') return null;
+  const normalized = value.trim().replace(/,/g, '');
+  if (!normalized) return null;
+  const parsed = Number(normalized);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function inferLimitUnit(value: string | null | undefined): ProviderLimitUnit {
+  const normalized = value?.trim().toLowerCase() || '';
+  if (!normalized) return 'unknown';
+  if (normalized.includes('request')) return 'requests';
+  if (normalized.includes('token')) return 'tokens';
+  if (normalized.includes('message')) return 'messages';
+  if (
+    normalized.includes('usd') ||
+    normalized.includes('dollar') ||
+    normalized.includes('cost') ||
+    normalized.includes('spend')
+  ) {
+    return 'usd';
+  }
+  if (normalized.includes('credit') || normalized.includes('balance')) return 'credits';
+  return 'unknown';
+}
+
+function parseWindowPercent(record: Record<string, unknown>) {
+  return (
+    parseFiniteNumber(record.percent) ??
+    parseFiniteNumber(record.usagePercent) ??
+    parseFiniteNumber(record.utilizationPercent) ??
+    parseFiniteNumber(record.usedPercent)
+  );
+}
+
+function toLabel(value: string) {
+  return (
+    value
+      .replace(/[_-]+/g, ' ')
+      .trim()
+      .replace(/\b\w/g, (match) => match.toUpperCase()) || 'Limit'
+  );
+}

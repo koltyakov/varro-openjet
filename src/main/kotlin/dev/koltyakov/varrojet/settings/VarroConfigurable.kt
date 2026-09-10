@@ -36,6 +36,12 @@ class VarroConfigurable : BoundConfigurable("Varro") {
                     .comment("Leave empty to discover `opencode` on PATH and the usual global install locations.")
                     .columns(40)
             }
+            row("Provider quotas Node.js path:") {
+                textField()
+                    .bindText(settings::providerQuotaNodePath)
+                    .comment("Requires Node.js 22 or newer. Leave empty to discover it automatically.")
+                    .columns(40)
+            }
             row {
                 checkBox("Start the server automatically when Varro needs it")
                     .bindSelected(settings::serverAutoStart)

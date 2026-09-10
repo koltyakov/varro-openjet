@@ -11,6 +11,7 @@ What is implemented, what is partial, and what is not started. Upstream Varro's 
 | OpenCode CLI discovery | PATH plus the global install locations a desktop-launched IDE does not inherit; configured-path handling; install-method detection for repair instructions; version reading. |
 | Server lifecycle | Lazy start, adoption of an already-running server, version floor check, port-in-use retry walk, health polling, crash reporting, graceful-then-forced shutdown, restart. |
 | Transport | REST with per-route timeouts and workspace scoping; SSE with `Last-Event-ID` resume, jittered exponential backoff and degraded-stream reporting. |
+| Provider quota limits | Upstream quota service, all vendor adapters, and shared quota coordinator run in a bundled Node.js helper. Kotlin routes metadata/auth requests and quota updates, invalidates state on provider/server changes, and stops the helper on disposal. Requires Node.js 22+ on the IDE host. |
 | Event handling | All envelope shapes (direct, `sync` wrapper, versioned names); attention and session-directory caches. |
 | Request authorization | Full port of the route allowlist, including query constraints and encoded-separator rejection. |
 | Editor context | Active file, selection, unsaved buffer, diagnostics, content roots; coalesced updates. |
@@ -37,7 +38,6 @@ What is implemented, what is partial, and what is not started. Upstream Varro's 
 | --- | --- | --- |
 | Ralph loops | Plan-driven iteration with verification and repair. | Protocol messages are accepted and answered with an empty state so the UI does not hang; the runner itself (`ralph-runner-core.ts`, ~1k lines plus host wiring) is not ported. |
 | Usage reports (`/stats`) | Cross-project token and cost accounting. | Reads OpenCode's retained history; the action reports that it is unavailable and points at `opencode stats`. |
-| Provider quota limits | Quota windows and reset times per provider. | Upstream ships per-vendor adapters (`provider-limits/`). Reported as `unsupported`, which the webview renders as "no quota information". |
 | Editor-tab surfaces | Chats side by side in editor tabs. | `session/open-in-editor` currently focuses the session in the tool window. `WebviewHost.Surface` already models the distinction. |
 | Drag-and-drop attachments | Dropping files and images into the composer. | `files/drop`, `files/drop-content`, `pdfs/store`, `images/store` are not wired to a JCEF drop target. |
 | Background CLI auto-update | Upgrading OpenCode while idle. | `OpenCodeProcess.upgrade()` exists and works; the maintenance loop that decides when to call it does not. |
@@ -70,3 +70,5 @@ their constructors, so nothing can fire before the owner is fully built. Current
 - `WorkspacePathsTest` / `OpenCodeRequestScopeTest` - path identity and request scoping, which decide session ownership and event routing.
 
 The webview is not re-tested here; it ships with upstream's own suite, which the vendoring script excludes from the bundle.
+
+The quota backend includes its upstream service, coordinator, utility, and adapter tests. `npm run test:quota` in `webview/` runs them, and Gradle's `test` and `check` tasks include them unless `-PskipWebview=true` is set. `ProviderQuotaBackendTest` also launches the packaged helper with an isolated credential directory to check the Kotlin/Node round trip, quota windows, cache invalidation, workspace isolation, crash recovery, and shutdown.

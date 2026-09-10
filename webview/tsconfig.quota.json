@@ -1,0 +1,6 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": { "types": ["node"] },
+  "include": ["quota/**/*.ts", "vendor/extension/**/*.ts"],
+  "exclude": ["**/*.test.ts"]
+}

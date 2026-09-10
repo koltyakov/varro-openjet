@@ -1,0 +1,852 @@
+/* oxlint-disable anti-slop/no-runtime-typeof, anti-slop/no-unknown-parameters, anti-slop/no-unsafe-dictionary-type -- Anthropic API and credential files are untrusted and validated field by field. */
+/* oxlint-disable anti-slop/no-known-value-widening, anti-slop/require-safety-comment-for-type-assertion -- SAFETY: Credential and API assertions follow required-field and token validation. */
+import { randomUUID } from 'crypto';
+import { mkdir, readFile, rename, rm, stat, writeFile } from 'fs/promises';
+import { homedir } from 'os';
+import { join } from 'path';
+import type {
+  ProviderLimitStatus,
+  ProviderLimitUnit,
+  ProviderLimitWindow,
+} from '../../../shared/protocol';
+import {
+  parseRateLimitResetAt,
+  type ProviderAuthRecord,
+  type ProviderMetadata,
+} from '../../util/provider-limit';
+import type { ProviderLimitAdapter, ProviderLimitAdapterContext } from '../types';
+import { ProviderQuotaIdentityChanged } from '../types';
+import {
+  asRecord,
+  getString,
+  parseFiniteNumber,
+  clampPercent,
+  readBoundedResponseJson,
+  readBoundedResponseText,
+  toLabel,
+  unsupportedProviderStatus,
+} from '../adapter-utils';
+
+const ANTHROPIC_USAGE_ENDPOINT = 'https://api.anthropic.com/api/oauth/usage';
+const ANTHROPIC_OAUTH_TOKEN_ENDPOINT = 'https://console.anthropic.com/v1/oauth/token';
+const ANTHROPIC_OAUTH_CLIENT_ID = '9d1c250a-e61b-44d9-88ed-5944d1962f5e';
+const ANTHROPIC_BETA_HEADER = 'oauth-2025-04-20';
+const ANTHROPIC_USER_AGENT = 'claude-code/2.1.69';
+const ANTHROPIC_STATUSLINE_STALENESS_MS = 5 * 60_000;
+const MERIDIAN_QUOTA_ENDPOINT_PATH = '/v1/usage/quota';
+const HIDDEN_MERIDIAN_WINDOW_IDS = new Set(['seven_day_omelette']);
+const CREDENTIAL_LOCK_WAIT_MS = 2_000;
+const CREDENTIAL_LOCK_RETRY_MS = 25;
+const CREDENTIAL_LOCK_STALE_MS = 30_000;
+const CREDENTIAL_COMPARE_RETRIES = 3;
+const anthropicCredentialWriteQueues = new Map<string, Promise<void>>();
+
+const ANTHROPIC_QUOTA_DEFS = [
+  { id: 'five_hour', label: '5-Hour Limit' },
+  { id: 'seven_day', label: 'Weekly All-Model' },
+  { id: 'seven_day_sonnet', label: 'Weekly Sonnet' },
+  { id: 'monthly_limit', label: 'Monthly Limit' },
+  { id: 'extra_usage', label: 'Extra Usage' },
+] as const;
+
+const MERIDIAN_WINDOW_LABELS: Record<string, string> = {
+  five_hour: '5-Hour Limit',
+  seven_day: 'Weekly All-Model',
+  seven_day_opus: 'Weekly Opus',
+  seven_day_sonnet: 'Weekly Sonnet',
+  seven_day_oauth_apps: 'Weekly Apps',
+  seven_day_cowork: 'Weekly Cowork',
+  seven_day_omelette: 'Weekly Omelette',
+};
+
+type AnthropicCredentials = {
+  accessToken: string;
+  refreshToken: string | null;
+  credentialsFilePath: string | null;
+  origin: 'opencode-auth' | 'claude-credentials';
+};
+
+export function createAnthropicAdapter(): ProviderLimitAdapter {
+  return {
+    id: 'anthropic',
+    capabilities: {
+      localFile: true,
+      oauthRefresh: true,
+    },
+    matches(provider) {
+      return provider.id === 'anthropic';
+    },
+    async fetch({
+      provider,
+      authStore,
+      modelID,
+      checkedAt,
+      coordinate,
+    }: ProviderLimitAdapterContext) {
+      const statuslineStatus = await readAnthropicStatuslineStatus(provider.id, modelID, checkedAt);
+
+      const localProxyBaseUrl = getAnthropicLocalProxyBaseUrl(provider);
+      const localProxyStatus = localProxyBaseUrl
+        ? await readAnthropicLocalProxyStatus(provider.id, modelID, checkedAt, localProxyBaseUrl)
+        : null;
+      const combinedStatus = mergeAnthropicStatuses(
+        statuslineStatus,
+        localProxyStatus ? localProxyStatus.status : null
+      );
+      if (combinedStatus && hasHiddenAnthropicWindows(combinedStatus)) return combinedStatus;
+
+      let credentials = await resolveAnthropicCredentials(authStore);
+      if (!credentials?.accessToken) {
+        if (combinedStatus) return combinedStatus;
+
+        if (localProxyBaseUrl) {
+          return {
+            providerID: provider.id,
+            modelID,
+            status: 'error',
+            source: 'provider',
+            checkedAt,
+            note:
+              localProxyStatus?.fallbackNote ||
+              'Failed to poll the local Claude proxy quota endpoint',
+          };
+        }
+
+        return unsupportedProviderStatus(
+          provider.id,
+          modelID,
+          checkedAt,
+          'No Anthropic OAuth credentials available'
+        );
+      }
+
+      const poll = async (): Promise<ProviderLimitStatus> => {
+        try {
+          if (!credentials) throw new Error('Anthropic credentials unavailable');
+          if (coordinate && credentials.origin === 'claude-credentials') {
+            // A previous lock holder may have rotated the file while we waited.
+            const current = await readAnthropicCredentialsFromClaudeCredentials();
+            if (!current?.accessToken) throw new ProviderQuotaIdentityChanged();
+            const changed = current.accessToken !== credentials.accessToken;
+            credentials = current;
+            if (changed) throw new ProviderQuotaIdentityChanged();
+          }
+          let response = await fetchAnthropicUsage(credentials.accessToken);
+          let note = 'Polled Anthropic OAuth usage endpoint';
+
+          if (shouldRefreshAnthropicCredentials(response.status, credentials)) {
+            const refreshed = await refreshAnthropicAccessToken(credentials.refreshToken);
+            if (refreshed.status === 'unsupported') {
+              return unsupportedProviderStatus(provider.id, modelID, checkedAt, refreshed.note);
+            }
+            if (refreshed.status === 'error') {
+              return {
+                providerID: provider.id,
+                modelID,
+                status: 'error',
+                source: 'provider',
+                checkedAt,
+                note: `${refreshed.note} after Anthropic usage endpoint returned ${response.status}`,
+              };
+            }
+
+            try {
+              await writeAnthropicCredentials(
+                credentials.credentialsFilePath,
+                credentials.refreshToken,
+                refreshed.accessToken,
+                refreshed.refreshToken,
+                refreshed.expiresInSeconds
+              );
+            } catch {
+              return {
+                providerID: provider.id,
+                modelID,
+                status: 'error',
+                source: 'provider',
+                checkedAt,
+                note: `Anthropic usage endpoint returned ${response.status} and refreshed credentials could not be saved`,
+              };
+            }
+
+            response = await fetchAnthropicUsage(refreshed.accessToken);
+            note = 'Polled Anthropic OAuth usage endpoint after refreshing OAuth token';
+          }
+
+          if (response.status === 401 || response.status === 403) {
+            return unsupportedProviderStatus(
+              provider.id,
+              modelID,
+              checkedAt,
+              `Anthropic usage endpoint rejected credentials (${response.status})`
+            );
+          }
+
+          if (!response.ok) {
+            return {
+              providerID: provider.id,
+              modelID,
+              status: 'error',
+              source: 'provider',
+              checkedAt,
+              note: `Anthropic usage endpoint returned ${response.status}`,
+            };
+          }
+
+          const payload = await readBoundedResponseJson(response);
+          const windows = extractAnthropicWindows(payload, checkedAt);
+          if (windows.length === 0) {
+            return unsupportedProviderStatus(
+              provider.id,
+              modelID,
+              checkedAt,
+              'Anthropic usage endpoint did not expose any known quotas'
+            );
+          }
+
+          const apiStatus: ProviderLimitStatus = {
+            providerID: provider.id,
+            modelID,
+            status: 'available',
+            source: 'provider',
+            checkedAt,
+            windows,
+            note,
+          };
+
+          return apiStatus;
+        } catch (error) {
+          if (error instanceof ProviderQuotaIdentityChanged) throw error;
+          return {
+            providerID: provider.id,
+            modelID,
+            status: 'error',
+            source: 'provider',
+            checkedAt,
+            note: 'Failed to poll the Anthropic usage endpoint',
+          };
+        }
+      };
+      const accessToken = credentials.accessToken;
+      try {
+        const apiStatus = coordinate
+          ? await coordinate([ANTHROPIC_USAGE_ENDPOINT, accessToken], poll, {
+              enabled: !combinedStatus && !localProxyBaseUrl,
+              isIdentityCurrent: async (currentAuth) =>
+                (await resolveAnthropicCredentials(currentAuth))?.accessToken === accessToken,
+            })
+          : await poll();
+        return mergeAnthropicStatuses(combinedStatus, apiStatus) ?? apiStatus;
+      } catch (error) {
+        if (!(error instanceof ProviderQuotaIdentityChanged)) throw error;
+        return (
+          combinedStatus ??
+          unsupportedProviderStatus(provider.id, modelID, checkedAt, error.message)
+        );
+      }
+    },
+  };
+}
+
+function mergeAnthropicStatuses(
+  primary: ProviderLimitStatus | null,
+  secondary: ProviderLimitStatus | null
+): ProviderLimitStatus | null {
+  if (!primary) return secondary;
+  if (!secondary) return primary;
+  if (primary.status !== 'available') return secondary;
+  if (secondary.status !== 'available') return primary;
+
+  const windows = mergeAnthropicWindows(primary.windows, secondary.windows);
+  const note = [primary.note, secondary.note].filter(Boolean).join(' + ') || undefined;
+  const merged: ProviderLimitStatus = {
+    ...primary,
+    checkedAt: Math.min(primary.checkedAt, secondary.checkedAt),
+    windows,
+  };
+  if (note) merged.note = note;
+  return merged;
+}
+
+function mergeAnthropicWindows(
+  primary: ProviderLimitWindow[],
+  secondary: ProviderLimitWindow[]
+): ProviderLimitWindow[] {
+  const merged = new Map<string, ProviderLimitWindow>();
+  for (const window of secondary) {
+    merged.set(window.id, window);
+  }
+  for (const window of primary) {
+    merged.set(window.id, {
+      ...merged.get(window.id),
+      ...window,
+    });
+  }
+  return [...merged.values()];
+}
+
+function hasHiddenAnthropicWindows(status: ProviderLimitStatus | null) {
+  return (
+    status?.status === 'available' && status.windows.some((window) => window.id !== 'five_hour')
+  );
+}
+
+async function readAnthropicLocalProxyStatus(
+  providerID: string,
+  modelID: string | null,
+  checkedAt: number,
+  baseUrl: string
+): Promise<{ status: ProviderLimitStatus | null; fallbackNote: string | null }> {
+  try {
+    const response = await fetch(new URL(MERIDIAN_QUOTA_ENDPOINT_PATH, baseUrl), {
+      headers: {
+        Accept: 'application/json',
+        'User-Agent': 'Varro/0.1.0',
+      },
+      signal: AbortSignal.timeout(5_000),
+    });
+    if (!response.ok) {
+      return {
+        status: null,
+        fallbackNote: `Local Claude proxy quota endpoint returned ${response.status}`,
+      };
+    }
+
+    const payload = await readBoundedResponseJson(response);
+    const windows = extractMeridianWindows(payload, checkedAt);
+    if (windows.length === 0) {
+      return {
+        status: null,
+        fallbackNote: 'Local Claude proxy quota endpoint did not expose any known quotas',
+      };
+    }
+
+    return {
+      status: {
+        providerID,
+        modelID,
+        status: 'available',
+        source: 'provider',
+        checkedAt,
+        windows,
+        note: 'Read from local Claude proxy quota endpoint',
+      },
+      fallbackNote: null,
+    };
+  } catch {
+    return {
+      status: null,
+      fallbackNote: 'Failed to poll the local Claude proxy quota endpoint',
+    };
+  }
+}
+
+function shouldRefreshAnthropicCredentials(
+  responseStatus: number,
+  credentials: AnthropicCredentials
+): credentials is AnthropicCredentials & { refreshToken: string; credentialsFilePath: string } {
+  return (
+    responseStatus === 401 &&
+    credentials.origin === 'claude-credentials' &&
+    Boolean(credentials.refreshToken) &&
+    Boolean(credentials.credentialsFilePath)
+  );
+}
+
+function extractAnthropicWindows(payload: unknown, checkedAt: number): ProviderLimitWindow[] {
+  const record = asRecord(payload);
+  if (!record) return [];
+
+  const windows: ProviderLimitWindow[] = [];
+  for (const def of ANTHROPIC_QUOTA_DEFS) {
+    const window = buildAnthropicWindow(def.id, def.label, asRecord(record[def.id]), checkedAt);
+    if (window) windows.push(window);
+  }
+
+  return windows;
+}
+
+function extractMeridianWindows(payload: unknown, checkedAt: number): ProviderLimitWindow[] {
+  const record = asRecord(payload);
+  if (!record) return [];
+
+  const windows: ProviderLimitWindow[] = [];
+  const buckets = Array.isArray(record.buckets) ? record.buckets : [];
+  for (const bucket of buckets) {
+    const window = buildMeridianBucketWindow(asRecord(bucket), checkedAt);
+    if (window) windows.push(window);
+  }
+
+  const extraUsageWindow = buildMeridianExtraUsageWindow(asRecord(record.extraUsage), checkedAt);
+  if (extraUsageWindow) windows.push(extraUsageWindow);
+  return windows;
+}
+
+function buildMeridianBucketWindow(
+  bucket: Record<string, unknown> | null,
+  checkedAt: number
+): ProviderLimitWindow | null {
+  if (!bucket) return null;
+
+  const id = getString(bucket.type);
+  if (!id || HIDDEN_MERIDIAN_WINDOW_IDS.has(id)) return null;
+  const utilization = clampFraction(parseFiniteNumber(bucket.utilization));
+  if (utilization == null) return null;
+
+  const percent = clampPercent(utilization * 100);
+  if (percent == null) return null;
+
+  const window: ProviderLimitWindow = {
+    id,
+    label: MERIDIAN_WINDOW_LABELS[id] || toLabel(id),
+    unit: 'unknown',
+    remaining: Math.max(100 - percent, 0),
+    limit: 100,
+    resetAt: parseRateLimitResetAt(bucket.resetsAt, checkedAt),
+    percent,
+  };
+  return window;
+}
+
+function buildMeridianExtraUsageWindow(
+  extraUsage: Record<string, unknown> | null,
+  checkedAt: number
+): ProviderLimitWindow | null {
+  if (!extraUsage) return null;
+  if (extraUsage.isEnabled === false) return null;
+
+  const limit = parseFiniteNumber(extraUsage.monthlyLimit);
+  const used = parseFiniteNumber(extraUsage.usedCredits);
+  if (limit == null || limit <= 0 || used == null) return null;
+
+  const utilization = clampFraction(parseFiniteNumber(extraUsage.utilization));
+  const percent = clampPercent((utilization ?? used / limit) * 100);
+
+  const window: ProviderLimitWindow = {
+    id: 'extra_usage',
+    label: 'Extra Usage',
+    unit: 'credits',
+    remaining: Math.max(limit - used, 0),
+    limit,
+    resetAt: parseRateLimitResetAt(extraUsage.resetsAt, checkedAt),
+  };
+  if (percent != null) window.percent = percent;
+  return window;
+}
+
+function buildAnthropicWindow(
+  id: string,
+  label: string,
+  quota: Record<string, unknown> | null,
+  checkedAt: number
+): ProviderLimitWindow | null {
+  if (!quota || quota.is_enabled === false || quota.isEnabled === false) return null;
+
+  const percent = clampPercent(parseFiniteNumber(quota.utilization));
+  if (percent == null) return null;
+
+  const creditLimit = parseFiniteNumber(quota.monthly_limit ?? quota.monthlyLimit);
+  const usedCredits = parseFiniteNumber(quota.used_credits ?? quota.usedCredits);
+  const hasCreditBounds = creditLimit != null && creditLimit > 0 && usedCredits != null;
+  const remaining = hasCreditBounds
+    ? Math.max(creditLimit - usedCredits, 0)
+    : Math.max(100 - percent, 0);
+  const limit = hasCreditBounds ? creditLimit : 100;
+  const unit: ProviderLimitUnit = hasCreditBounds ? 'credits' : 'unknown';
+
+  return {
+    id,
+    label,
+    unit,
+    remaining,
+    limit,
+    resetAt: parseRateLimitResetAt(quota.resets_at ?? quota.resetsAt, checkedAt),
+    percent,
+  } satisfies ProviderLimitWindow;
+}
+
+async function readAnthropicStatuslineStatus(
+  providerID: string,
+  modelID: string | null,
+  checkedAt: number
+): Promise<ProviderLimitStatus | null> {
+  try {
+    const path = getAnthropicStatuslineFilePath();
+    const info = await stat(path);
+    if (!info.isFile() || !isAnthropicStatuslineFresh(info.mtimeMs)) return null;
+
+    const raw = await readFile(path, 'utf-8');
+    const windows = extractAnthropicStatuslineWindows(JSON.parse(raw) as unknown, checkedAt);
+    if (windows.length === 0) return null;
+
+    return {
+      providerID,
+      modelID,
+      status: 'available',
+      source: 'provider',
+      checkedAt: Math.min(checkedAt, info.mtimeMs),
+      windows,
+      note: 'Read from Anthropic statusline bridge file',
+    };
+  } catch {
+    return null;
+  }
+}
+
+function getAnthropicLocalProxyBaseUrl(provider: ProviderMetadata) {
+  const optionBaseUrl = asRecord(provider.options)?.baseURL ?? asRecord(provider.options)?.baseUrl;
+  const candidates = [getString(optionBaseUrl)];
+  for (const model of Object.values(provider.models)) {
+    candidates.push(model.api?.url?.trim() || '');
+  }
+
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    try {
+      const url = new URL(candidate);
+      if (isLoopbackHost(url.hostname)) return url.origin;
+    } catch {}
+  }
+
+  return null;
+}
+
+function isLoopbackHost(hostname: string) {
+  return (
+    hostname === 'localhost' ||
+    hostname === '127.0.0.1' ||
+    hostname === '0.0.0.0' ||
+    hostname === '::1' ||
+    hostname === '::'
+  );
+}
+
+function extractAnthropicStatuslineWindows(
+  payload: unknown,
+  checkedAt: number
+): ProviderLimitWindow[] {
+  const rateLimits = asRecord(asRecord(payload)?.rate_limits ?? asRecord(payload)?.rateLimits);
+  if (!rateLimits) return [];
+
+  const windows: ProviderLimitWindow[] = [];
+  const fiveHour = buildAnthropicStatuslineWindow(
+    'five_hour',
+    '5-Hour Limit',
+    asRecord(rateLimits.five_hour ?? rateLimits.fiveHour),
+    checkedAt
+  );
+  if (fiveHour) windows.push(fiveHour);
+
+  const sevenDay = buildAnthropicStatuslineWindow(
+    'seven_day',
+    'Weekly All-Model',
+    asRecord(rateLimits.seven_day ?? rateLimits.sevenDay),
+    checkedAt
+  );
+  if (sevenDay) windows.push(sevenDay);
+
+  return windows;
+}
+
+function buildAnthropicStatuslineWindow(
+  id: string,
+  label: string,
+  window: Record<string, unknown> | null,
+  checkedAt: number
+): ProviderLimitWindow | null {
+  if (!window) return null;
+
+  const percent = parseStatuslinePercent(window.used_percentage ?? window.usedPercentage);
+  if (percent == null) return null;
+
+  return {
+    id,
+    label,
+    unit: 'unknown',
+    remaining: Math.max(100 - percent, 0),
+    limit: 100,
+    resetAt: parseStatuslineResetAt(window.resets_at ?? window.resetsAt, checkedAt),
+    percent,
+  } satisfies ProviderLimitWindow;
+}
+
+async function resolveAnthropicCredentials(
+  authStore: Record<string, ProviderAuthRecord>
+): Promise<AnthropicCredentials | null> {
+  const auth = authStore.anthropic;
+  if (auth?.type === 'oauth' && getString(auth.access)) {
+    return {
+      accessToken: auth.access,
+      refreshToken: null,
+      credentialsFilePath: null,
+      origin: 'opencode-auth',
+    };
+  }
+  return readAnthropicCredentialsFromClaudeCredentials();
+}
+
+async function readAnthropicCredentialsFromClaudeCredentials(): Promise<AnthropicCredentials | null> {
+  const credentialsFilePath = getClaudeCredentialsFilePath();
+  try {
+    const raw = await readFile(credentialsFilePath, 'utf-8');
+    return parseAnthropicCredentials(raw, credentialsFilePath);
+  } catch {
+    return null;
+  }
+}
+
+function getClaudeCredentialsFilePath(home = homedir()) {
+  return join(home, '.claude', '.credentials.json');
+}
+
+function getAnthropicStatuslineFilePath(home = homedir()) {
+  return join(home, '.onwatch', 'data', 'anthropic-statusline.json');
+}
+
+function parseAnthropicCredentials(
+  raw: string,
+  credentialsFilePath: string
+): AnthropicCredentials | null {
+  try {
+    const oauth = asRecord(asRecord(JSON.parse(raw) as unknown)?.claudeAiOauth);
+    if (!oauth) return null;
+
+    const accessToken = getString(oauth.accessToken);
+    const refreshToken = getString(oauth.refreshToken) || null;
+    if (!accessToken && !refreshToken) return null;
+
+    return {
+      accessToken,
+      refreshToken,
+      credentialsFilePath,
+      origin: 'claude-credentials',
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function fetchAnthropicUsage(token: string) {
+  return fetch(ANTHROPIC_USAGE_ENDPOINT, {
+    headers: {
+      Accept: 'application/json',
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+      'anthropic-beta': ANTHROPIC_BETA_HEADER,
+      'User-Agent': ANTHROPIC_USER_AGENT,
+    },
+    signal: AbortSignal.timeout(10_000),
+  });
+}
+
+async function refreshAnthropicAccessToken(refreshToken: string) {
+  try {
+    const response = await fetch(ANTHROPIC_OAUTH_TOKEN_ENDPOINT, {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+        'User-Agent': ANTHROPIC_USER_AGENT,
+      },
+      body: JSON.stringify({
+        grant_type: 'refresh_token',
+        refresh_token: refreshToken,
+        client_id: ANTHROPIC_OAUTH_CLIENT_ID,
+      }),
+      signal: AbortSignal.timeout(10_000),
+    });
+
+    const payload = parseJsonRecord(await readBoundedResponseText(response));
+    if (response.status === 400 || response.status === 401 || response.status === 403) {
+      if (getString(payload?.error) === 'invalid_grant') {
+        return {
+          status: 'unsupported' as const,
+          note: 'Anthropic OAuth refresh rejected credentials (invalid_grant)',
+        };
+      }
+    }
+
+    if (!response.ok) {
+      return {
+        status: 'error' as const,
+        note: `Anthropic OAuth refresh endpoint returned ${response.status}`,
+      };
+    }
+
+    const accessToken = getString(payload?.access_token);
+    if (!accessToken) {
+      return {
+        status: 'error' as const,
+        note: 'Anthropic OAuth refresh endpoint returned an empty access token',
+      };
+    }
+
+    return {
+      status: 'success' as const,
+      accessToken,
+      refreshToken: getString(payload?.refresh_token) || refreshToken,
+      expiresInSeconds: parsePositiveInteger(payload?.expires_in),
+    };
+  } catch {
+    return {
+      status: 'error' as const,
+      note: 'Failed to refresh Anthropic OAuth credentials',
+    };
+  }
+}
+
+async function writeAnthropicCredentials(
+  credentialsFilePath: string,
+  expectedRefreshToken: string,
+  accessToken: string,
+  refreshToken: string,
+  expiresInSeconds: number | null
+) {
+  const previous = anthropicCredentialWriteQueues.get(credentialsFilePath) ?? Promise.resolve();
+  const update = () =>
+    writeAnthropicCredentialsNow(
+      credentialsFilePath,
+      expectedRefreshToken,
+      accessToken,
+      refreshToken,
+      expiresInSeconds
+    );
+  const operation = previous.then(update, update);
+  anthropicCredentialWriteQueues.set(credentialsFilePath, operation);
+  void operation
+    .finally(() => {
+      if (anthropicCredentialWriteQueues.get(credentialsFilePath) === operation) {
+        anthropicCredentialWriteQueues.delete(credentialsFilePath);
+      }
+    })
+    .catch(() => undefined);
+  return operation;
+}
+
+async function writeAnthropicCredentialsNow(
+  credentialsFilePath: string,
+  expectedRefreshToken: string,
+  accessToken: string,
+  refreshToken: string,
+  expiresInSeconds: number | null
+) {
+  const releaseLock = await acquireCredentialLock(credentialsFilePath);
+  try {
+    for (let attempt = 0; attempt < CREDENTIAL_COMPARE_RETRIES; attempt += 1) {
+      const raw = await readFile(credentialsFilePath, 'utf-8');
+      const root = asRecord(JSON.parse(raw) as unknown) ?? {};
+      const oauth = asRecord(root.claudeAiOauth) ?? {};
+      if (getString(oauth.refreshToken) !== expectedRefreshToken) return;
+
+      const updatedOauth: Record<string, unknown> = {
+        ...oauth,
+        accessToken,
+        refreshToken,
+      };
+      if (expiresInSeconds != null) {
+        updatedOauth.expiresAt = Date.now() + expiresInSeconds * 1000;
+      }
+
+      const tempPath = `${credentialsFilePath}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`;
+      const fileMode = await stat(credentialsFilePath)
+        .then((file) => file.mode & 0o777)
+        .catch(() => 0o600);
+      try {
+        await writeFile(
+          tempPath,
+          JSON.stringify({
+            ...root,
+            claudeAiOauth: updatedOauth,
+          }),
+          { encoding: 'utf-8', mode: fileMode }
+        );
+        if ((await readFile(credentialsFilePath, 'utf-8')) !== raw) continue;
+        await rename(tempPath, credentialsFilePath);
+        return;
+      } finally {
+        await rm(tempPath, { force: true }).catch(() => undefined);
+      }
+    }
+    throw new Error('Anthropic credentials changed repeatedly during refresh');
+  } finally {
+    await releaseLock();
+  }
+}
+
+async function acquireCredentialLock(credentialsFilePath: string): Promise<() => Promise<void>> {
+  const lockPath = `${credentialsFilePath}.varro.lock`;
+  const deadline = Date.now() + CREDENTIAL_LOCK_WAIT_MS;
+  while (true) {
+    try {
+      await mkdir(lockPath, { mode: 0o700 });
+      return () => rm(lockPath, { recursive: true, force: true }).catch(() => undefined);
+    } catch (err) {
+      if (!isFileSystemError(err, 'EEXIST')) throw err;
+      if (await isStaleCredentialLock(lockPath)) {
+        await rm(lockPath, { recursive: true, force: true });
+        continue;
+      }
+      if (Date.now() >= deadline) {
+        throw new Error('Timed out waiting to update Anthropic credentials', { cause: err });
+      }
+      await delay(CREDENTIAL_LOCK_RETRY_MS);
+    }
+  }
+}
+
+async function isStaleCredentialLock(lockPath: string) {
+  try {
+    const lockStat = await stat(lockPath);
+    return (
+      Number.isFinite(lockStat.mtimeMs) && Date.now() - lockStat.mtimeMs >= CREDENTIAL_LOCK_STALE_MS
+    );
+  } catch (err) {
+    return isFileSystemError(err, 'ENOENT');
+  }
+}
+
+function isFileSystemError(value: unknown, code: string) {
+  return !!value && typeof value === 'object' && 'code' in value && value.code === code;
+}
+
+function delay(ms: number) {
+  return new Promise<void>((resolve) => setTimeout(resolve, ms));
+}
+
+function parsePositiveInteger(value: unknown) {
+  const parsed = parseFiniteNumber(value);
+  if (parsed == null || parsed <= 0) return null;
+  return Math.round(parsed);
+}
+
+function clampFraction(value: number | null) {
+  if (value == null || !Number.isFinite(value)) return null;
+  return Math.max(0, Math.min(1, value));
+}
+
+function parseJsonRecord(raw: string) {
+  if (!raw.trim()) return null;
+  try {
+    return asRecord(JSON.parse(raw) as unknown);
+  } catch {
+    return null;
+  }
+}
+
+function parseStatuslinePercent(value: unknown) {
+  const percent = parseFiniteNumber(value);
+  if (percent == null || percent < 0 || percent > 100) return null;
+  return Math.round(percent * 1000) / 1000;
+}
+
+function parseStatuslineResetAt(value: unknown, checkedAt: number) {
+  const numeric = parseFiniteNumber(value);
+  if (numeric == null) return null;
+  if (numeric === 0) return null;
+  if (numeric < 1_000_000_000) return null;
+  return parseRateLimitResetAt(numeric, checkedAt);
+}
+
+function isAnthropicStatuslineFresh(mtimeMs: number) {
+  return Number.isFinite(mtimeMs) && Date.now() - mtimeMs <= ANTHROPIC_STATUSLINE_STALENESS_MS;
+}

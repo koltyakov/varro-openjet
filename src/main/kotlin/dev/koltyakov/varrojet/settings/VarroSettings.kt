@@ -30,6 +30,9 @@ class VarroSettings : PersistentStateComponent<VarroSettings> {
     /** Explicit path to the OpenCode CLI. Empty means "discover on PATH". */
     var serverCommand: String = ""
 
+    /** Node.js executable used by the provider quota helper; empty discovers it. */
+    var providerQuotaNodePath: String = ""
+
     /** Install OpenCode CLI updates in the background when the server is idle. */
     var serverAutoUpdate: Boolean = true
 

@@ -123,6 +123,137 @@ function guardNavigation() {
 }
 
 /**
+ * JCEF does not consistently start Chromium's native drag session for small
+ * HTML drag handles. Drive the same drag events from pointer input so upstream
+ * reorder controls keep their existing DataTransfer-based implementation.
+ */
+function installInternalDragBridge() {
+  const DRAG_THRESHOLD = 5;
+  let source: HTMLElement | null = null;
+  let hovered: Element | null = null;
+  let transfer: DataTransfer | null = null;
+  let pointerID = -1;
+  let originX = 0;
+  let originY = 0;
+  let dragging = false;
+  let suppressClick = false;
+
+  function dispatch(
+    target: EventTarget,
+    type: string,
+    event: PointerEvent,
+    relatedTarget: EventTarget | null = null,
+  ) {
+    return target.dispatchEvent(
+      new DragEvent(type, {
+        bubbles: true,
+        cancelable: true,
+        clientX: event.clientX,
+        clientY: event.clientY,
+        dataTransfer: transfer,
+        relatedTarget,
+      }),
+    );
+  }
+
+  function restoreSource() {
+    if (source) source.draggable = true;
+  }
+
+  function clear() {
+    restoreSource();
+    source = null;
+    hovered = null;
+    transfer = null;
+    pointerID = -1;
+    dragging = false;
+  }
+
+  document.addEventListener(
+    'pointerdown',
+    (event) => {
+      if (event.button !== 0 || !event.isPrimary) return;
+      const target = (event.target as Element | null)?.closest<HTMLElement>('[draggable="true"]');
+      if (!target) return;
+
+      source = target;
+      pointerID = event.pointerId;
+      originX = event.clientX;
+      originY = event.clientY;
+      // Prevent JCEF from starting a late native session alongside the bridge.
+      source.draggable = false;
+    },
+    true,
+  );
+
+  window.addEventListener(
+    'pointermove',
+    (event) => {
+      if (!source || event.pointerId !== pointerID) return;
+      if (!dragging) {
+        if (Math.hypot(event.clientX - originX, event.clientY - originY) < DRAG_THRESHOLD) return;
+        transfer = new DataTransfer();
+        dragging = dispatch(source, 'dragstart', event);
+        if (!dragging) {
+          clear();
+          return;
+        }
+        suppressClick = true;
+      }
+
+      event.preventDefault();
+      const next = document.elementFromPoint(event.clientX, event.clientY);
+      if (next !== hovered) {
+        if (hovered) dispatch(hovered, 'dragleave', event, next);
+        if (next) dispatch(next, 'dragenter', event, hovered);
+        hovered = next;
+      }
+      if (hovered) dispatch(hovered, 'dragover', event);
+    },
+    true,
+  );
+
+  window.addEventListener(
+    'pointerup',
+    (event) => {
+      if (!source || event.pointerId !== pointerID) return;
+      if (dragging && hovered) {
+        const accepted = !dispatch(hovered, 'dragover', event);
+        if (accepted) dispatch(hovered, 'drop', event);
+        dispatch(source, 'dragend', event);
+      }
+      clear();
+      window.setTimeout(() => {
+        suppressClick = false;
+      }, 0);
+    },
+    true,
+  );
+
+  window.addEventListener(
+    'pointercancel',
+    (event) => {
+      if (!source || event.pointerId !== pointerID) return;
+      if (dragging) dispatch(source, 'dragend', event);
+      suppressClick = false;
+      clear();
+    },
+    true,
+  );
+
+  document.addEventListener(
+    'click',
+    (event) => {
+      if (!suppressClick) return;
+      suppressClick = false;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    },
+    true,
+  );
+}
+
+/**
  * JCEF delivers IDE-level shortcuts to the browser component, not to the IDE, so
  * the webview has to hand back the ones the host owns. `Shift+Escape` hides the
  * tool window; the rest ride the normal `commands/state` channel.
@@ -144,6 +275,7 @@ installSendChannel();
 installViewStateChannel();
 installReceiveChannel();
 guardNavigation();
+installInternalDragBridge();
 forwardHostShortcuts();
 
 hostWindow.__initialTheme = hostWindow.__initialWebviewState?.theme;

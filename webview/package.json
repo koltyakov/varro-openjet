@@ -4,11 +4,15 @@
   "version": "0.1.0",
   "type": "module",
   "description": "Build workspace for the Varro webview running inside JetBrains JCEF.",
+  "repository": "https://github.com/koltyakov/varro-openjet",
   "scripts": {
     "sync": "node scripts/sync-upstream.mjs",
-    "build": "vite build",
+    "build": "vite build && npm run build:quota",
+    "build:quota": "vite build --config vite.quota.config.mts",
+    "sync:quota": "node scripts/sync-quota.mjs",
+    "test:quota": "vitest run --config vitest.quota.config.mts",
     "watch": "vite build --watch",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit && tsc --project tsconfig.quota.json"
   },
   "comments": {
     "versions": "Dependency versions are pinned to the upstream Varro revision recorded in upstream.json so the vendored sources build against the libraries they were written for.",
@@ -23,13 +27,15 @@
     "solid-js": "1.9.15"
   },
   "devDependencies": {
+    "@types/node": "26.5.0",
     "@tailwindcss/vite": "4.3.3",
     "iconoir": "7.12.1",
     "material-icon-theme": "5.38.1",
     "tailwindcss": "4.3.3",
     "typescript": "7.0.2",
     "vite": "8.2.2",
-    "vite-plugin-solid": "2.11.14"
+    "vite-plugin-solid": "2.11.14",
+    "vitest": "5.0.0"
   },
   "volta": {
     "node": "24.21.0",

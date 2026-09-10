@@ -1,0 +1,274 @@
+/* oxlint-disable anti-slop/no-chained-type-assertions, anti-slop/require-safety-comment-for-type-assertion -- SAFETY: These tests deliberately pass malformed provider-limit payloads through the runtime normalizer. */
+import { join } from 'path';
+import { describe, expect, it } from 'vitest';
+import {
+  buildProviderLimitProbe,
+  extractOpenCodeProviderLimit,
+  getOpenCodeAuthFilePath,
+  parseProviderAuthStore,
+  parseProviderLimitHeaders,
+  parseRateLimitResetAt,
+  type ProviderMetadata,
+} from './provider-limit';
+
+describe('provider limit helpers', () => {
+  it('resolves the OpenCode auth path from XDG data home', () => {
+    expect(
+      getOpenCodeAuthFilePath({ XDG_DATA_HOME: '/tmp/data' } as NodeJS.ProcessEnv, '/Users/test')
+    ).toBe(join('/tmp/data', 'opencode', 'auth.json'));
+  });
+
+  it('falls back to the standard local share data dir', () => {
+    expect(getOpenCodeAuthFilePath({} as NodeJS.ProcessEnv, '/Users/test')).toBe(
+      join('/Users/test', '.local', 'share', 'opencode', 'auth.json')
+    );
+  });
+
+  it('parses reset values as durations and timestamps', () => {
+    expect(parseRateLimitResetAt('1m30s', 10_000)).toBe(100_000);
+    expect(parseRateLimitResetAt('250ms', 10_000)).toBe(10_250);
+    expect(parseRateLimitResetAt(120, 10_000)).toBe(130_000);
+    expect(parseRateLimitResetAt(1_710_000_000, 0)).toBe(1_710_000_000_000);
+  });
+
+  it('extracts request and token windows from rate limit headers', () => {
+    const headers = new Headers({
+      'x-ratelimit-limit-requests': '100',
+      'x-ratelimit-remaining-requests': '42',
+      'x-ratelimit-reset-requests': '30s',
+      'x-ratelimit-limit-tokens': '90000',
+      'x-ratelimit-remaining-tokens': '12000',
+      'x-ratelimit-reset-tokens': '90s',
+    });
+
+    expect(parseProviderLimitHeaders(headers, 5_000)).toEqual([
+      {
+        id: 'requests',
+        label: 'Requests',
+        unit: 'requests',
+        remaining: 42,
+        limit: 100,
+        resetAt: 35_000,
+      },
+      {
+        id: 'tokens',
+        label: 'Tokens',
+        unit: 'tokens',
+        remaining: 12_000,
+        limit: 90_000,
+        resetAt: 95_000,
+      },
+    ]);
+  });
+
+  it('reads future direct limit metadata from OpenCode provider payloads', () => {
+    const result = extractOpenCodeProviderLimit(
+      {
+        id: 'github-copilot',
+        models: {
+          'gpt-5.4': {
+            quota: {
+              requests: { remaining: 12, limit: 50, resetAt: '2026-04-21T12:00:00.000Z' },
+            },
+          } as unknown as ProviderMetadata['models'][string],
+        },
+      } as ProviderMetadata,
+      'gpt-5.4',
+      0
+    );
+
+    expect(result).toEqual({
+      providerID: 'github-copilot',
+      modelID: 'gpt-5.4',
+      status: 'available',
+      source: 'opencode',
+      checkedAt: 0,
+      note: 'Read from OpenCode metadata',
+      windows: [
+        {
+          id: 'requests',
+          label: 'Requests',
+          unit: 'requests',
+          remaining: 12,
+          limit: 50,
+          resetAt: Date.parse('2026-04-21T12:00:00.000Z'),
+        },
+      ],
+    });
+  });
+
+  it('parses usd windows and native percent values from direct metadata', () => {
+    const result = extractOpenCodeProviderLimit(
+      {
+        id: 'openrouter',
+        models: {},
+        billing: {
+          spend: {
+            remaining: 12.5,
+            limit: 40,
+            percent: 68.75,
+            resetAt: '2026-05-01T12:00:00.000Z',
+          },
+        },
+      } as ProviderMetadata,
+      null,
+      0
+    );
+
+    expect(result).toEqual({
+      providerID: 'openrouter',
+      modelID: null,
+      status: 'available',
+      source: 'opencode',
+      checkedAt: 0,
+      note: 'Read from OpenCode metadata',
+      windows: [
+        {
+          id: 'spend',
+          label: 'Spend',
+          unit: 'usd',
+          remaining: 12.5,
+          limit: 40,
+          resetAt: Date.parse('2026-05-01T12:00:00.000Z'),
+          percent: 68.75,
+        },
+      ],
+    });
+  });
+
+  it('builds provider probes from auth.json and known provider defaults', () => {
+    const authStore = parseProviderAuthStore(
+      JSON.stringify({
+        openai: { type: 'oauth', access: 'token-1', accountId: 'acct_openai' },
+        'github-copilot': { type: 'oauth', access: 'token-2' },
+        xai: { type: 'api', key: 'xai-api-key' },
+      })
+    );
+
+    expect(authStore.openai).toEqual({
+      type: 'oauth',
+      access: 'token-1',
+      accountId: 'acct_openai',
+    });
+
+    expect(
+      buildProviderLimitProbe(
+        {
+          id: 'openai',
+          options: { apiKey: 'opencode-oauth-dummy-key' },
+          models: { 'gpt-5.4': { api: { url: '' } } },
+        },
+        authStore
+      )
+    ).toEqual({
+      url: 'https://api.openai.com/v1/models',
+      headers: {
+        Accept: 'application/json',
+        Authorization: 'Bearer token-1',
+      },
+    });
+
+    expect(
+      buildProviderLimitProbe(
+        {
+          id: 'github-copilot',
+          models: { 'claude-sonnet-4.6': { api: { url: 'https://api.githubcopilot.com/v1' } } },
+        },
+        authStore
+      )
+    ).toEqual({
+      url: 'https://api.githubcopilot.com/models',
+      headers: {
+        Accept: 'application/json',
+        Authorization: 'Bearer token-2',
+        'User-Agent': 'Varro/0.1.0',
+        'Editor-Version': 'vscode/1.91.0',
+        'Editor-Plugin-Version': 'varro/0.1.0',
+      },
+    });
+
+    expect(
+      buildProviderLimitProbe(
+        {
+          id: 'xai',
+          models: { 'grok-code-fast-1': { api: { url: 'https://api.x.ai/v1' } } },
+        },
+        authStore
+      )
+    ).toEqual({
+      url: 'https://api.x.ai/v1/models',
+      headers: {
+        Accept: 'application/json',
+        Authorization: 'Bearer xai-api-key',
+      },
+    });
+  });
+
+  it('preserves OAuth refresh metadata needed by provider limit adapters', () => {
+    expect(
+      parseProviderAuthStore(
+        JSON.stringify({
+          xai: {
+            type: 'oauth',
+            access: 'access-token',
+            refresh: 'refresh-token',
+            expires: 123_456,
+          },
+        })
+      ).xai
+    ).toEqual({
+      type: 'oauth',
+      access: 'access-token',
+      refresh: 'refresh-token',
+      expires: 123_456,
+    });
+  });
+
+  it('does not send auth tokens to provider metadata URLs for unknown providers', () => {
+    const authStore = parseProviderAuthStore(
+      JSON.stringify({
+        custom: { type: 'api', key: 'secret-token' },
+      })
+    );
+
+    expect(
+      buildProviderLimitProbe(
+        {
+          id: 'custom',
+          models: { model: { api: { url: 'https://provider.example.test/v1' } } },
+        },
+        authStore
+      )
+    ).toBeNull();
+  });
+
+  it('does not send known-provider auth tokens to custom API hosts', () => {
+    const authStore = parseProviderAuthStore(
+      JSON.stringify({
+        openai: { type: 'api', key: 'custom-openai-compatible-key' },
+      })
+    );
+
+    expect(
+      buildProviderLimitProbe(
+        {
+          id: 'openai',
+          models: { model: { api: { url: 'https://openai-compatible.example.test/v1' } } },
+        },
+        authStore
+      )
+    ).toBeNull();
+  });
+
+  it('does not send xAI auth tokens to compatible custom API hosts', () => {
+    expect(
+      buildProviderLimitProbe(
+        {
+          id: 'xai',
+          models: { model: { api: { url: 'https://xai-compatible.example.test/v1' } } },
+        },
+        { xai: { type: 'api', key: 'xai-api-key' } }
+      )
+    ).toBeNull();
+  });
+});

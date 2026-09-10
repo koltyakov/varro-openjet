@@ -233,7 +233,11 @@ object ThemeBridge {
         }
 
         // --- Typography -------------------------------------------------------
-        variables["--vscode-font-family"] = cssFontStack(uiFontFamily())
+        // The vendored layout is tuned against VS Code's browser UI stack. The
+        // JetBrains UI font is often wider (Inter in the new UI), which changes
+        // wrapping and makes fixed-size controls look horizontally stretched.
+        variables["--vscode-font-family"] =
+            "-apple-system, BlinkMacSystemFont, \"Segoe WPC\", \"Segoe UI\", system-ui, sans-serif"
         variables["--vscode-font-size"] = "${uiFontSize()}px"
         variables["--vscode-editor-font-family"] = cssFontStack(editorFontFamily(scheme))
 

@@ -74,7 +74,9 @@ class VarroProjectService(private val project: Project) : Disposable {
 
     val context: ContextProvider = ContextProvider(project)
 
-    private val hostServices = OpenCodeHostServices(project, server, editor, settings)
+    private val hostServices = OpenCodeHostServices(project, server, editor, settings) { update ->
+        broadcast("provider-limit/updated", update)
+    }
 
     private val restProxy = RestProxy(
         project = project,
@@ -95,7 +97,11 @@ class VarroProjectService(private val project: Project) : Disposable {
         context.addListener { snapshot -> broadcast("context/update", snapshot) }
 
         server.onStatus { status ->
-            lastStatus.set(status)
+            val previous = lastStatus.getAndSet(status)
+            if (previous::class != status::class ||
+                (previous is ServerStatus.Running && status is ServerStatus.Running && previous.url != status.url) ||
+                (previous is ServerStatus.Error && status is ServerStatus.Error && previous.message != status.message)
+            ) hostServices.clearProviderQuotaCache()
             broadcast("server/status", status.toJson())
             reportStatusFailure(status)
         }
@@ -103,7 +109,11 @@ class VarroProjectService(private val project: Project) : Disposable {
         server.onEvent { event -> forwardServerEvent(event) }
 
         ApplicationManager.getApplication().messageBus.connect(this)
-            .subscribe(VarroSettings.TOPIC, VarroSettings.Listener { broadcastConfig() })
+            .subscribe(VarroSettings.TOPIC, VarroSettings.Listener {
+                hostServices.clearProviderQuotaCache()
+                broadcastConfig()
+                broadcast("providers/refresh")
+            })
     }
 
     // --- Surfaces -------------------------------------------------------------
@@ -523,7 +533,10 @@ class VarroProjectService(private val project: Project) : Disposable {
                 "files/remove", "files/clear", "composer/images-update",
                 -> Unit
 
-                "providers/refresh", "providers/auth-changed" -> broadcast("providers/refresh")
+                "providers/refresh", "providers/auth-changed" -> {
+                    hostServices.clearProviderQuotaCache()
+                    broadcast("providers/refresh")
+                }
 
                 "session/export" -> exportSession(payload.str("sessionId"))
 
@@ -671,6 +684,7 @@ class VarroProjectService(private val project: Project) : Disposable {
     }
 
     override fun dispose() {
+        hostServices.dispose()
         restProxy.dispose()
         panels.clear()
     }

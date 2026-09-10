@@ -75,6 +75,7 @@ intellijPlatform {
 
 val webviewDir = layout.projectDirectory.dir("webview")
 val webviewOutputDir = layout.projectDirectory.dir("src/main/resources/webview")
+val quotaOutputDir = layout.projectDirectory.dir("src/main/resources/quota")
 val skipWebview = providers.gradleProperty("skipWebview").orElse("false").get().toBoolean()
 
 fun npmCommand(vararg args: String): List<String> =
@@ -114,12 +115,16 @@ val buildWebview = tasks.register<Exec>("buildWebview") {
     commandLine(npmCommand("run", "build"))
 
     inputs.dir(webviewDir.dir("src"))
+    inputs.dir(webviewDir.dir("quota"))
+    inputs.dir(webviewDir.dir("vendor"))
     inputs.files(
         webviewDir.file("package.json"),
         webviewDir.file("vite.config.mts"),
+        webviewDir.file("vite.quota.config.mts"),
         webviewDir.file("tsconfig.json"),
     )
     outputs.dir(webviewOutputDir)
+    outputs.dir(quotaOutputDir)
 
     onlyIf {
         if (skipWebview) {
@@ -142,6 +147,19 @@ tasks.named("processResources") {
     dependsOn(buildWebview)
 }
 
+val testProviderQuotas = tasks.register<Exec>("testProviderQuotas") {
+    group = "verification"
+    description = "Run the upstream provider quota service and adapter tests."
+    dependsOn(installWebviewDeps)
+    workingDir = webviewDir.asFile
+    commandLine(npmCommand("run", "test:quota"))
+    onlyIf { !skipWebview }
+}
+
+tasks.named("check") {
+    dependsOn(testProviderQuotas)
+}
+
 tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach {
     compilerOptions {
         jvmTarget = JvmTarget.JVM_21
@@ -156,8 +174,10 @@ tasks.withType<JavaCompile>().configureEach {
 
 tasks.test {
     useJUnit()
+    dependsOn(testProviderQuotas)
 }
 
 tasks.clean {
     delete(webviewOutputDir)
+    delete(quotaOutputDir)
 }

@@ -10,7 +10,7 @@ Upstream Varro is roughly:
 | --- | --- | --- |
 | `src/webview` (Solid + Tailwind chat UI) | ~80k lines + 17k CSS | **Reused verbatim** |
 | `src/shared` (protocol, domain types, helpers) | ~7k lines | **Reused verbatim** by the webview; selectively reimplemented in Kotlin for the host |
-| `src/extension` (VS Code host) | ~42k lines | **Reimplemented in Kotlin** |
+| `src/extension` (VS Code host) | ~42k lines | IDE integration reimplemented in Kotlin; provider quota backend reused in a Node.js helper |
 
 Reusing the webview is what makes the port tractable, and it is possible because upstream keeps a genuinely narrow host seam. `src/webview` contains no `import 'vscode'` anywhere, and the entire host contract is installed by one inline bootstrap in `src/extension/webview-html.ts`:
 
@@ -32,8 +32,11 @@ Rewriting the UI in Swing or Compose would have meant reimplementing the transcr
 webview/
   vendor/webview     upstream src/webview, unchanged
   vendor/shared      upstream src/shared, unchanged
+  vendor/extension   upstream quota service, coordinator, adapters, and tests
+  quota/main.ts      JSON-lines entry point for the Node.js quota helper
   src/host-bridge.ts the JetBrains bridge shim (the only webview code this port authors)
   vite.config.mts    builds into src/main/resources/webview/
+  vite.quota.config.mts builds into src/main/resources/quota/
 
 src/main/kotlin/dev/koltyakov/varrojet/
   server/            OpenCode process, transport, lifecycle, path identity
@@ -79,6 +82,7 @@ Server startup stays lazy, exactly as upstream: constructing the service does no
 | `shared/workspace-path.ts` | `server/WorkspacePaths.kt` |
 | `util/opencode-request.ts` | `server/OpenCodeRequestScope.kt` |
 | `commit-message-service.ts` | `host/CommitMessageService.kt` |
+| `provider-limit-service.ts`, `provider-limits/`, `provider-quota-coordinator.ts` | Vendored in `webview/vendor/extension/`, managed by `host/ProviderQuotaBackend.kt` and `host/ProviderQuotaRuntime.kt` |
 | Workspace Memento stores | `store/VarroStore.kt` |
 | `package.json` `contributes.configuration` | `settings/VarroSettings.kt`, `VarroConfigurable.kt` |
 
@@ -100,6 +104,16 @@ Two request kinds share the channel:
 
 - Paths under `/varro` are the host's own namespace, answered locally from IDE state and the stores.
 - Everything else is forwarded to OpenCode after the allowlist approves it.
+
+## Provider quota backend
+
+`OpenCodeHostServices.providerLimit` delegates to a lazy, project-owned Node.js process. The bundled `quota/provider-quota.mjs` contains the upstream quota service and every registered adapter. The build erases the service's type-only OpenCode server import; `vendor/extension/server.d.ts` supplies the Kotlin transport's structural contract for type checking.
+
+Kotlin and Node exchange JSON lines over private stdin/stdout pipes. The helper sends metadata reads and refreshed-auth writes back through `OpenCodeTransport`, preserving project directory scoping. Only `GET /config/providers`, `GET /experimental/console`, and `PUT /auth/:id` are accepted on this channel. Provider credentials stay in the host processes. The browser receives only quota statuses and `provider-limit/updated` events.
+
+The upstream code owns adapter selection, provider credential lookup and refresh, polling caches, shared snapshots and observation, and rate-limit backoff. The Kotlin host owns process discovery, startup failure backoff, crash recovery, and disposal. Provider/auth changes, relevant server status changes, and settings changes retire the process so the next poll starts with fresh state. The helper exits when its input pipe closes, including when the IDE exits.
+
+`npm run build` builds both the browser bundle and the quota helper. Quota sources and tests are vendored separately from the UI, with their revision recorded in `vendor/extension/UPSTREAM.json`.
 
 ## Simplifications from the VS Code original
 

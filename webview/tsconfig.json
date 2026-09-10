@@ -2,6 +2,7 @@
   "compilerOptions": {
     "target": "ES2023",
     "module": "ESNext",
+    "moduleDetection": "force",
     "moduleResolution": "bundler",
     "jsx": "preserve",
     "jsxImportSource": "solid-js",
@@ -18,5 +19,5 @@
     "isolatedModules": true,
     "noEmit": true
   },
-  "include": ["src/**/*", "vendor/**/*", "*.mts"]
+  "include": ["src/**/*", "vendor/shared/**/*", "vendor/webview/**/*", "*.mts"]
 }

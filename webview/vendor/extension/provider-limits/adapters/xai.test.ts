@@ -1,0 +1,423 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { ProviderMetadata } from '../../util/provider-limit';
+import { createXaiAdapter } from './xai';
+
+const adapter = createXaiAdapter();
+const provider: ProviderMetadata = {
+  id: 'xai',
+  models: { 'grok-code-fast-1': { api: { url: 'https://api.x.ai/v1' } } },
+};
+const oauthStore = {
+  xai: { type: 'oauth' as const, access: 'supergrok-access-token' },
+};
+
+describe('createXaiAdapter', () => {
+  beforeEach(() => {
+    vi.stubGlobal('fetch', vi.fn());
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('matches SuperGrok OAuth credentials but leaves API keys to the header probe', () => {
+    expect(adapter.matches(provider, oauthStore)).toBe(true);
+    expect(adapter.matches(provider, { xai: { type: 'api', key: 'xai-api-key' } })).toBe(false);
+  });
+
+  it('maps SuperGrok weekly and on-demand credit limits', async () => {
+    vi.mocked(fetch).mockResolvedValue(
+      Response.json({
+        config: {
+          creditUsagePercent: 37.5,
+          currentPeriod: { type: 'WEEKLY', end: '2026-09-01T12:00:00.000Z' },
+          billingPeriodEnd: '2026-09-30T12:00:00.000Z',
+          onDemandCap: { val: 50 },
+          onDemandUsed: { val: 12.5 },
+        },
+      })
+    );
+
+    const status = await adapter.fetch({
+      provider,
+      authStore: oauthStore,
+      modelID: 'grok-code-fast-1',
+      checkedAt: 5_000,
+    });
+
+    expect(fetch).toHaveBeenCalledWith(
+      'https://cli-chat-proxy.grok.com/v1/billing?format=credits',
+      expect.objectContaining({
+        headers: {
+          Accept: 'application/json',
+          Authorization: 'Bearer supergrok-access-token',
+          'x-xai-token-auth': 'xai-grok-cli',
+          'User-Agent': 'Varro/0.1.0',
+        },
+      })
+    );
+    expect(status).toEqual({
+      providerID: 'xai',
+      modelID: 'grok-code-fast-1',
+      status: 'available',
+      source: 'provider',
+      checkedAt: 5_000,
+      planName: 'SuperGrok',
+      note: 'Polled SuperGrok billing endpoint',
+      windows: [
+        {
+          id: 'credits',
+          label: 'Weekly Credits',
+          unit: 'credits',
+          remaining: 62.5,
+          limit: 100,
+          resetAt: Date.parse('2026-09-01T12:00:00.000Z'),
+          percent: 37.5,
+        },
+        {
+          id: 'on_demand',
+          label: 'On-demand Credits',
+          unit: 'credits',
+          remaining: 37.5,
+          limit: 50,
+          resetAt: Date.parse('2026-09-30T12:00:00.000Z'),
+          percent: 25,
+        },
+      ],
+    });
+  });
+
+  it('refreshes an expired OAuth token before polling billing limits', async () => {
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(
+        Response.json({
+          access_token: 'refreshed-access-token',
+          refresh_token: 'rotated-refresh-token',
+          expires_in: 3600,
+        })
+      )
+      .mockResolvedValueOnce(
+        Response.json({
+          config: {
+            creditUsagePercent: 20,
+            currentPeriod: { type: 'WEEKLY', end: '2026-09-12T12:00:00.000Z' },
+          },
+        })
+      );
+    const setProviderAuth = vi.fn(async () => {});
+
+    const status = await adapter.fetch({
+      provider,
+      authStore: {
+        xai: {
+          type: 'oauth',
+          access: 'expired-access-token',
+          refresh: 'stored-refresh-token',
+          expires: 1,
+        },
+      },
+      modelID: 'grok-code-fast-1',
+      checkedAt: 5_000,
+      setProviderAuth,
+    });
+
+    expect(fetch).toHaveBeenNthCalledWith(
+      1,
+      'https://auth.x.ai/oauth2/token',
+      expect.objectContaining({
+        method: 'POST',
+        body: expect.stringContaining('refresh_token=stored-refresh-token'),
+      })
+    );
+    expect(setProviderAuth).toHaveBeenCalledWith('xai', {
+      type: 'oauth',
+      access: 'refreshed-access-token',
+      refresh: 'rotated-refresh-token',
+      expires: expect.any(Number),
+    });
+    expect(fetch).toHaveBeenNthCalledWith(
+      2,
+      'https://cli-chat-proxy.grok.com/v1/billing?format=credits',
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          Authorization: 'Bearer refreshed-access-token',
+        }),
+      })
+    );
+    expect(status).toMatchObject({ status: 'available', windows: [{ remaining: 80 }] });
+  });
+
+  it('refreshes and retries when billing rejects a token without expiry metadata', async () => {
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(new Response('', { status: 401 }))
+      .mockResolvedValueOnce(
+        Response.json({ access_token: 'refreshed-access-token', expires_in: 3600 })
+      )
+      .mockResolvedValueOnce(
+        Response.json({
+          config: {
+            creditUsagePercent: 10,
+            currentPeriod: { type: 'WEEKLY', end: '2026-09-12T12:00:00.000Z' },
+          },
+        })
+      );
+
+    const status = await adapter.fetch({
+      provider,
+      authStore: {
+        xai: {
+          type: 'oauth',
+          access: 'rejected-access-token',
+          refresh: 'stored-refresh-token',
+        },
+      },
+      modelID: null,
+      checkedAt: 5_000,
+      setProviderAuth: vi.fn(async () => {}),
+    });
+
+    expect(fetch).toHaveBeenCalledTimes(4);
+    expect(status).toMatchObject({ status: 'available', windows: [{ remaining: 90 }] });
+  });
+
+  it('falls back to absolute monthly credit accounting', async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(
+      Response.json({
+        config: {
+          currentPeriod: { type: 'WEEKLY', end: '2026-09-01T12:00:00.000Z' },
+          billingPeriodEnd: '2026-09-30T12:00:00.000Z',
+        },
+      })
+    );
+    vi.mocked(fetch).mockResolvedValueOnce(
+      Response.json({
+        config: {
+          monthlyLimit: { val: 200 },
+          used: { val: 50 },
+          billingPeriodEnd: '2026-09-30T12:00:00.000Z',
+        },
+      })
+    );
+
+    const status = await adapter.fetch({
+      provider,
+      authStore: oauthStore,
+      modelID: null,
+      checkedAt: 5_000,
+    });
+
+    expect(status).toMatchObject({
+      status: 'available',
+      windows: [
+        {
+          id: 'monthly_credits',
+          remaining: 150,
+          limit: 200,
+          percent: 25,
+          resetAt: Date.parse('2026-09-30T12:00:00.000Z'),
+        },
+      ],
+    });
+    expect(fetch).toHaveBeenNthCalledWith(
+      2,
+      'https://cli-chat-proxy.grok.com/v1/billing',
+      expect.any(Object)
+    );
+  });
+
+  it('includes unexpired Grok reset tokens sorted by expiration', async () => {
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(Response.json({ config: { creditUsagePercent: 11 } }))
+      .mockResolvedValueOnce(
+        new Response(
+          createResetResponse([
+            { tokenId: 'later', validityEnd: '2026-09-20T12:00:00Z' },
+            { tokenId: 'expired', validityEnd: '2026-09-09T12:00:00Z' },
+            { tokenId: 'available', validityEnd: '2026-09-12T12:00:00Z' },
+            { tokenId: 'missing-expiration' },
+            { tokenId: '', validityEnd: '2026-09-12T12:00:00Z' },
+          ])
+        )
+      );
+
+    const status = await adapter.fetch({
+      provider,
+      authStore: oauthStore,
+      modelID: null,
+      checkedAt: Date.parse('2026-09-09T12:00:00Z'),
+    });
+
+    expect(fetch).toHaveBeenNthCalledWith(
+      2,
+      'https://grok.com/grok_api_v2.GrokBuildBilling/GetRemainingResets',
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({
+          Authorization: 'Bearer supergrok-access-token',
+          'Content-Type': 'application/grpc-web+proto',
+          'x-grpc-web': '1',
+        }),
+        body: new Uint8Array(5),
+      })
+    );
+    expect(status).toMatchObject({
+      status: 'available',
+      windows: [{ percent: 11 }],
+      usageLimitResets: {
+        availableCount: 2,
+        credits: [
+          { title: 'Weekly quota reset', expiresAt: Date.parse('2026-09-12T12:00:00Z') },
+          { title: 'Weekly quota reset', expiresAt: Date.parse('2026-09-20T12:00:00Z') },
+        ],
+      },
+    });
+  });
+
+  it.each([
+    { name: 'empty', response: () => new Response(createResetResponse([])) },
+    {
+      name: 'an empty gRPC body',
+      response: () => new Response(null, { headers: { 'Content-Type': 'application/grpc' } }),
+    },
+    { name: 'truncated', response: () => new Response(createResetResponse([]).subarray(0, 4)) },
+    { name: 'malformed protobuf', response: () => new Response(createGrpcFrame([0x0a, 0xff])) },
+    {
+      name: 'a gRPC error',
+      response: () =>
+        new Response(
+          createResetResponse([{ tokenId: 'available', validityEnd: '2026-09-12T12:00:00Z' }], 16)
+        ),
+    },
+    { name: 'unauthorized', response: () => new Response('', { status: 401 }) },
+    { name: 'unavailable', response: () => new Response('', { status: 503 }) },
+  ])('keeps billing limits when reset details are $name', async ({ response }) => {
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(Response.json({ config: { creditUsagePercent: 11 } }))
+      .mockResolvedValueOnce(response());
+
+    const status = await adapter.fetch({
+      provider,
+      authStore: oauthStore,
+      modelID: null,
+      checkedAt: 5_000,
+    });
+
+    expect(status).toMatchObject({ status: 'available', windows: [{ percent: 11 }] });
+    expect(status).not.toHaveProperty('usageLimitResets');
+  });
+
+  it('falls back to the SuperGrok credits RPC when REST billing is unbounded', async () => {
+    const resetAt = Date.parse('2026-09-01T12:00:00.000Z');
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(
+        Response.json({
+          config: {
+            currentPeriod: { type: 'WEEKLY', end: '2026-09-01T12:00:00.000Z' },
+          },
+        })
+      )
+      .mockResolvedValueOnce(
+        Response.json({ config: { monthlyLimit: { val: 0 }, used: { val: 0 } } })
+      )
+      .mockResolvedValueOnce(new Response(createCreditsResponseFrame(resetAt)));
+
+    const status = await adapter.fetch({
+      provider,
+      authStore: oauthStore,
+      modelID: 'grok-code-fast-1',
+      checkedAt: Date.parse('2026-08-26T12:00:00.000Z'),
+    });
+
+    expect(fetch).toHaveBeenNthCalledWith(
+      3,
+      'https://grok.com/grok_api_v2.GrokBuildBilling/GetGrokCreditsConfig',
+      expect.objectContaining({ method: 'POST', body: new Uint8Array(5) })
+    );
+    expect(status).toMatchObject({
+      status: 'available',
+      windows: [
+        {
+          id: 'credits',
+          label: 'Weekly Credits',
+          remaining: 100,
+          limit: 100,
+          percent: 0,
+          resetAt,
+        },
+      ],
+    });
+  });
+
+  it('reports rejected or unbounded billing responses as unsupported', async () => {
+    vi.mocked(fetch).mockResolvedValueOnce(new Response('', { status: 401 }));
+    await expect(
+      adapter.fetch({ provider, authStore: oauthStore, modelID: null, checkedAt: 5_000 })
+    ).resolves.toMatchObject({
+      status: 'unsupported',
+      note: 'SuperGrok billing endpoint rejected credentials (401)',
+    });
+
+    vi.mocked(fetch)
+      .mockResolvedValueOnce(Response.json({ config: {} }))
+      .mockResolvedValueOnce(Response.json({ config: {} }))
+      .mockResolvedValueOnce(new Response(new Uint8Array(5)));
+    await expect(
+      adapter.fetch({ provider, authStore: oauthStore, modelID: null, checkedAt: 5_000 })
+    ).resolves.toMatchObject({
+      status: 'unsupported',
+      note: 'SuperGrok billing endpoint did not expose a bounded quota',
+    });
+  });
+});
+
+function createResetResponse(
+  tokens: Array<{ tokenId: string; validityEnd?: string }>,
+  grpcStatus = 0
+) {
+  const payload = tokens.flatMap((token) => {
+    const id = [...new TextEncoder().encode(token.tokenId)];
+    const fields = encodeField(1, 2, [...encodeVarint(id.length), ...id]);
+    if (token.validityEnd) {
+      const timestamp = encodeField(1, 0, encodeVarint(Date.parse(token.validityEnd) / 1000));
+      fields.push(...encodeField(3, 2, [...encodeVarint(timestamp.length), ...timestamp]));
+    }
+    return encodeField(1, 2, [...encodeVarint(fields.length), ...fields]);
+  });
+  const trailers = [...new TextEncoder().encode(`grpc-status: ${grpcStatus}\r\n`)];
+  return new Uint8Array([...createGrpcFrame(payload), ...createGrpcFrame(trailers, 0x80)]);
+}
+
+function createGrpcFrame(payload: number[], flags = 0) {
+  const frame = new Uint8Array(5 + payload.length);
+  frame[0] = flags;
+  new DataView(frame.buffer).setUint32(1, payload.length);
+  frame.set(payload, 5);
+  return frame;
+}
+
+function createCreditsResponseFrame(resetAt: number) {
+  const timestamp = encodeVarint(Math.floor(resetAt / 1000));
+  const reset = encodeField(1, 0, timestamp);
+  const billing = encodeField(5, 2, [...encodeVarint(reset.length), ...reset]);
+  const payload = encodeField(1, 2, [...encodeVarint(billing.length), ...billing]);
+  const frame = new Uint8Array(5 + payload.length);
+  new DataView(frame.buffer).setUint32(1, payload.length);
+  frame.set(payload, 5);
+  return frame;
+}
+
+function encodeField(field: number, wire: number, value: number[]) {
+  return [...encodeVarint((field << 3) | wire), ...value];
+}
+
+function encodeVarint(value: number) {
+  const bytes: number[] = [];
+  let remaining = value;
+  do {
+    let byte = remaining % 128;
+    remaining = Math.floor(remaining / 128);
+    if (remaining > 0) byte |= 0x80;
+    bytes.push(byte);
+  } while (remaining > 0);
+  return bytes;
+}

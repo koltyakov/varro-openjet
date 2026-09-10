@@ -16,6 +16,7 @@ import { execFileSync } from 'node:child_process';
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { syncQuota } from './sync-quota.mjs';
 
 const webviewRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const config = JSON.parse(readFileSync(join(webviewRoot, 'upstream.json'), 'utf8'));
@@ -101,6 +102,7 @@ function isExcluded(path) {
 
 const { source } = resolveSource();
 const revision = describeRevision(source);
+syncQuota(source);
 let copied = 0;
 let skipped = 0;
 

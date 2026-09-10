@@ -17,7 +17,7 @@ window.__sendToExtension(msg)  webview -> host
 window.__vscodeWebviewState    synchronous key/value store
 ```
 
-So this port **reuses the upstream webview verbatim** and reimplements only the host - the ~42,000-line VS Code extension layer - in Kotlin against the IntelliJ Platform.
+This port reuses the upstream webview and implements the IDE host in Kotlin against the IntelliJ Platform. Provider quota reporting also reuses Varro's TypeScript service and adapters, packaged as a Node.js helper that the Kotlin host starts on demand.
 
 ```
 ┌─ IntelliJ Platform ──────────────────────────────────────┐
@@ -97,6 +97,14 @@ VARRO_SOURCE=/path/to/varro npm run sync   # or vendor from a local checkout
 
 The pinned upstream revision is recorded in `webview/vendor/UPSTREAM.json`.
 
+The sync also vendors the quota backend and its tests. To update only those files:
+
+```bash
+VARRO_SOURCE=/path/to/varro npm run sync:quota
+```
+
+Its revision is recorded separately in `webview/vendor/extension/UPSTREAM.json`.
+
 ## Installing
 
 ### From the CLI
@@ -143,6 +151,13 @@ share one.
 - An IntelliJ-platform IDE **2025.2 or newer** (build 252-262), with the JCEF runtime. Built and verified against IntelliJ IDEA 2026.2.2.
 - The [OpenCode CLI](https://opencode.ai/docs) 1.16.0 or newer, on `PATH` or set in **Settings | Tools | Varro**.
 - A configured OpenCode provider.
+- Node.js 22 or newer on the IDE host for provider quota reporting. Varro searches the IDE's environment and common install locations. An explicit executable path can be set under **Settings | Tools | Varro | Provider quotas Node.js path**.
+
+### Provider limits
+
+Quota badges and reset times use the same backend as Varro, including Anthropic/Claude Code, OpenAI Codex, GitHub Copilot, OpenRouter, Gemini, Antigravity, Ollama Cloud, OpenCode Go and Claude plans, Z.ai, MiniMax, Kimi, and xAI. Availability depends on the provider and credentials, as it does upstream.
+
+The helper reads the existing OpenCode and provider credential stores. It retains Varro's token refresh, per-model/workspace caching, shared quota snapshots, rate-limit backoff, and last-successful snapshot fallback. Provider changes and server restarts invalidate its state; closing the project stops it.
 
 ## Settings
 

@@ -5,11 +5,13 @@ import com.google.gson.JsonObject
 import com.intellij.openapi.diagnostic.logger
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.project.guessProjectDir
+import com.intellij.util.EnvironmentUtil
 import dev.koltyakov.varrojet.protocol.Json
 import dev.koltyakov.varrojet.protocol.asObjectOrNull
 import dev.koltyakov.varrojet.protocol.num
 import dev.koltyakov.varrojet.protocol.obj
 import dev.koltyakov.varrojet.protocol.str
+import dev.koltyakov.varrojet.server.OpenCodeCli
 import dev.koltyakov.varrojet.server.OpenCodeServer
 import dev.koltyakov.varrojet.server.RequestOptions
 import dev.koltyakov.varrojet.settings.VarroSettings
@@ -28,9 +30,31 @@ class OpenCodeHostServices(
     private val server: OpenCodeServer,
     private val editor: EditorIntegration,
     private val settings: VarroSettings,
+    onProviderLimitUpdate: (JsonObject) -> Unit = {},
 ) : RestProxy.HostServices {
 
     private val log = logger<OpenCodeHostServices>()
+
+    private val providerQuotas = ProviderQuotaBackend(
+        launch = {
+            val environment = EnvironmentUtil.getEnvironmentMap()
+            val cli = OpenCodeCli({ settings.serverCommand }, { project.basePath }, environment)
+            val cliParent = runCatching { Path.of(cli.resolve().command).parent?.toString() }.getOrNull()
+            ProviderQuotaRuntime.launch(
+                settings.providerQuotaNodePath,
+                cli.serverEnvironment(),
+                listOfNotNull(cliParent) + cli.searchPath(),
+            )
+        },
+        request = { method, path, body, directory ->
+            server.transport.request(method, path, body, RequestOptions(directory = directory)).data
+        },
+        onUpdate = onProviderLimitUpdate,
+    )
+
+    fun clearProviderQuotaCache() = providerQuotas.clearCache()
+
+    fun dispose() = providerQuotas.close()
 
     override fun openPlanDocument(content: String, title: String?): String? =
         editor.openPlanDocument(content, title)
@@ -177,20 +201,8 @@ class OpenCodeHostServices(
 
     // --- Provider quotas ------------------------------------------------------
 
-    /**
-     * Provider quota metadata is best-effort even upstream, where it is gathered
-     * by per-provider adapters that call each vendor's usage endpoint. This port
-     * does not ship those adapters, so it reports `unsupported`, which the webview
-     * already renders as "no quota information" rather than as a failure.
-     */
-    override fun providerLimit(providerId: String, modelId: String?): JsonObject = Json.obj(
-        "providerID" to providerId,
-        "modelID" to modelId,
-        "status" to "unsupported",
-        "source" to "provider",
-        "checkedAt" to System.currentTimeMillis(),
-        "note" to "Provider quota reporting is not implemented in Varro OpenJet.",
-    )
+    override fun providerLimit(providerId: String, modelId: String?): JsonObject =
+        providerQuotas.get(providerId, modelId, project.guessProjectDir()?.path ?: project.basePath)
 
     // --- Session diff summary -------------------------------------------------
 
