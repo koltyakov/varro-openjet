@@ -101,7 +101,7 @@ val installWebviewDeps = tasks.register<Exec>("installWebviewDeps") {
     // package.json. That strictness is the point: node and npm are pinned via
     // Volta (and matched in the Dockerfile), so any lockfile change should be a
     // deliberate dependency edit rather than a side effect of the local toolchain.
-    commandLine(npmCommand("ci", "--no-audit", "--no-fund"))
+    commandLine(npmCommand("ci", "--include=optional", "--no-audit", "--no-fund"))
     inputs.files(webviewDir.file("package.json"), webviewDir.file("package-lock.json"))
     outputs.dir(webviewDir.dir("node_modules"))
     onlyIf { !skipWebview }
