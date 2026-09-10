@@ -1,0 +1,171 @@
+import type {
+  AssistantMessage,
+  FileDiff,
+  Message,
+  MessageEntry,
+  Part,
+  Provider,
+  StepFinishPart,
+} from '../types';
+import { validateFileDiffs } from './validate-diffs';
+
+export { formatDuration, formatTurnDuration, formatRelativeAge } from './time-format';
+
+export type TokenUsage = {
+  total: number;
+  input: number;
+  output: number;
+  reasoning: number;
+  cacheRead: number;
+  cacheWrite: number;
+};
+
+export type AssistantDiffRequest = {
+  sessionID: string;
+  messageID: string;
+};
+
+export function isAssistantMessage(message: Message): message is AssistantMessage {
+  return message.role === 'assistant';
+}
+
+export function isContinuationAssistantFinish(value: string | undefined) {
+  const finish = value?.toLowerCase().replace(/[\s-]+/g, '_');
+  return (
+    finish === 'tool' ||
+    finish === 'tools' ||
+    finish === 'tool_call' ||
+    finish === 'tool_calls' ||
+    finish === 'tool_use' ||
+    finish === 'tool_uses' ||
+    finish === 'function_call' ||
+    finish === 'function_calls'
+  );
+}
+
+const numberFormatter = new Intl.NumberFormat('en-US');
+
+export function formatNumber(value: number | undefined): string {
+  if (!value) return '0';
+  return numberFormatter.format(Math.round(value));
+}
+
+export function formatCost(cost: number | undefined): string {
+  if (!cost) return '';
+  if (cost < 0.01) return '<$0.01';
+  return `$${cost.toFixed(2)}`;
+}
+
+export function sumSessionCost(messages: AssistantMessage[]): number {
+  return messages.reduce((sum, msg) => sum + msg.cost, 0);
+}
+
+export function sumAssistantTokens(messages: AssistantMessage[]): TokenUsage {
+  return messages.reduce<TokenUsage>(
+    (acc, message) => {
+      acc.total += getAssistantTotalTokens(message);
+      acc.input += message.tokens.input || 0;
+      acc.output += message.tokens.output || 0;
+      acc.reasoning += message.tokens.reasoning || 0;
+      acc.cacheRead += message.tokens.cache?.read || 0;
+      acc.cacheWrite += message.tokens.cache?.write || 0;
+      return acc;
+    },
+    { total: 0, input: 0, output: 0, reasoning: 0, cacheRead: 0, cacheWrite: 0 }
+  );
+}
+
+export function getAssistantTotalTokens(message: AssistantMessage): number {
+  return (
+    message.tokens.total ||
+    message.tokens.input +
+      message.tokens.output +
+      message.tokens.reasoning +
+      (message.tokens.cache?.read || 0) +
+      (message.tokens.cache?.write || 0)
+  );
+}
+
+export function getAssistantDuration(message: AssistantMessage): number | undefined {
+  const end = message.time.completed;
+  if (!end) return undefined;
+  return end - message.time.created;
+}
+
+export function getAssistantDiffRequest(
+  message: Message,
+  isLastAssistant: boolean
+): AssistantDiffRequest | null {
+  if (!isLastAssistant || !isAssistantMessage(message) || !message.time.completed) return null;
+  return { sessionID: message.sessionID, messageID: message.id };
+}
+
+export function getContextWindow(message: AssistantMessage, providers: Provider[]) {
+  const provider = providers.find((item) => item.id === message.providerID);
+  const model = provider?.models[message.modelID];
+  const contextLimit = model?.limit?.context;
+  if (!contextLimit) return null;
+
+  const used =
+    (message.tokens.input || 0) +
+    (message.tokens.output || 0) +
+    (message.tokens.reasoning || 0) +
+    (message.tokens.cache?.read || 0) +
+    (message.tokens.cache?.write || 0);
+  return {
+    used,
+    limit: contextLimit,
+    percent: Math.min((used / contextLimit) * 100, 100),
+  };
+}
+
+export function getStepFinishParts(parts: Part[]): StepFinishPart[] {
+  return parts.filter((part): part is StepFinishPart => part.type === 'step-finish');
+}
+
+export function getTaskDiffs(message: Message, fallback: FileDiff[] | undefined): FileDiff[] {
+  if (message.role === 'user') return validateFileDiffs(message.summary?.diffs);
+  return fallback || [];
+}
+
+/**
+ * Returns the timestamp at which the latest assistant message settled
+ * (`time.completed`, or `time.created` when it errored), or null when the
+ * message tail is not a settled assistant message. Scans from the end so the
+ * latest message wins.
+ */
+export function getLatestAssistantFinishedAt(messages: MessageEntry[]): number | null {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index]?.info;
+    if (!message) continue;
+    if (message.role !== 'assistant') return null;
+    return message.time.completed ?? (message.error ? message.time.created : null);
+  }
+  return null;
+}
+
+/** True when the latest message is an assistant message that has settled. */
+export function latestAssistantFinished(messages: MessageEntry[]): boolean {
+  return getLatestAssistantFinishedAt(messages) !== null;
+}
+
+/**
+ * True when the latest assistant message settled, and either no loading window
+ * is tracked or it began at or before that finish. Guards against a stale
+ * "busy" status re-lighting the spinner after the turn already completed.
+ */
+export function latestAssistantFinishedBeforeLoading(
+  messages: MessageEntry[],
+  loadingStartedAt: number | null
+): boolean {
+  const finishedAt = getLatestAssistantFinishedAt(messages);
+  return finishedAt !== null && (loadingStartedAt === null || loadingStartedAt <= finishedAt);
+}
+
+/** True when any tool part is still pending or running (turn not yet settled). */
+export function hasUnsettledToolPart(parts: Part[]): boolean {
+  return parts.some(
+    (part) =>
+      part.type === 'tool' && (part.state.status === 'pending' || part.state.status === 'running')
+  );
+}

@@ -1,0 +1,4 @@
+<idea-plugin>
+    <!-- Optional-dependency descriptor. Loaded only when the dependency is present;
+         the plugin's core chat surface works without it. -->
+</idea-plugin>

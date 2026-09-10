@@ -1,0 +1,221 @@
+import { createOpenCodeRuntime, type OpenCodeRuntime } from './open-code-runtime-instance';
+import type {
+  PermissionMode,
+  QueuedContextSnapshot,
+  SessionWorkspaceTarget,
+} from '../../../shared/protocol';
+import type { SelectedModel, SessionSelectionOptions } from '../../lib/app-state-types';
+import type { QueuedAttachmentSnapshot } from '../session/session-send';
+
+let currentOpenCodeRuntime = createOpenCodeRuntime();
+
+function getCurrentOpenCodeRuntime() {
+  return currentOpenCodeRuntime;
+}
+
+export { createOpenCodeRuntime, type OpenCodeRuntime };
+
+export function installOpenCodeRuntime(runtime: OpenCodeRuntime) {
+  const previous = currentOpenCodeRuntime;
+  currentOpenCodeRuntime = runtime;
+  return () => {
+    currentOpenCodeRuntime = previous;
+  };
+}
+
+export function useOpenCode() {
+  return getCurrentOpenCodeRuntime().useOpenCode();
+}
+
+export async function recheckSessionStatus(sessionId: string) {
+  await getCurrentOpenCodeRuntime().recheckSessionStatus(sessionId);
+}
+
+export async function refreshRoutingState() {
+  await getCurrentOpenCodeRuntime().refreshRoutingState();
+}
+
+export async function refreshProviderLimit(providerID: string, modelID?: string | null) {
+  await getCurrentOpenCodeRuntime().refreshProviderLimit(providerID, modelID);
+}
+
+export async function continueInterruptedSession(sessionId: string) {
+  await getCurrentOpenCodeRuntime().continueInterruptedSession(sessionId);
+}
+
+export async function applySessionMcps(names: string[], sessionId?: string | null) {
+  await getCurrentOpenCodeRuntime().applySessionMcps(names, sessionId);
+}
+
+export async function selectSession(id: string, options?: SessionSelectionOptions) {
+  await getCurrentOpenCodeRuntime().selectSession(id, options);
+}
+
+export async function loadFullSessionHistory(sessionId: string) {
+  await getCurrentOpenCodeRuntime().loadFullSessionHistory(sessionId);
+}
+
+export async function loadOlderSessionHistoryPage(
+  sessionId: string,
+  options?: { prefetchBoundaryPrompts?: boolean }
+) {
+  const runtime = getCurrentOpenCodeRuntime();
+  return options
+    ? runtime.loadOlderSessionHistoryPage(sessionId, options)
+    : runtime.loadOlderSessionHistoryPage(sessionId);
+}
+
+export async function loadOlderSessionPrompts(sessionId: string, isOwnerCurrent?: () => boolean) {
+  return getCurrentOpenCodeRuntime().loadOlderSessionPrompts(sessionId, isOwnerCurrent);
+}
+
+export async function createSession(title?: string, initialPermissionMode?: PermissionMode) {
+  return getCurrentOpenCodeRuntime().createSession(title, initialPermissionMode);
+}
+
+export async function renameSession(id: string, title: string) {
+  return getCurrentOpenCodeRuntime().renameSession(id, title);
+}
+
+export async function forkSession(id: string, messageID?: string) {
+  return getCurrentOpenCodeRuntime().forkSession(id, messageID);
+}
+
+export async function deleteSession(id: string) {
+  await getCurrentOpenCodeRuntime().deleteSession(id);
+}
+
+export async function deleteSessionImmediately(id: string, options?: { directory?: string }) {
+  const runtime = getCurrentOpenCodeRuntime();
+  if (options) await runtime.deleteSessionImmediately(id, options);
+  else await runtime.deleteSessionImmediately(id);
+}
+
+export async function restoreSession(rootID: string) {
+  await getCurrentOpenCodeRuntime().restoreSession(rootID);
+}
+
+export async function deleteSessionPermanently(rootID: string) {
+  await getCurrentOpenCodeRuntime().deleteSessionPermanently(rootID);
+}
+
+export async function emptyRecycleBin() {
+  await getCurrentOpenCodeRuntime().emptyRecycleBin();
+}
+
+export async function reloadSessions() {
+  await getCurrentOpenCodeRuntime().reloadSessions();
+}
+
+export async function loadMoreSessions() {
+  await getCurrentOpenCodeRuntime().loadMoreSessions();
+}
+
+export async function sendMessage(
+  text: string,
+  options?: {
+    messageId?: string;
+    agent?: string;
+    noReply?: boolean;
+    delivery?: 'steer' | 'queue';
+    queuedAttachments?: QueuedAttachmentSnapshot;
+    queuedContext?: QueuedContextSnapshot;
+    preserveComposer?: boolean;
+    targetSessionId?: string | null;
+    workspaceDirectory?: string;
+    newSessionWorkspace?: SessionWorkspaceTarget;
+    queuedMessageDispatch?: { itemId: string; lease: number };
+    onOptimisticPublish?: () => void;
+  }
+): Promise<boolean> {
+  return await getCurrentOpenCodeRuntime().sendMessage(text, options);
+}
+
+export async function retryMessage(messageId: string, sessionId?: string | null) {
+  await getCurrentOpenCodeRuntime().retryMessage(messageId, sessionId);
+}
+
+export async function editMessage(
+  messageId: string,
+  text: string,
+  options?: {
+    allowEmptyText?: boolean;
+    queuedAttachments?: QueuedAttachmentSnapshot;
+    selectedModel?: SelectedModel;
+    onOptimisticPublish?: () => void;
+  }
+) {
+  return await getCurrentOpenCodeRuntime().editMessage(messageId, text, options);
+}
+
+export async function implementPlan(prompt: string, sessionId?: string | null) {
+  await getCurrentOpenCodeRuntime().implementPlan(prompt, sessionId);
+}
+
+export async function openPlan(markdown: string, sessionId?: string | null) {
+  await getCurrentOpenCodeRuntime().openPlan(markdown, sessionId);
+}
+
+export async function abortSession() {
+  await getCurrentOpenCodeRuntime().abortSession();
+}
+
+export async function undoSession() {
+  await getCurrentOpenCodeRuntime().undoSession();
+}
+
+export async function redoSession() {
+  await getCurrentOpenCodeRuntime().redoSession();
+}
+
+export async function initSession() {
+  await getCurrentOpenCodeRuntime().initSession();
+}
+
+export async function runSlashCommandByName(name: string, args: string) {
+  return getCurrentOpenCodeRuntime().runSlashCommandByName(name, args);
+}
+
+export async function reviewSession() {
+  await getCurrentOpenCodeRuntime().reviewSession();
+}
+
+export async function compactSession() {
+  await getCurrentOpenCodeRuntime().compactSession();
+}
+
+export async function respondPermission(
+  sessionId: string,
+  permissionId: string,
+  response: 'once' | 'always' | 'reject',
+  options?: { rethrow?: boolean }
+) {
+  await getCurrentOpenCodeRuntime().respondPermission(sessionId, permissionId, response, options);
+}
+
+export async function alwaysAllowPermissionForProject(sessionId: string, permissionId: string) {
+  await getCurrentOpenCodeRuntime().alwaysAllowPermissionForProject(sessionId, permissionId);
+}
+
+export async function alwaysAllowPermissionForSession(sessionId: string, permissionId: string) {
+  await getCurrentOpenCodeRuntime().alwaysAllowPermissionForSession(sessionId, permissionId);
+}
+
+export async function respondQuestion(
+  requestID: string,
+  answers: Array<Array<string>>,
+  options?: { rethrow?: boolean }
+) {
+  await getCurrentOpenCodeRuntime().respondQuestion(requestID, answers, options);
+}
+
+export async function updatePermissionModeForSession(
+  mode: PermissionMode,
+  sessionId?: string | null
+) {
+  await getCurrentOpenCodeRuntime().updatePermissionModeForSession(mode, sessionId);
+}
+
+export async function rejectQuestion(requestID: string, options?: { rethrow?: boolean }) {
+  await getCurrentOpenCodeRuntime().rejectQuestion(requestID, options);
+}

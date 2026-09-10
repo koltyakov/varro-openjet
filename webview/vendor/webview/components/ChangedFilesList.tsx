@@ -1,0 +1,259 @@
+import { For, Show, createMemo, createSignal } from 'solid-js';
+import { isActiveSessionWorking, showChangedFiles, state } from '../lib/state';
+import { postMessage } from '../lib/bridge';
+import {
+  getDiffFileChanges,
+  getBoundedMessageFileChanges,
+  type FileChange,
+  type FileChangeKind,
+} from '../lib/tool-file-change';
+import { getDiffSummaryStats } from './chat/SessionListView';
+import { formatDisplayPath, getLeafPathName } from '../lib/path-display';
+import { formatEditCount } from '../lib/format';
+import { navArrowDownIcon } from '../lib/ui-icons';
+import { FileTypeIcon } from './FileTypeIcon';
+import { UiIcon } from './UiIcon';
+import { isObject } from '../lib/runtime-values';
+
+type FileChangeKindBadges = Record<FileChangeKind, { label: string; title: string; class: string }>;
+
+const KIND_BADGE = {
+  added: { label: 'A', title: 'Added', class: 'is-added' },
+  edited: { label: 'M', title: 'Modified', class: 'is-edited' },
+  removed: { label: 'D', title: 'Removed', class: 'is-removed' },
+  moved: { label: 'R', title: 'Renamed', class: 'is-moved' },
+} satisfies FileChangeKindBadges;
+const CHANGED_FILE_DISPLAY_LIMIT = 100;
+
+function getActiveSession() {
+  return state.sessions.find((session) => session.id === state.activeSessionId);
+}
+
+export function ChangedFilesList() {
+  let cachedSessionId: string | null = null;
+  let cachedChanges: FileChange[] = [];
+  let cachedSummaryStats: ReturnType<typeof getDiffSummaryStats> = null;
+  const activeMessages = createMemo(() => {
+    const sessionId = state.activeSessionId;
+    return sessionId ? state.messages.filter((entry) => entry.info.sessionID === sessionId) : [];
+  });
+
+  const resetCacheForSession = (sessionId: string | null) => {
+    if (cachedSessionId === sessionId) return;
+    cachedSessionId = sessionId;
+    cachedChanges = [];
+    cachedSummaryStats = null;
+  };
+  const messageFileChanges = createMemo(() =>
+    getBoundedMessageFileChanges(
+      activeMessages(),
+      CHANGED_FILE_DISPLAY_LIMIT,
+      state.editorContext.workspacePath
+    )
+  );
+
+  // The file rows reflect what THIS session's agent changed - the file-changing
+  // tool calls and patch parts in its own messages. The backend session summary
+  // (`session.summary.diffs`) can describe workspace-wide git changes - files
+  // edited by hand or by a sibling session - that a read-only session never
+  // touched, so it is only used to bridge the brief gap before a running
+  // session's edits stream in, never for an idle session.
+  const changes = createMemo(() => {
+    const session = getActiveSession();
+    resetCacheForSession(state.activeSessionId);
+
+    const summaryDiffs = session?.summary?.diffs;
+    const messageChanges = messageFileChanges().changes;
+
+    if (summaryDiffs && summaryDiffs.length > 0 && messageChanges.length === 0) {
+      if (isActiveSessionWorking()) {
+        cachedChanges = getDiffFileChanges(summaryDiffs);
+        return cachedChanges;
+      }
+      cachedChanges = [];
+      return cachedChanges;
+    }
+
+    if (isActiveSessionWorking() && cachedChanges.length > 0 && messageChanges.length === 0) {
+      return cachedChanges;
+    }
+
+    cachedChanges = messageChanges;
+    return cachedChanges;
+  });
+  // The header counter tracks the same session-scoped source as the rows.
+  // Backend summary counts only stand in while a session is running and its
+  // edits have not streamed in yet; otherwise counts come from the session's
+  // own messages so unrelated git changes can't inflate them.
+  const summaryStats = createMemo(() => {
+    const session = getActiveSession();
+    resetCacheForSession(state.activeSessionId);
+    if (!session) return null;
+
+    const messageResult = messageFileChanges();
+    const messageStats =
+      messageResult.changes.length === 0
+        ? null
+        : messageResult.changes.reduce(
+            (stats, change) => ({
+              files: stats.files + 1,
+              additions: stats.additions + (change.additions ?? 0),
+              deletions: stats.deletions + (change.deletions ?? 0),
+              filesTruncated: messageResult.truncated ? true : undefined,
+            }),
+            { files: 0, additions: 0, deletions: 0 }
+          );
+    const summaryDiffs = session.summary?.diffs;
+    const working = isActiveSessionWorking();
+
+    if (summaryDiffs && summaryDiffs.length > 0 && messageStats === null && working) {
+      const fromDiffs = getDiffSummaryStats(summaryDiffs);
+      if (
+        fromDiffs &&
+        (fromDiffs.files > 0 || fromDiffs.additions > 0 || fromDiffs.deletions > 0)
+      ) {
+        cachedSummaryStats = fromDiffs;
+        return fromDiffs;
+      }
+    }
+
+    if (working && messageStats === null && cachedSummaryStats) return cachedSummaryStats;
+
+    cachedSummaryStats = messageStats;
+    return messageStats;
+  });
+  const total = () => summaryStats()?.files ?? changes().length;
+  const truncated = () => {
+    if (messageFileChanges().truncated) return true;
+    if (total() > CHANGED_FILE_DISPLAY_LIMIT || changes().length > CHANGED_FILE_DISPLAY_LIMIT) {
+      return true;
+    }
+    const sessionSummary = getActiveSession()?.summary;
+    if (sessionSummary?.diffsTruncated) return true;
+    return activeMessages().some((message) => {
+      const summary = message.info?.summary;
+      return !!summary && isObject(summary) && summary.diffsTruncated === true;
+    });
+  };
+  const totalLabel = () => (truncated() ? 'Details omitted' : String(total()));
+  const visibleChanges = () =>
+    changes()
+      .toSorted((a, b) => {
+        const countDifference =
+          (b.additions ?? 0) + (b.deletions ?? 0) - ((a.additions ?? 0) + (a.deletions ?? 0));
+        if (countDifference !== 0) return countDifference;
+
+        const aPath = formatDisplayPath(a.toPath || a.path, state.editorContext.workspacePath);
+        const bPath = formatDisplayPath(b.toPath || b.path, state.editorContext.workspacePath);
+        return aPath < bPath ? -1 : aPath > bPath ? 1 : 0;
+      })
+      .slice(0, CHANGED_FILE_DISPLAY_LIMIT);
+  const additions = () =>
+    summaryStats()?.additions ??
+    changes().reduce((sum, change) => sum + (change.additions ?? 0), 0);
+  const deletions = () =>
+    summaryStats()?.deletions ??
+    changes().reduce((sum, change) => sum + (change.deletions ?? 0), 0);
+  const hasLineCounts = () => !truncated() && (additions() > 0 || deletions() > 0);
+  // The board always starts collapsed; the user opens it on demand.
+  const [collapsed, setCollapsed] = createSignal(true);
+
+  return (
+    <Show when={showChangedFiles() && (total() > 0 || truncated())}>
+      <div class="todo-block changed-files-block animate-fade-in">
+        <button
+          type="button"
+          class="todo-block-header"
+          onClick={() => setCollapsed(!collapsed())}
+          aria-expanded={!collapsed()}
+        >
+          <UiIcon
+            source={navArrowDownIcon}
+            class={`todo-block-chevron ${collapsed() ? 'collapsed' : ''}`}
+            width={11}
+            height={11}
+          />
+          <span class="todo-block-title">Files</span>
+          <span class="todo-block-count">{totalLabel()}</span>
+          <Show when={hasLineCounts()}>
+            <span class="changed-files-lines">
+              <span class="diff-lines-added">+{formatEditCount(additions())}</span>{' '}
+              <span class="diff-lines-removed">-{formatEditCount(deletions())}</span>
+            </span>
+          </Show>
+        </button>
+        <Show when={!collapsed()}>
+          <ul class="todo-block-list changed-files-list">
+            <For each={visibleChanges()}>{(change) => <ChangedFileItem change={change} />}</For>
+          </ul>
+        </Show>
+      </div>
+    </Show>
+  );
+}
+
+function ChangedFileItem(props: { change: FileChange }) {
+  const badge = () => KIND_BADGE[props.change.kind];
+  const openPath = () => props.change.toPath || props.change.path;
+  const displayPath = () => formatDisplayPath(openPath(), state.editorContext.workspacePath);
+  const leaf = () => getLeafPathName(openPath());
+  const dir = () => {
+    const path = displayPath();
+    const name = leaf();
+    return path.endsWith(name) ? path.slice(0, path.length - name.length) : '';
+  };
+  const openFile = () => {
+    postMessage({
+      type: 'vscode/open',
+      payload: {
+        path: openPath(),
+        kind: 'file',
+        view: 'diff',
+        sessionID: state.activeSessionId ? state.activeSessionId : undefined,
+        directory: getActiveSession()?.directory,
+      },
+    });
+  };
+
+  const content = (
+    <>
+      <FileTypeIcon path={openPath()} class="changed-files-file-icon" />
+      <span class="changed-files-path">
+        <span class="changed-files-dir">{dir()}</span>
+        <span class="changed-files-name">{leaf()}</span>
+      </span>
+      <Show when={(props.change.additions ?? 0) > 0 || (props.change.deletions ?? 0) > 0}>
+        <span class="changed-files-item-lines">
+          <Show when={(props.change.additions ?? 0) > 0}>
+            <span class="diff-lines-added">+{props.change.additions}</span>
+          </Show>
+          <Show when={(props.change.deletions ?? 0) > 0}>
+            {' '}
+            <span class="diff-lines-removed">-{props.change.deletions}</span>
+          </Show>
+        </span>
+      </Show>
+      <span
+        class={`changed-files-badge ${badge().class}`}
+        role="img"
+        aria-label={badge().title}
+        title={badge().title}
+      >
+        {badge().label}
+      </span>
+    </>
+  );
+
+  return (
+    <li class={`todo-block-item changed-files-item kind-${props.change.kind}`}>
+      <button
+        type="button"
+        class="changed-files-row changed-files-row-button"
+        onClick={openFile}
+        title={`Open diff for ${displayPath()}`}
+      >
+        {content}
+      </button>
+    </li>
+  );
+}

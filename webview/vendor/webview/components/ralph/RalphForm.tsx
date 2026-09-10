@@ -1,0 +1,635 @@
+import { Show, createEffect, createMemo, createSignal, onCleanup } from 'solid-js';
+import type { JSX } from 'solid-js';
+import { Dynamic, Portal } from 'solid-js/web';
+import { client } from '../../lib/client';
+import { logError } from '../../lib/log';
+import {
+  desktopSessionPaneSide,
+  getStoredVariantForModel,
+  isSessionAwaitingInput,
+  state,
+} from '../../lib/state';
+import { deleteSession, deleteSessionImmediately, selectSession } from '../../hooks/useOpenCode';
+import { getSessionPermissionRulesForMode } from '../../hooks/permission-rules';
+import type { RalphConfig, RalphSelectedModel } from '../../../shared/ralph';
+import { normalizeRalphWorkspaceDirectory } from '../../../shared/ralph';
+import { ralphStore } from '../../lib/stores/ralph-store';
+import { ralphRunner } from './ralph-runner';
+import { buildAnchorMessage, getDefaultPromptTemplate } from '../../../shared/ralph-prompts';
+import { ModelPickerButton, VariantPicker } from '../chat-input/ToolbarPickers';
+import { getVariantsForModel } from '../../lib/model-variants';
+import { formatVariantLabel } from '../../lib/format';
+import { getLeafPathName } from '../../lib/path-display';
+import { trapModalFocus } from '../../lib/modal-focus';
+import { xmarkIcon } from '../../lib/ui-icons';
+import { UiIcon } from '../UiIcon';
+import { ModelPicker } from '../ModelPicker';
+
+const DEFAULT_ITERATIONS = 10;
+
+function getInitialRalphModelSelection(): RalphSelectedModel | null {
+  const selected = state.selectedModel;
+  if (selected) {
+    const provider = state.providers.find((item) => item.id === selected.providerID);
+    const model = provider?.models[selected.modelID];
+    if (provider && model) {
+      if (selected.variant && !model.variants?.[selected.variant]) {
+        return { providerID: selected.providerID, modelID: selected.modelID };
+      }
+      return selected;
+    }
+  }
+
+  for (const provider of state.providers) {
+    const defaultModelID = state.providerDefaults[provider.id];
+    if (defaultModelID && provider.models[defaultModelID]) {
+      return { providerID: provider.id, modelID: defaultModelID };
+    }
+  }
+
+  const firstProvider = state.providers[0];
+  if (!firstProvider) return null;
+
+  const firstModel = Object.values(firstProvider.models)[0];
+  if (!firstModel) return null;
+
+  return { providerID: firstProvider.id, modelID: firstModel.id };
+}
+
+type PreviousSessionCleanupState = {
+  messages: Array<unknown>;
+  queuedMessages: Array<{ sessionId: string }>;
+  sessionStatus: Record<string, { type?: string } | undefined>;
+};
+
+type RalphSubmission = {
+  generation: number;
+  sessionId: string | null;
+  workspaceDirectory: string;
+  cleanupTask: Promise<void> | null;
+  cleanupRetryRound: number;
+  cleanupRetryTimer: ReturnType<typeof setTimeout> | null;
+};
+
+async function cleanupOwnedSession(submission: RalphSubmission): Promise<void> {
+  if (!submission.sessionId) return;
+  if (submission.cleanupTask) return submission.cleanupTask;
+  const sessionId = submission.sessionId;
+  const cleanup = (async () => {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        await deleteSessionImmediately(sessionId, {
+          directory: submission.workspaceDirectory,
+        });
+        if (submission.cleanupRetryTimer) clearTimeout(submission.cleanupRetryTimer);
+        submission.cleanupRetryTimer = null;
+        return;
+      } catch (err) {
+        logError('ralph-form:deleteOrphan', err);
+      }
+    }
+    if (submission.cleanupRetryRound >= 8 || submission.cleanupRetryTimer) return;
+    const delay = Math.min(1_000 * 2 ** submission.cleanupRetryRound, 30_000);
+    submission.cleanupRetryRound += 1;
+    submission.cleanupRetryTimer = setTimeout(() => {
+      submission.cleanupRetryTimer = null;
+      void cleanupOwnedSession(submission);
+    }, delay);
+  })();
+  submission.cleanupTask = cleanup;
+  try {
+    await cleanup;
+  } finally {
+    if (submission.cleanupTask === cleanup) submission.cleanupTask = null;
+  }
+}
+
+export function shouldDeletePreviousBlankSession(
+  previousSessionId: string | null,
+  sessionState: PreviousSessionCleanupState,
+  awaitingInput: boolean
+): boolean {
+  return (
+    !!previousSessionId &&
+    sessionState.messages.length === 0 &&
+    !sessionState.queuedMessages.some((item) => item.sessionId === previousSessionId) &&
+    !awaitingInput &&
+    sessionState.sessionStatus[previousSessionId]?.type !== 'busy' &&
+    sessionState.sessionStatus[previousSessionId]?.type !== 'retry'
+  );
+}
+
+function visibleProviders() {
+  return state.providers;
+}
+
+export function RalphForm() {
+  const [planPath, setPlanPath] = createSignal('');
+  const [planWorkspaceDirectory, setPlanWorkspaceDirectory] = createSignal<string | null>(null);
+  const [iterations, setIterations] = createSignal(DEFAULT_ITERATIONS);
+  const [showAdvanced, setShowAdvanced] = createSignal(false);
+  const [promptTemplate, setPromptTemplate] = createSignal(getDefaultPromptTemplate());
+  const [model, setModel] = createSignal<RalphSelectedModel | null>(state.selectedModel);
+  const [variantPreference, setVariantPreference] = createSignal<string | null | undefined>(
+    state.selectedModel?.variant ??
+      getStoredVariantForModel(state.selectedModel?.providerID, state.selectedModel?.modelID)
+  );
+  const [isSubmitting, setIsSubmitting] = createSignal(false);
+  const [isPickingPlan, setIsPickingPlan] = createSignal(false);
+  const [showModelPicker, setShowModelPicker] = createSignal(false);
+  const [showVariantPicker, setShowVariantPicker] = createSignal(false);
+  const [errorMessage, setErrorMessage] = createSignal<string | null>(null);
+  const [modelPickerBoundaryRef, setModelPickerBoundaryRef] = createSignal<HTMLDivElement>();
+  const [modelPickerPortalRef, setModelPickerPortalRef] = createSignal<HTMLDivElement>();
+  let submissionGeneration = 0;
+  let activeSubmission: RalphSubmission | null = null;
+
+  function isCurrentSubmission(submission: RalphSubmission): boolean {
+    return activeSubmission === submission && submission.generation === submissionGeneration;
+  }
+
+  function invalidateSubmission() {
+    submissionGeneration += 1;
+    const submission = activeSubmission;
+    activeSubmission = null;
+    if (submission) void cleanupOwnedSession(submission);
+  }
+
+  function close() {
+    invalidateSubmission();
+    setIsSubmitting(false);
+    setShowModelPicker(false);
+    setShowVariantPicker(false);
+    ralphStore.setShowRalphForm(false);
+  }
+
+  onCleanup(invalidateSubmission);
+
+  const currentModelInfo = createMemo(() => {
+    const sel = model();
+    if (!sel) {
+      // SAFETY: The surrounding shape or discriminator check establishes the string contract used below.
+      return { providerID: null as string | null, providerName: '', modelName: '' };
+    }
+    const provider = visibleProviders().find((p) => p.id === sel.providerID);
+    const m = provider?.models[sel.modelID];
+    return {
+      providerID: sel.providerID,
+      providerName: provider?.name || sel.providerID,
+      modelName: m?.name || sel.modelID,
+    };
+  });
+
+  const availableVariants = createMemo(() => {
+    const sel = model();
+    if (!sel) return [];
+    return getVariantsForModel(sel.providerID, sel.modelID, visibleProviders());
+  });
+
+  const effectiveVariant = createMemo(() => {
+    const sel = model();
+    const variants = availableVariants();
+    if (!sel || variants.length === 0) return null;
+    const preference = variantPreference();
+    if (preference === null) return null;
+    if (preference && variants.includes(preference)) return preference;
+    return null;
+  });
+
+  createEffect<boolean>((wasVisible = false) => {
+    const visible = ralphStore.showRalphForm();
+    if (visible && !wasVisible) {
+      const activeFilePath = state.editorContext.activeFile?.relativePath;
+      setPlanPath(activeFilePath ?? '');
+      setPlanWorkspaceDirectory(
+        normalizeRalphWorkspaceDirectory(state.editorContext.workspacePath)
+      );
+      const initialModel = getInitialRalphModelSelection();
+      setModel(initialModel);
+      setVariantPreference(
+        initialModel?.variant ??
+          getStoredVariantForModel(initialModel?.providerID, initialModel?.modelID)
+      );
+      setErrorMessage(null);
+    }
+    return visible;
+  });
+
+  createEffect(() => {
+    if (!ralphStore.showRalphForm()) return;
+
+    const handleKeydown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (isSubmitting()) {
+        close();
+        return;
+      }
+      if (showModelPicker()) {
+        setShowModelPicker(false);
+        return;
+      }
+      if (showVariantPicker()) {
+        setShowVariantPicker(false);
+        return;
+      }
+      close();
+    };
+
+    document.addEventListener('keydown', handleKeydown, true);
+    onCleanup(() => document.removeEventListener('keydown', handleKeydown, true));
+  });
+
+  async function pickPlanPath() {
+    if (isPickingPlan()) return;
+    setErrorMessage(null);
+    setIsPickingPlan(true);
+    try {
+      const pickedPath = await client.varro.pickWorkspaceFile();
+      if (pickedPath) {
+        setPlanPath(pickedPath.path);
+        setPlanWorkspaceDirectory(
+          normalizeRalphWorkspaceDirectory(pickedPath.workspaceDirectory) ??
+            normalizeRalphWorkspaceDirectory(state.editorContext.workspacePath)
+        );
+      }
+    } catch (err) {
+      setErrorMessage(err instanceof Error ? err.message : 'Failed to pick plan document');
+    } finally {
+      setIsPickingPlan(false);
+    }
+  }
+
+  async function submit() {
+    if (isSubmitting()) return;
+    const path = planPath().trim();
+    const iterationCount = iterations();
+    const selectedModel = model();
+    const reasoningLevel = effectiveVariant();
+    const capturedPromptTemplate = promptTemplate();
+    if (!path) {
+      setErrorMessage('Plan document path is required');
+      return;
+    }
+    if (iterationCount < 1) {
+      setErrorMessage('Iterations must be at least 1');
+      return;
+    }
+    const workspaceDirectory =
+      planWorkspaceDirectory() ??
+      normalizeRalphWorkspaceDirectory(state.editorContext.workspacePath);
+    if (!workspaceDirectory) {
+      setErrorMessage('Open the plan from a workspace folder before starting Ralph');
+      return;
+    }
+    const configModel = selectedModel
+      ? {
+          providerID: selectedModel.providerID,
+          modelID: selectedModel.modelID,
+          variant: reasoningLevel ? reasoningLevel : undefined,
+        }
+      : null;
+    const planLabel = getLeafPathName(path);
+    const permissionMode: RalphConfig['permissionMode'] = 'full';
+    const previousSessionId = state.activeSessionId;
+    const shouldDeletePreviousSession = shouldDeletePreviousBlankSession(
+      previousSessionId,
+      state,
+      previousSessionId ? isSessionAwaitingInput(previousSessionId) : false
+    );
+    const submission: RalphSubmission = {
+      generation: ++submissionGeneration,
+      sessionId: null,
+      workspaceDirectory,
+      cleanupTask: null,
+      cleanupRetryRound: 0,
+      cleanupRetryTimer: null,
+    };
+    activeSubmission = submission;
+    setErrorMessage(null);
+    setIsSubmitting(true);
+
+    try {
+      const session = await client.session.create(
+        {
+          title: `Ralph: ${planLabel}`,
+          permission: getSessionPermissionRulesForMode(permissionMode, 'create'),
+        },
+        { directory: workspaceDirectory }
+      );
+      submission.sessionId = session.id;
+      if (!isCurrentSubmission(submission)) {
+        await cleanupOwnedSession(submission);
+        return;
+      }
+
+      const config: RalphConfig = {
+        managerSessionId: session.id,
+        workspaceDirectory,
+        planDocPath: path,
+        iterations: iterationCount,
+        promptTemplate: capturedPromptTemplate,
+        permissionMode,
+        model: configModel,
+        agent: null,
+        createdAt: Date.now(),
+      };
+
+      const anchorBody: Parameters<typeof client.session.sendAsync>[1] = {
+        parts: [{ type: 'text', text: buildAnchorMessage(config) }],
+        noReply: true,
+      };
+      if (config.model) {
+        anchorBody.model = {
+          providerID: config.model.providerID,
+          modelID: config.model.modelID,
+        };
+        if (config.model.variant) {
+          // SAFETY: The surrounding shape or discriminator check establishes the owner type contract used below.
+          (anchorBody.model as { variant?: string }).variant = config.model.variant;
+        }
+      }
+      await client.session
+        .sendAsync(session.id, anchorBody, { directory: workspaceDirectory })
+        .catch((err) => {
+          logError('ralph-form:sendAsync', err);
+        });
+      if (!isCurrentSubmission(submission)) {
+        await cleanupOwnedSession(submission);
+        return;
+      }
+
+      await selectSession(session.id, { directory: workspaceDirectory });
+      if (!isCurrentSubmission(submission)) {
+        await cleanupOwnedSession(submission);
+        return;
+      }
+      if (previousSessionId && shouldDeletePreviousSession && previousSessionId !== session.id) {
+        await deleteSession(previousSessionId).catch((err) => {
+          logError('ralph-form:deletePrevious', err);
+        });
+      }
+      if (!isCurrentSubmission(submission)) {
+        await cleanupOwnedSession(submission);
+        return;
+      }
+      submission.sessionId = null;
+      activeSubmission = null;
+      void ralphRunner.start(config).catch((err) => {
+        logError('ralph-form:start', err);
+      });
+
+      close();
+    } catch (err) {
+      await cleanupOwnedSession(submission);
+      if (isCurrentSubmission(submission)) {
+        setErrorMessage(err instanceof Error ? err.message : 'Failed to start Ralph loop');
+      }
+    } finally {
+      if (activeSubmission === submission) {
+        activeSubmission = null;
+        setIsSubmitting(false);
+      }
+    }
+  }
+
+  return (
+    <Show when={ralphStore.showRalphForm()}>
+      <Portal>
+        <div class={`ralph-form-overlay ralph-form-overlay-pane-${desktopSessionPaneSide()}`}>
+          <div
+            ref={(element) => {
+              const background = document.querySelector<HTMLElement>('.interactive-session');
+              const backgroundWasInert = background?.hasAttribute('inert') ?? false;
+              const releaseFocusTrap = trapModalFocus(element);
+              background?.setAttribute('inert', '');
+              onCleanup(() => {
+                if (background && !backgroundWasInert) background.removeAttribute('inert');
+                releaseFocusTrap();
+              });
+            }}
+            class="ralph-form-card"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="ralph-form-title"
+            onClick={(e) => {
+              e.stopPropagation();
+              // SAFETY: The surrounding shape or discriminator check establishes the HTMLElement contract used below.
+              const target = e.target as HTMLElement | null;
+              if (target && !target.closest('.ralph-form-model-picker')) {
+                if (showModelPicker()) setShowModelPicker(false);
+                if (showVariantPicker()) setShowVariantPicker(false);
+              }
+            }}
+          >
+            <div class="ralph-form-header">
+              <span id="ralph-form-title" class="ralph-form-title">
+                Start Ralph loop
+              </span>
+              <button type="button" class="ralph-form-close" onClick={close} aria-label="Close">
+                <UiIcon source={xmarkIcon} width={16} height={16} aria-hidden="true" />
+              </button>
+            </div>
+
+            <div
+              class={`ralph-form-body ${showVariantPicker() ? 'ralph-form-body-picker-open' : ''}`}
+            >
+              <Field label="Plan / spec document">
+                <div class="ralph-form-input-row">
+                  <input
+                    type="text"
+                    class="ralph-form-input ralph-form-input-grow"
+                    placeholder="No file selected"
+                    value={planPath()}
+                    readOnly
+                    onClick={() => void pickPlanPath()}
+                    title={planPath() || 'Click to pick a file from the workspace'}
+                  />
+                  <button
+                    type="button"
+                    class="ralph-form-button ralph-form-button-secondary ralph-form-inline-button"
+                    onClick={() => void pickPlanPath()}
+                    disabled={isPickingPlan() || isSubmitting()}
+                  >
+                    {isPickingPlan() ? 'Picking…' : planPath() ? 'Change…' : 'Pick file'}
+                  </button>
+                </div>
+              </Field>
+
+              <Field label="Iterations" as="div">
+                <div class="ralph-form-stepper">
+                  <button
+                    type="button"
+                    class="ralph-form-stepper-button"
+                    aria-label="Decrease iterations"
+                    onClick={() => setIterations(Math.max(1, iterations() - 1))}
+                    disabled={iterations() <= 1}
+                  >
+                    −
+                  </button>
+                  <input
+                    type="number"
+                    min="1"
+                    max="500"
+                    class="ralph-form-input ralph-form-stepper-input"
+                    value={iterations()}
+                    onInput={(e) => setIterations(Math.max(1, Number(e.currentTarget.value) || 1))}
+                  />
+                  <button
+                    type="button"
+                    class="ralph-form-stepper-button"
+                    aria-label="Increase iterations"
+                    onClick={() => setIterations(Math.min(500, iterations() + 1))}
+                    disabled={iterations() >= 500}
+                  >
+                    +
+                  </button>
+                </div>
+              </Field>
+
+              <Field label="Model" as="div">
+                <div ref={setModelPickerBoundaryRef} class="ralph-form-model-picker">
+                  <ModelPickerButton
+                    providerID={currentModelInfo().providerID}
+                    providerName={currentModelInfo().providerName}
+                    modelName={currentModelInfo().modelName}
+                    canEllipsize={true}
+                    expanded={showModelPicker()}
+                    onToggle={() => {
+                      setShowVariantPicker(false);
+                      setShowModelPicker(!showModelPicker());
+                    }}
+                  />
+                  <Show when={availableVariants().length > 0}>
+                    <VariantPicker
+                      boundaryRef={modelPickerBoundaryRef()}
+                      alignTo="right"
+                      popupGap={6}
+                      variants={availableVariants()}
+                      selectedVariant={effectiveVariant() ?? null}
+                      selectedLabel={
+                        effectiveVariant() ? formatVariantLabel(effectiveVariant()!) : 'Default'
+                      }
+                      showPicker={showVariantPicker()}
+                      getLabel={formatVariantLabel}
+                      onToggle={() => {
+                        setShowModelPicker(false);
+                        setShowVariantPicker(!showVariantPicker());
+                      }}
+                      onSelect={(variant) => {
+                        const sel = model();
+                        if (sel) {
+                          setModel({
+                            providerID: sel.providerID,
+                            modelID: sel.modelID,
+                            variant: variant || undefined,
+                          });
+                          setVariantPreference(variant);
+                        }
+                        setShowVariantPicker(false);
+                      }}
+                    />
+                  </Show>
+                </div>
+              </Field>
+
+              <button
+                type="button"
+                class="ralph-form-toggle"
+                onClick={() => setShowAdvanced(!showAdvanced())}
+              >
+                {showAdvanced() ? '▾' : '▸'} Advanced - loop prompt template
+              </button>
+              <Show when={showAdvanced()}>
+                <Field label="Prompt template">
+                  <textarea
+                    class="ralph-form-input ralph-form-textarea"
+                    rows="10"
+                    value={promptTemplate()}
+                    onInput={(e) => setPromptTemplate(e.currentTarget.value)}
+                  />
+                  <span class="ralph-form-hint">
+                    Variables: {'{{iteration}}'} {'{{totalIterations}}'} {'{{planPath}}'}{' '}
+                    {'{{previousSummary}}'}
+                  </span>
+                </Field>
+              </Show>
+
+              <Show when={errorMessage()}>
+                <div class="ralph-form-error">{errorMessage()}</div>
+              </Show>
+            </div>
+
+            <div class="ralph-form-footer">
+              <button type="button" class="ralph-form-button" onClick={close}>
+                Cancel
+              </button>
+              <button
+                type="button"
+                class="ralph-form-button ralph-form-button-primary"
+                onClick={() => void submit()}
+                disabled={isSubmitting()}
+              >
+                {isSubmitting() ? 'Starting…' : 'Start loop'}
+              </button>
+            </div>
+            <div ref={setModelPickerPortalRef} class="ralph-form-picker-portal" />
+            <Show when={showModelPicker() ? modelPickerPortalRef() : undefined}>
+              {(mount) => (
+                <Portal mount={mount()}>
+                  <ModelPicker
+                    currentSelection={model()}
+                    showManageModels={false}
+                    popupGap={6}
+                    matchTriggerWidth={true}
+                    onSelect={(sel) => {
+                      if (sel.providerID && sel.modelID) {
+                        const variants = getVariantsForModel(
+                          sel.providerID,
+                          sel.modelID,
+                          visibleProviders()
+                        );
+                        const preference = variantPreference();
+                        const rememberedVariant = getStoredVariantForModel(
+                          sel.providerID,
+                          sel.modelID
+                        );
+                        const keepVariant =
+                          preference === null
+                            ? null
+                            : preference && variants.includes(preference)
+                              ? preference
+                              : rememberedVariant === null
+                                ? null
+                                : rememberedVariant && variants.includes(rememberedVariant)
+                                  ? rememberedVariant
+                                  : undefined;
+                        setModel({
+                          providerID: sel.providerID,
+                          modelID: sel.modelID,
+                          variant: keepVariant ? keepVariant : undefined,
+                        });
+                        setVariantPreference(keepVariant);
+                      }
+                    }}
+                    onClose={() => setShowModelPicker(false)}
+                  />
+                </Portal>
+              )}
+            </Show>
+          </div>
+        </div>
+      </Portal>
+    </Show>
+  );
+}
+
+function Field(props: { label: string; children: JSX.Element; as?: 'label' | 'div' }) {
+  return (
+    <Dynamic component={props.as ?? 'label'} class="ralph-form-field">
+      <span class="ralph-form-label">{props.label}</span>
+      {props.children}
+    </Dynamic>
+  );
+}

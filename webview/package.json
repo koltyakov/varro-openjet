@@ -1,0 +1,42 @@
+{
+  "name": "varro-openjet-webview",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Build workspace for the Varro webview running inside JetBrains JCEF.",
+  "scripts": {
+    "sync": "node scripts/sync-upstream.mjs",
+    "build": "vite build",
+    "watch": "vite build --watch",
+    "typecheck": "tsc --noEmit"
+  },
+  "comments": {
+    "versions": "Dependency versions are pinned to the upstream Varro revision recorded in upstream.json so the vendored sources build against the libraries they were written for.",
+    "toolchain": "node/npm are pinned with Volta and matched exactly by the Dockerfile. npm writes package-lock.json differently across versions, so an unpinned toolchain makes the lockfile churn on every build."
+  },
+  "dependencies": {
+    "dompurify": "3.4.15",
+    "highlight.js": "11.12.0",
+    "jsonc-parser": "3.3.1",
+    "marked": "18.0.12",
+    "mermaid": "11.17.2",
+    "solid-js": "1.9.15"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "4.3.3",
+    "iconoir": "7.12.1",
+    "material-icon-theme": "5.38.1",
+    "tailwindcss": "4.3.3",
+    "typescript": "7.0.2",
+    "vite": "8.2.2",
+    "vite-plugin-solid": "2.11.14"
+  },
+  "volta": {
+    "node": "24.21.0",
+    "npm": "10.9.9"
+  },
+  "engines": {
+    "node": "^22.22.2 || >=24.15.0",
+    "npm": ">=10.9.9 <11"
+  }
+}

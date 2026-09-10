@@ -1,0 +1,3285 @@
+/* Rich Composer (contenteditable with inline chips) */
+.rich-composer {
+  --rich-composer-line-height: calc(
+    var(--varro-chat-font-size, var(--vscode-font-size, 13px)) * 1.7
+  );
+  min-height: 30px;
+  max-height: 200px;
+  width: calc(100% + 7px);
+  overflow-y: auto;
+  background: transparent;
+  padding: 4px 11px 4px 4px;
+  margin-bottom: 8px;
+  font-size: var(--varro-chat-font-size, var(--vscode-font-size, 13px));
+  line-height: var(--rich-composer-line-height);
+  color: var(--color-vscode-input-fg);
+  outline: none;
+  font-family: inherit;
+  font-weight: 400;
+  border: none;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  cursor: text;
+}
+
+.rich-composer[data-empty='true']::before {
+  content: attr(data-placeholder);
+  color: var(--color-vscode-input-placeholder);
+  pointer-events: none;
+  position: absolute;
+  left: 4px;
+  right: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.inline-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 400;
+  padding: 1px 5px;
+  margin: 0 1px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-inset);
+  background: color-mix(in srgb, var(--color-vscode-fg) 10%, var(--color-vscode-input-bg));
+  color: var(--color-vscode-fg);
+  vertical-align: -1px;
+  line-height: 1.35;
+  cursor: default;
+  user-select: none;
+  white-space: nowrap;
+  max-width: 220px;
+}
+
+.rich-composer .inline-chip:hover {
+  background: color-mix(in srgb, var(--color-vscode-fg) 12%, var(--color-vscode-input-bg));
+}
+
+.rich-composer .inline-chip {
+  position: relative;
+  isolation: isolate;
+  vertical-align: middle;
+  transform: translateY(-1px);
+}
+
+.rich-composer .inline-chip.selection-crossed::before,
+.rich-composer .inline-chip-icon-wrap.selection-crossed::before {
+  content: '';
+  position: absolute;
+  z-index: -1;
+  top: calc(50% - 0.5px);
+  left: -2px;
+  right: -2px;
+  height: var(--rich-composer-line-height);
+  transform: translateY(-50%);
+  background: var(
+    --vscode-editor-selectionBackground,
+    color-mix(in srgb, var(--color-vscode-accent) 30%, transparent)
+  );
+}
+
+.rich-composer .composer-session-reference .inline-chip-icon-wrap.selection-crossed::before,
+.rich-composer .composer-external-link .inline-chip-icon-wrap.selection-crossed::before {
+  top: 0;
+  right: -4px;
+  bottom: 0;
+  height: auto;
+  transform: none;
+}
+
+.rich-composer .inline-chip[data-chip-type='mention-file'],
+.rich-composer .inline-chip[data-chip-type='image'] {
+  cursor: pointer;
+}
+
+.composer-session-reference,
+.composer-external-link {
+  display: inline;
+  margin: 0 1px;
+  font-size: inherit;
+  font-weight: 500;
+  cursor: text;
+}
+
+.rich-composer .composer-session-reference.selection-end-crossed::after,
+.rich-composer .composer-external-link.selection-end-crossed::after {
+  content: '';
+  display: inline-block;
+  width: 3px;
+  height: var(--rich-composer-line-height);
+  margin-right: -3px;
+  vertical-align: top;
+  background: var(
+    --vscode-editor-selectionBackground,
+    color-mix(in srgb, var(--color-vscode-accent) 30%, transparent)
+  );
+}
+
+.composer-session-reference,
+.composer-external-link {
+  color: inherit;
+  font-weight: inherit;
+  user-select: text;
+  text-decoration-line: underline;
+  text-decoration-style: dotted;
+  text-decoration-thickness: 1px;
+  text-decoration-color: color-mix(in srgb, currentColor 45%, transparent);
+  text-underline-offset: 2px;
+}
+
+.composer-session-reference .inline-chip-icon-wrap,
+.composer-external-link .inline-chip-icon-wrap {
+  display: inline-block;
+  position: relative;
+  isolation: isolate;
+  margin-right: 3px;
+  user-select: none;
+}
+
+.composer-session-reference .inline-chip-icon-wrap::after {
+  content: '\2060';
+}
+
+.composer-external-link .link-leading-content {
+  display: inline;
+}
+
+.composer-external-link .inline-chip-icon-wrap::after {
+  content: '\2060';
+}
+
+.composer-session-reference .inline-chip-icon,
+.composer-external-link .inline-chip-icon {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  vertical-align: -2px;
+  opacity: 0.58;
+  object-fit: contain;
+}
+
+.inline-chip.disabled {
+  color: var(--color-vscode-fg-muted);
+  opacity: 0.55;
+}
+
+.inline-chip.disabled .inline-chip-label {
+  text-decoration: line-through;
+}
+
+.inline-chip .inline-chip-icon-wrap {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.inline-chip .inline-chip-icon {
+  color: var(--color-vscode-fg-muted);
+  flex-shrink: 0;
+}
+
+.inline-chip .file-type-icon {
+  width: 11px;
+  height: 11px;
+  object-fit: contain;
+}
+
+.inline-chip .material-chip-icon {
+  display: block;
+  width: 11px;
+  height: 11px;
+  object-fit: contain;
+}
+
+.inline-chip .inline-chip-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 160px;
+}
+
+.inline-chip .inline-chip-detail {
+  color: var(--color-vscode-muted);
+  font-size: 10px;
+  flex-shrink: 0;
+}
+
+.inline-chip .inline-chip-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-pill);
+  background: none;
+  appearance: none;
+  color: color-mix(in srgb, var(--color-vscode-fg) 72%, var(--color-vscode-input-bg));
+  cursor: pointer;
+  flex-shrink: 0;
+  margin-left: -3px;
+}
+
+.inline-chip .inline-chip-remove:hover {
+  background: color-mix(in srgb, var(--color-vscode-fg) 12%, transparent);
+  color: var(--color-vscode-fg);
+}
+
+.chat-thinking-box {
+  outline: none;
+  position: relative;
+  color: var(--color-vscode-muted);
+  border: 1px solid var(--color-vscode-border-soft);
+  border-radius: var(--radius-card);
+  background: transparent;
+  overflow: hidden;
+  transition: background-color 0.1s;
+}
+
+.chat-thinking-box .thinking-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  line-height: 1.2;
+  color: var(--color-vscode-fg);
+  opacity: 0.94;
+  cursor: pointer;
+  padding: var(--space-4) var(--space-5);
+  border: none;
+  background: transparent;
+  width: 100%;
+  text-align: left;
+  transition: opacity 0.1s;
+}
+
+.chat-thinking-box .thinking-header:hover {
+  opacity: 1;
+}
+
+.chat-thinking-box .thinking-header:disabled {
+  cursor: default;
+}
+
+.chat-thinking-box .thinking-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+}
+
+.chat-thinking-box .thinking-topic-icon {
+  flex: none;
+  display: block;
+  width: 12px;
+  height: 12px;
+  color: var(--color-vscode-fg-muted);
+}
+
+.chat-thinking-box .thinking-topic-icon.thinking-in-progress {
+  animation: pulse-soft 1.5s ease-in-out infinite;
+}
+
+.chat-thinking-box .thinking-label-text {
+  display: block;
+  min-width: 0;
+  font-weight: 400;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-thinking-box .thinking-duration {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.2;
+  font-variant-numeric: tabular-nums;
+  word-spacing: -0.2em;
+  color: var(--color-vscode-fg-muted);
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.chat-thinking-box .thinking-chevron {
+  width: 10px;
+  height: 10px;
+  flex-shrink: 0;
+  color: var(--color-vscode-fg);
+  opacity: 0.35;
+  transition:
+    transform 0.1s,
+    opacity 0.1s;
+}
+
+.chat-thinking-box .thinking-header:hover .thinking-chevron {
+  opacity: 0.7;
+}
+
+.chat-thinking-box .thinking-chevron.expanded {
+  transform: rotate(90deg);
+  opacity: 0.7;
+}
+
+.chat-thinking-box .thinking-content {
+  border-top: 1px solid var(--color-vscode-border-soft);
+  padding: 0;
+  max-height: 180px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-color: color-mix(in srgb, var(--color-vscode-fg) 8%, transparent) transparent;
+}
+
+.chat-thinking-box .thinking-content::-webkit-scrollbar {
+  width: 5px;
+}
+
+.chat-thinking-box .thinking-content::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--color-vscode-fg) 8%, transparent);
+}
+
+.chat-thinking-box .thinking-content.has-more-below {
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 18px), transparent);
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 18px), transparent);
+}
+
+.chat-thinking-box .thinking-content.has-more-above {
+  -webkit-mask-image: linear-gradient(to bottom, transparent, #000 18px);
+  mask-image: linear-gradient(to bottom, transparent, #000 18px);
+}
+
+.chat-thinking-box .thinking-content.has-more-above.has-more-below {
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    transparent,
+    #000 18px,
+    #000 calc(100% - 18px),
+    transparent
+  );
+  mask-image: linear-gradient(
+    to bottom,
+    transparent,
+    #000 18px,
+    #000 calc(100% - 18px),
+    transparent
+  );
+}
+
+.chat-thinking-box .thinking-content .thinking-item {
+  padding: 10px 12px 12px;
+  position: relative;
+  font-size: 11.5px;
+  line-height: 1.65;
+  color: var(--color-vscode-fg-soft);
+}
+
+.shimmer-progress {
+  background: linear-gradient(
+    90deg,
+    var(--color-vscode-muted) 0%,
+    var(--color-vscode-muted) 30%,
+    var(--color-vscode-thinking-shimmer) 50%,
+    var(--color-vscode-muted) 70%,
+    var(--color-vscode-muted) 100%
+  );
+  background-size: 400% 100%;
+  background-clip: text;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  /* Text-clipped backgrounds repaint; keep waiting indicators below display frame rate. */
+  animation: chat-thinking-shimmer 2s steps(12) infinite;
+}
+
+.model-change-indicator {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 0;
+  margin-bottom: 10px;
+}
+
+.model-change-indicator::before,
+.model-change-indicator::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: color-mix(in srgb, var(--color-vscode-border) 30%, transparent);
+}
+
+.model-change-label {
+  font-size: 11px;
+  color: var(--color-vscode-muted);
+  white-space: nowrap;
+}
+
+.model-change-label:focus-visible {
+  border-radius: 2px;
+  outline: 1px solid var(--color-vscode-focus-border);
+  outline-offset: 2px;
+}
+
+.message-compaction-divider {
+  width: 100%;
+  min-width: 0;
+}
+
+.model-change-narrow {
+  display: none;
+}
+
+@media (max-width: 640px) {
+  .model-change-normal {
+    display: none;
+  }
+
+  .model-change-narrow {
+    display: inline;
+  }
+}
+
+.loading-indicator {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 0 2px;
+  color: var(--color-vscode-muted);
+  font-size: 12.5px;
+}
+
+.loading-indicator .loading-spinner {
+  width: 14px;
+  height: 14px;
+  border: 1.5px solid color-mix(in srgb, var(--color-vscode-accent) 25%, transparent);
+  border-top-color: var(--color-vscode-accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+.loading-indicator.stale {
+  color: var(--color-vscode-warning, #cca700);
+}
+
+.loading-indicator.is-compacting {
+  color: color-mix(in srgb, var(--color-vscode-fg) 82%, transparent);
+}
+
+.loading-verb .chat-animated-ellipsis {
+  margin-left: 0.2em;
+}
+
+.loading-elapsed {
+  margin-left: auto;
+  margin-right: var(--space-2);
+  opacity: 0.5;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.loading-action {
+  font-size: 11px;
+  color: var(--color-vscode-accent);
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0 2px;
+  text-decoration: underline;
+  text-decoration-color: transparent;
+  transition: text-decoration-color 0.15s;
+}
+
+.loading-action:hover {
+  text-decoration-color: currentColor;
+}
+
+.diff-summary {
+  margin-top: 8px;
+  width: 100%;
+}
+
+.diff-summary .diff-summary-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--color-vscode-fg);
+  opacity: 0.8;
+  border: none;
+  background: none;
+  cursor: pointer;
+  padding: 6px 4px;
+  border-radius: var(--radius-chip);
+  transition: opacity 0.1s;
+  user-select: none;
+  -webkit-user-select: none;
+  caret-color: transparent;
+}
+
+.diff-summary .diff-summary-btn:hover {
+  opacity: 1;
+}
+
+.diff-summary .diff-summary-content {
+  margin-top: 4px;
+}
+
+.change-set-omission {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  align-items: baseline;
+  width: 100%;
+  margin-top: 8px;
+  padding: 7px 9px;
+  border: 1px solid color-mix(in srgb, var(--color-vscode-border) 45%, transparent);
+  border-radius: var(--radius-card);
+  background: color-mix(in srgb, var(--color-vscode-fg) 3%, transparent);
+  color: var(--color-vscode-fg);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.change-set-omission-title {
+  font-weight: 600;
+}
+
+.change-set-omission-detail {
+  opacity: 0.68;
+}
+
+.diff-view-widget {
+  border: 1px solid color-mix(in srgb, var(--color-vscode-border) 20%, transparent);
+  border-radius: var(--radius-card);
+  background: color-mix(in srgb, var(--color-vscode-fg) 3%, transparent);
+  overflow: hidden;
+}
+
+.diff-view-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 9px;
+  font-size: 11px;
+  line-height: 14px;
+  transition: background-color 0.1s;
+}
+
+.diff-view-item-expandable {
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.diff-view-file + .diff-view-file {
+  border-top: 1px solid color-mix(in srgb, var(--color-vscode-border) 12%, transparent);
+}
+
+.diff-view-icon {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  opacity: 0.7;
+}
+
+.diff-view-filename-slot {
+  flex: 1;
+  min-width: 0;
+}
+
+.diff-view-filename {
+  display: block;
+  max-width: 100%;
+  padding: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-vscode-fg);
+  opacity: 0.8;
+  text-align: left;
+}
+
+.diff-view-filename:hover:not(:disabled) {
+  text-decoration: underline;
+}
+
+.diff-view-stats {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+  margin-left: 1px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.diff-lines-added {
+  color: var(--color-vscode-lines-add);
+}
+.diff-lines-removed {
+  color: var(--color-vscode-lines-del);
+}
+
+.diff-view-widget-inline {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  overflow: visible;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+}
+
+.diff-view-widget-inline .diff-view-file {
+  overflow: hidden;
+  border: 1px solid var(--color-vscode-border-default);
+  border-radius: var(--radius-card);
+  background: var(--color-vscode-result-editor-bg);
+}
+
+.diff-view-widget-inline .diff-view-item {
+  padding-block: 5px;
+  background: color-mix(in srgb, var(--color-vscode-fg) 3%, var(--color-vscode-result-editor-bg));
+}
+
+.diff-view-widget-inline .diff-view-item-expandable:hover {
+  background: color-mix(in srgb, var(--color-vscode-fg) 7%, var(--color-vscode-result-editor-bg));
+}
+
+.diff-view-widget-inline .diff-view-filename {
+  opacity: 0.9;
+}
+
+.diff-view-widget-inline .diff-view-file + .diff-view-file {
+  border-top: 1px solid color-mix(in srgb, var(--color-vscode-border) 20%, transparent);
+}
+
+.diff-view-lines-shell {
+  position: relative;
+  min-width: 0;
+}
+
+.diff-view-lines {
+  --diff-view-font-size: var(--varro-chat-editor-font-size, 12px);
+  --diff-view-line-height: calc(var(--diff-view-font-size) * 1.4);
+
+  position: relative;
+  overflow: hidden;
+  scrollbar-width: none;
+  border-top: 1px solid var(--color-vscode-border-default);
+  background: var(--color-vscode-result-editor-bg);
+  container-type: inline-size;
+  font-family: var(--font-mono);
+  font-size: var(--diff-view-font-size);
+  line-height: var(--diff-view-line-height);
+  font-variant-numeric: tabular-nums;
+  tab-size: 2;
+}
+
+.diff-view-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: var(--z-modal);
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  box-sizing: border-box;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  padding: var(--chat-horizontal-padding);
+  background: color-mix(in srgb, var(--color-vscode-list-bg) 75%, transparent);
+  backdrop-filter: blur(40px) brightness(0.3);
+  -webkit-backdrop-filter: blur(40px) brightness(0.3);
+}
+
+.interactive-list-shell:has(.diff-view-overlay) > .interactive-list {
+  filter: blur(40px);
+  opacity: 0.1;
+}
+
+.diff-view-overlay-panel {
+  display: flex;
+  width: min(100%, calc(var(--chat-content-max-width) - (var(--chat-horizontal-padding) * 2)));
+  max-height: 100%;
+  flex: 0 1 auto;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--color-vscode-border-default);
+  border-radius: var(--radius-card);
+  background: var(--color-vscode-result-editor-bg);
+  box-shadow: var(--shadow-popover);
+}
+
+.diff-view-overlay-header {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 9px;
+  border-bottom: 1px solid var(--color-vscode-border-default);
+  background: color-mix(in srgb, var(--color-vscode-fg) 3%, var(--color-vscode-result-editor-bg));
+  font-size: 11px;
+  line-height: 14px;
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.diff-view-overlay-title {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+}
+
+.diff-view-overlay-filename {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 100%;
+  padding: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-vscode-fg);
+  text-align: left;
+}
+
+.diff-view-overlay-title .diff-view-stats {
+  margin-left: auto;
+}
+
+.diff-view-overlay-filename:hover:not(:disabled) {
+  text-decoration: underline;
+}
+
+.diff-view-overlay-close {
+  display: inline-flex;
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  color: var(--color-vscode-fg);
+  opacity: 0.35;
+}
+
+.diff-view-overlay-close:hover {
+  opacity: 0.8;
+}
+
+.diff-view-overlay-close:focus-visible {
+  outline: none;
+  border-radius: var(--radius-inset);
+  background: color-mix(in srgb, var(--color-vscode-accent) 14%, transparent);
+  opacity: 1;
+}
+
+.diff-view-overlay-content {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+.diff-view-overlay .diff-view-overlay-lines {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  max-height: none;
+  overflow: auto;
+  border-top: none;
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-vscode-chat-scrollbar-thumb) transparent;
+  overscroll-behavior: contain;
+}
+
+.diff-view-overlay .diff-view-overlay-lines::-webkit-scrollbar {
+  display: block;
+  width: 10px;
+  height: 10px;
+}
+
+.diff-view-overlay .diff-view-overlay-lines::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: var(--radius-pill);
+  background: var(--color-vscode-chat-scrollbar-thumb) padding-box;
+}
+
+.diff-view-lines:focus {
+  overflow: auto;
+  outline: none;
+}
+
+.diff-view-lines::-webkit-scrollbar {
+  display: none;
+}
+
+.diff-view-file:has(.diff-view-lines:focus-visible) {
+  border-color: color-mix(in srgb, var(--color-vscode-accent) 38%, var(--color-vscode-border));
+}
+
+.diff-view-scrollbar {
+  position: absolute;
+  z-index: var(--z-chrome-raised);
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.diff-view-lines-shell:has(.diff-view-lines:focus) .diff-view-scrollbar {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.diff-view-scrollbar-vertical {
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 10px;
+}
+
+.diff-view-scrollbar-horizontal {
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 10px;
+}
+
+.diff-view-scrollbar-thumb {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 2px solid transparent;
+  border-radius: var(--radius-pill);
+  background: var(
+      --vscode-scrollbarSlider-background,
+      color-mix(in srgb, var(--color-vscode-fg) 20%, transparent)
+    )
+    padding-box;
+  touch-action: none;
+  cursor: grab;
+}
+
+.diff-view-scrollbar-thumb:hover {
+  background: var(
+      --vscode-scrollbarSlider-hoverBackground,
+      color-mix(in srgb, var(--color-vscode-fg) 32%, transparent)
+    )
+    padding-box;
+}
+
+.diff-view-scrollbar-thumb:active {
+  cursor: grabbing;
+}
+
+.diff-view-line {
+  --diff-view-line-background: var(--color-vscode-result-editor-bg);
+
+  display: grid;
+  grid-template-columns: 39px 18px minmax(max-content, 1fr);
+  width: 100%;
+  min-height: var(--diff-view-line-height);
+}
+
+.diff-view-lines-content {
+  width: max-content;
+  min-width: 100%;
+  /* Highlighted lines update in place while the surrounding virtualized row
+     moves. Do not reuse a cached glyph paint from the line's old position. */
+  will-change: contents;
+}
+
+.diff-view-gap {
+  position: sticky;
+  z-index: var(--z-raised);
+  left: 8px;
+  display: flex;
+  align-items: center;
+  min-height: 22px;
+  width: calc(100cqi - 16px);
+  margin: 4px 8px;
+  padding: 0 8px;
+  border-radius: var(--radius-chip);
+  color: var(--color-vscode-muted);
+  background: color-mix(in srgb, var(--color-vscode-fg) 9%, var(--color-vscode-result-editor-bg));
+  font-family: var(--font-sans);
+  font-size: 10px;
+  line-height: 1;
+}
+
+.diff-view-lines-shell-expandable::after {
+  position: absolute;
+  z-index: var(--z-chrome);
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 8.5px;
+  pointer-events: none;
+  content: '';
+  background: linear-gradient(to bottom, transparent, var(--color-vscode-result-editor-bg));
+}
+
+.diff-view-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  padding: 0;
+  color: var(--color-vscode-fg);
+  background: transparent;
+  line-height: 1;
+  opacity: 0.35;
+  cursor: pointer;
+  transition:
+    color 0.1s,
+    opacity 0.1s;
+}
+
+.diff-view-item:hover .diff-view-toggle,
+.diff-view-toggle:focus-visible {
+  opacity: 0.7;
+}
+
+.diff-view-item:hover .diff-view-toggle:hover {
+  opacity: 1;
+}
+
+.diff-view-toggle:focus-visible {
+  outline: 1px solid var(--color-vscode-accent);
+  outline-offset: -2px;
+}
+
+.diff-view-preview-state {
+  padding: 6px 9px;
+  border-top: 1px solid var(--color-vscode-border-default);
+  color: var(--color-vscode-muted);
+  background: var(--color-vscode-result-editor-bg);
+  font-size: 10.5px;
+  line-height: 1.35;
+}
+
+.diff-view-preview-truncated {
+  color: color-mix(in srgb, var(--color-vscode-warning) 82%, var(--color-vscode-fg));
+}
+
+.diff-view-lines-unnumbered .diff-view-line {
+  grid-template-columns: 18px minmax(max-content, 1fr);
+}
+
+.diff-view-lines-unnumbered .diff-view-line-number {
+  display: none;
+}
+
+.diff-view-lines-unnumbered .diff-view-line-marker {
+  left: 0;
+}
+
+.diff-view-line-number {
+  position: sticky;
+  z-index: var(--z-lifted);
+  left: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 0 6px 0 4px;
+  color: var(--color-vscode-muted);
+  font-size: calc(var(--diff-view-font-size) - 2px);
+  line-height: 1;
+  text-align: right;
+  user-select: none;
+  border-right: 1px solid color-mix(in srgb, var(--color-vscode-border) 16%, transparent);
+  background:
+    linear-gradient(var(--diff-view-line-background), var(--diff-view-line-background)),
+    var(--color-vscode-result-editor-bg);
+}
+
+.diff-view-line-marker {
+  position: sticky;
+  z-index: var(--z-lifted);
+  left: 39px;
+  display: block;
+  padding: 0;
+  text-align: center;
+  user-select: none;
+  background:
+    linear-gradient(var(--diff-view-line-background), var(--diff-view-line-background)),
+    var(--color-vscode-result-editor-bg);
+}
+
+.diff-view-line-content {
+  display: block;
+  min-width: 0;
+  margin: 0;
+  padding: 0 12px 0 6px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  color: inherit;
+  font: inherit;
+  white-space: pre;
+}
+
+.diff-view-line-content :is(.hljs-comment, .hljs-quote) {
+  color: var(--color-code-comment);
+}
+
+.diff-view-line-content :is(.hljs-keyword, .hljs-selector-tag, .hljs-subst) {
+  color: var(--color-code-keyword);
+}
+
+.diff-view-line-content :is(.hljs-string, .hljs-doctag, .hljs-regexp, .hljs-meta .hljs-string) {
+  color: var(--color-code-string);
+}
+
+.diff-view-line-content :is(.hljs-title, .hljs-title.class_, .hljs-title.function_) {
+  color: var(--color-code-title);
+}
+
+.diff-view-line-content :is(.hljs-number, .hljs-symbol, .hljs-bullet) {
+  color: var(--color-code-number);
+}
+
+.diff-view-line-content :is(.hljs-literal, .hljs-type, .hljs-meta, .hljs-section) {
+  color: var(--color-code-literal);
+}
+
+.diff-view-line-content :is(.hljs-built_in, .hljs-code, .hljs-addition) {
+  color: var(--color-code-built_in);
+}
+
+.diff-view-line-content :is(.hljs-attr, .hljs-attribute, .hljs-property, .hljs-template-variable) {
+  color: var(--color-code-attr);
+}
+
+.diff-view-line-content :is(.hljs-variable, .hljs-name, .hljs-selector-id, .hljs-selector-class) {
+  color: var(--color-code-variable);
+}
+
+.diff-view-line-content :is(.hljs-operator, .hljs-punctuation, .hljs-deletion) {
+  color: var(--color-code-operator);
+}
+
+.diff-view-line-addition {
+  --diff-view-line-background: var(
+    --vscode-diffEditor-insertedLineBackground,
+    color-mix(in srgb, var(--color-vscode-lines-add) 17%, var(--color-vscode-result-editor-bg))
+  );
+
+  color: var(--color-vscode-fg);
+  background: var(--diff-view-line-background);
+  box-shadow: inset 3px 0 color-mix(in srgb, var(--color-vscode-lines-add) 72%, transparent);
+}
+
+.diff-view-line-deletion {
+  --diff-view-line-background: var(
+    --vscode-diffEditor-removedLineBackground,
+    color-mix(in srgb, var(--color-vscode-lines-del) 17%, var(--color-vscode-result-editor-bg))
+  );
+
+  color: var(--color-vscode-fg);
+  background: var(--diff-view-line-background);
+  box-shadow: inset 3px 0 color-mix(in srgb, var(--color-vscode-lines-del) 72%, transparent);
+}
+
+.diff-view-line-addition .diff-view-line-number,
+.diff-view-lines-unnumbered .diff-view-line-addition .diff-view-line-marker {
+  box-shadow: inset 3px 0 color-mix(in srgb, var(--color-vscode-lines-add) 72%, transparent);
+}
+
+.diff-view-line-deletion .diff-view-line-number,
+.diff-view-lines-unnumbered .diff-view-line-deletion .diff-view-line-marker {
+  box-shadow: inset 3px 0 color-mix(in srgb, var(--color-vscode-lines-del) 72%, transparent);
+}
+
+.diff-view-line-addition .diff-view-line-marker {
+  color: var(--color-vscode-lines-add);
+  font-weight: 600;
+}
+
+.diff-view-line-deletion .diff-view-line-marker {
+  color: var(--color-vscode-lines-del);
+  font-weight: 600;
+}
+
+kbd {
+  border: 1px solid color-mix(in srgb, var(--color-vscode-border) 60%, transparent);
+  border-radius: var(--radius-xs);
+  padding: 0px 4px;
+  font-size: 10px;
+  background: var(--color-vscode-input-bg);
+  color: var(--color-vscode-muted);
+  font-family: var(--font-mono);
+  /* VSCode's injected webview defaults style kbd as a keybinding label with
+     an inset bottom shadow; without this reset the pill shows a dark strip
+     above its bottom border. */
+  box-shadow: none;
+}
+
+.chat-tool-invocation-part {
+  /* Left edge of the header title: header padding + icon width + gap. The
+     detail body indents to the same line so it reads as owned by the header
+     rather than as a separate block. Kept as a variable so the two stay in
+     sync if the icon or header padding changes. */
+  --tool-detail-indent: calc(var(--space-5) + 12px + 6px);
+
+  margin: 0;
+  border: 1px solid var(--color-vscode-border-soft);
+  border-radius: var(--radius-card);
+  background: transparent;
+  overflow: hidden;
+  transition: background-color 0.1s;
+}
+
+.chat-tool-invocation-part:has(.tool-invocation-chevron.expanded) {
+  background: var(--color-vscode-surface-subtle-alt);
+  border-color: color-mix(in srgb, var(--color-vscode-border) 14%, transparent);
+}
+
+.chat-tool-invocation-part.tool-invocation-task {
+  border-color: color-mix(in srgb, var(--color-vscode-accent) 32%, transparent);
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--color-vscode-accent) 10%, transparent),
+    color-mix(in srgb, var(--color-vscode-accent) 3%, transparent) 58%,
+    transparent
+  );
+  transition: border-color 0.1s;
+}
+
+.chat-tool-invocation-part.tool-invocation-task:hover {
+  border-color: color-mix(in srgb, var(--color-vscode-accent) 48%, transparent);
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--color-vscode-accent) 14%, transparent),
+    color-mix(in srgb, var(--color-vscode-accent) 5%, transparent) 58%,
+    transparent
+  );
+}
+
+/* Expanding must not change the header: it keeps the same accent gradient as a
+   collapsed subagent card, so a card does not restyle itself under the cursor.
+   Only the border firms up. The detail body goes neutral separately, below. */
+.chat-tool-invocation-part.tool-invocation-task:has(.tool-invocation-chevron.expanded) {
+  border-color: color-mix(in srgb, var(--color-vscode-accent) 42%, transparent);
+  background: linear-gradient(
+    90deg,
+    color-mix(in srgb, var(--color-vscode-accent) 10%, transparent),
+    color-mix(in srgb, var(--color-vscode-accent) 3%, transparent) 58%,
+    transparent
+  );
+}
+
+/* The accent belongs to the card's identity, not to its content. Tinting the
+   detail washed subagent output in colour and made it read differently from
+   every other tool's. This is opaque (mixed into list-bg), so it covers the
+   header gradient behind it and matches a generic expanded card exactly. */
+.chat-tool-invocation-part.tool-invocation-task .tool-invocation-detail {
+  background: var(--color-vscode-surface-subtle-alt);
+}
+
+.chat-tool-invocation-part.tool-invocation-task .tool-invocation-title {
+  font-weight: 400;
+}
+
+.chat-tool-invocation-part:not(:last-child) {
+  margin-bottom: 0;
+}
+
+.chat-tool-invocation-part .tool-invocation-header-shell {
+  position: relative;
+}
+
+.chat-tool-invocation-part .tool-invocation-header {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 6px;
+  padding: var(--space-4) var(--space-5);
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: 12.5px;
+  line-height: 1.2;
+  color: var(--color-vscode-fg);
+  text-align: left;
+  transition: opacity 0.1s;
+  user-select: none;
+  -webkit-user-select: none;
+  caret-color: transparent;
+}
+
+.chat-tool-invocation-part .tool-invocation-header-shell > .tool-copy-button {
+  position: absolute;
+  z-index: var(--z-chrome);
+  top: 50%;
+  right: calc(var(--space-5) + 14px);
+  padding: 4px;
+  border-radius: var(--radius-xs);
+  background: var(--color-vscode-surface-subtle-alt);
+  transform: translateY(-50%);
+}
+
+.chat-tool-invocation-part .tool-invocation-header-shell.has-command-only-copy > .tool-copy-button {
+  right: var(--space-5);
+}
+
+.chat-tool-invocation-part .tool-invocation-header:hover {
+  opacity: 1;
+}
+
+.chat-tool-invocation-part .tool-invocation-header:disabled {
+  cursor: default;
+}
+
+/* Inset offset: the card clips overflow, so a ring drawn outside the button
+   edge would be cut off on the top and sides. */
+.chat-tool-invocation-part .tool-invocation-header:focus-visible {
+  outline: 1px solid var(--color-vscode-accent);
+  outline-offset: -1px;
+}
+
+.chat-tool-invocation-part .tool-call-icon {
+  display: block;
+  width: var(--ui-icon-width, 12px);
+  height: var(--ui-icon-height, 12px);
+  flex-shrink: 0;
+}
+
+.chat-tool-invocation-part .tool-call-icon-tools {
+  transform: translateY(1px);
+}
+
+.chat-tool-invocation-part .tool-call-icon.tool-status-pending,
+.chat-tool-invocation-part .tool-call-icon.tool-status-completed,
+.chat-tool-invocation-part .tool-call-icon.tool-status-aborted,
+.chat-tool-invocation-part .tool-call-icon.tool-status-running {
+  color: var(--color-vscode-fg-muted);
+}
+
+.chat-tool-invocation-part .tool-call-icon.tool-status-running {
+  animation: pulse-soft 1.5s ease-in-out infinite;
+}
+
+.chat-tool-invocation-part .tool-call-wait-icon {
+  width: 16px;
+  height: 16px;
+  animation: none;
+}
+
+.chat-tool-invocation-part .tool-call-icon.tool-status-error {
+  color: color-mix(in srgb, var(--color-vscode-error) 72%, transparent);
+}
+
+.chat-tool-invocation-part .tool-call-spinner.tool-status-running {
+  box-sizing: border-box;
+  border: 1px solid color-mix(in srgb, var(--color-vscode-fg-muted) 18%, transparent);
+  border-top-color: color-mix(in srgb, var(--color-vscode-fg-muted) 68%, transparent);
+  border-radius: 50%;
+  animation: spin 0.85s linear infinite;
+  will-change: transform;
+}
+
+.chat-tool-invocation-part .tool-invocation-title {
+  flex: 1;
+  min-width: 0;
+  font-weight: 400;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-vscode-fg);
+}
+
+.chat-tool-invocation-part
+  :is(.tool-invocation-duration, .tool-invocation-activity-age, .tool-invocation-token-stats) {
+  display: inline-flex;
+  align-self: stretch;
+  align-items: center;
+}
+
+.chat-tool-invocation-part :is(.tool-invocation-duration, .tool-invocation-activity-age) {
+  font-size: 11px;
+  line-height: 1.2;
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.chat-tool-invocation-part .tool-invocation-duration,
+.chat-tool-invocation-part .tool-invocation-activity-time {
+  font-family: var(--font-mono);
+  color: var(--color-vscode-fg-muted);
+}
+
+.chat-tool-invocation-part .tool-invocation-duration {
+  transform: translateY(1px);
+}
+
+.chat-tool-invocation-part.tool-invocation-task
+  :is(.tool-invocation-duration, .tool-invocation-activity-time) {
+  word-spacing: -0.2em;
+}
+
+.chat-tool-invocation-part .tool-invocation-activity-age {
+  display: inline;
+  align-self: auto;
+  color: var(--color-vscode-muted);
+}
+
+.chat-tool-invocation-part .tool-invocation-activity-time {
+  margin-inline: 3px;
+}
+
+.chat-tool-invocation-part .tool-invocation-token-stats {
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-vscode-muted);
+  flex-shrink: 0;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.chat-tool-invocation-part .tool-invocation-search-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  padding: 1px 6px;
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--color-vscode-fg-muted) 7%, transparent);
+  color: var(--color-vscode-fg-muted);
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.4;
+  flex-shrink: 0;
+}
+
+.chat-tool-invocation-part .tool-invocation-error-label {
+  display: inline-flex;
+  align-self: stretch;
+  align-items: center;
+  font-size: 11px;
+  color: var(--color-vscode-error);
+}
+
+.chat-tool-invocation-part .tool-invocation-error-label.is-aborted {
+  color: var(--color-vscode-fg-muted);
+}
+
+.chat-tool-invocation-part .tool-invocation-error-label.is-rejected {
+  color: var(--color-vscode-warning);
+}
+
+.chat-tool-invocation-part .tool-invocation-retry-label {
+  font-size: 11px;
+  color: var(--color-vscode-warning);
+}
+
+.chat-tool-invocation-part .tool-invocation-chevron {
+  width: 10px;
+  height: 10px;
+  flex-shrink: 0;
+  color: var(--color-vscode-fg);
+  opacity: 0.35;
+  transition:
+    transform 0.1s,
+    opacity 0.1s;
+}
+
+.chat-tool-invocation-part .tool-invocation-header:hover .tool-invocation-chevron {
+  opacity: 0.7;
+}
+
+.chat-tool-invocation-part .tool-invocation-chevron.expanded {
+  transform: rotate(90deg);
+  opacity: 0.7;
+}
+
+/* Caps rendered rows, not just logical lines: one very long line wraps into
+   many rows and would otherwise sail past the clamp. */
+.chat-tool-invocation-part .tool-text-clamped {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 5;
+  line-clamp: 5;
+  overflow: hidden;
+}
+
+/* Clamped values fade at the bottom edge so the cut reads as "there is more"
+   rather than as content that happens to end mid-sentence.
+   Both stops are placed against the text, not the element box. Ending the
+   gradient at 100% put full transparency at the bottom of the 8px padding, so
+   the last line only ever reached ~35% alpha - on a dark panel that reads as no
+   fade at all. Ending it at the text's bottom edge instead makes the last line
+   ramp all the way to invisible. Pairs with trimming blank lines off the
+   preview, so there is always text under the gradient. */
+.chat-tool-invocation-part .tool-text-clamped.is-truncated {
+  cursor: pointer;
+  mask-image: linear-gradient(to bottom, black calc(100% - 2.6em), transparent calc(100% - 8px));
+}
+
+.chat-tool-invocation-part .tool-invocation-detail {
+  border-top: 1px solid var(--color-vscode-border-soft);
+  padding: var(--space-5) var(--space-6) var(--space-6) var(--tool-detail-indent);
+  font-size: var(--varro-chat-editor-font-size, 12px);
+}
+
+/* Terminal and structured cards are the detail surface, rather than content
+   inside one. Let them occupy the full expanded region while status text
+   retains a readable inset. */
+.chat-tool-invocation-part
+  .tool-invocation-detail:has(> :is(.terminal-command-card, .structured-tool-card)) {
+  padding: 0;
+}
+
+.chat-tool-invocation-part
+  .tool-invocation-detail
+  > :is(.terminal-command-card, .structured-tool-card) {
+  border-radius: 0;
+}
+
+.chat-tool-invocation-part
+  .tool-invocation-detail:has(> :is(.terminal-command-card, .structured-tool-card))
+  > .tool-invocation-running:not(.tool-invocation-subagent-running) {
+  padding: var(--space-5) var(--space-6) var(--space-6) var(--tool-detail-indent);
+}
+
+/* No border: the outer card already frames this full-bleed content. A second
+   border here stacked a box inside a box; the tinted background and row
+   dividers carry the grouping on their own. */
+.chat-tool-invocation-part .terminal-command-card {
+  overflow: hidden;
+  border-radius: var(--radius-inset);
+  background: color-mix(in srgb, black 14%, var(--color-vscode-list-bg));
+  font-family: var(--font-mono);
+}
+
+.chat-tool-invocation-part .terminal-command-row {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: start;
+}
+
+/* Third column holds the copy button, which is why the command may ellipsize
+   rather than wrap: the row is a fixed-height label for the output below. */
+.chat-tool-invocation-part .terminal-command-row-input {
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  align-items: center;
+}
+
+.chat-tool-invocation-part .terminal-command-row-output {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+/* Both classes are required: .terminal-command-text sets white-space: pre-wrap
+   further down this file, and at equal specificity the later rule would win. */
+.chat-tool-invocation-part .terminal-command-text.terminal-command-single-line {
+  overflow: hidden;
+  white-space: pre;
+  text-overflow: ellipsis;
+  word-break: normal;
+}
+
+.chat-tool-invocation-part .tool-copy-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  padding: 4px 8px;
+  border: none;
+  background: none;
+  color: var(--color-vscode-fg-muted);
+  cursor: pointer;
+  opacity: 0;
+  transition:
+    opacity 0.1s,
+    color 0.1s;
+}
+
+/* Revealed on hover like the rest of the row affordances, but focus must also
+   reveal it or it becomes a keyboard trap the user cannot see. */
+.chat-tool-invocation-part .terminal-command-row-input:hover .tool-copy-button,
+.chat-tool-invocation-part .structured-tool-row:hover .tool-copy-button,
+.chat-tool-invocation-part .tool-invocation-header-shell:hover > .tool-copy-button,
+.chat-tool-invocation-part .tool-copy-button.is-copied,
+.chat-tool-invocation-part .tool-copy-button:focus-visible {
+  opacity: 1;
+}
+
+.chat-tool-invocation-part .tool-copy-button:hover {
+  color: var(--color-vscode-fg);
+}
+
+.chat-tool-invocation-part .tool-copy-button:focus-visible {
+  outline: 1px solid var(--color-vscode-accent);
+  outline-offset: -1px;
+}
+
+.chat-tool-invocation-part .terminal-command-row + .terminal-command-row {
+  border-top: 1px solid color-mix(in srgb, var(--color-vscode-border) 40%, transparent);
+}
+
+.chat-tool-invocation-part .terminal-command-prompt {
+  padding: 8px 0 8px 10px;
+  color: var(--color-vscode-fg-muted);
+  font-family: var(--font-mono);
+  font-size: inherit;
+  line-height: 1.45;
+  user-select: none;
+  opacity: 0.7;
+}
+
+.chat-tool-invocation-part .terminal-command-text {
+  min-width: 0;
+  margin: 0;
+  padding: 8px 10px 8px 6px;
+  color: var(--color-vscode-fg);
+  font-family: var(--font-mono);
+  font-size: inherit;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.chat-tool-invocation-part .terminal-command-row-output .terminal-command-text {
+  padding-left: 10px;
+}
+
+.chat-tool-invocation-part .terminal-command-row-error,
+.chat-tool-invocation-part .structured-tool-row-error {
+  background: color-mix(in srgb, var(--color-vscode-error) 8%, transparent);
+}
+
+.chat-tool-invocation-part .terminal-command-row-error .terminal-command-text,
+.chat-tool-invocation-part .structured-tool-row-error .structured-tool-label {
+  color: var(--color-vscode-error);
+}
+
+.chat-tool-invocation-part .terminal-command-row-error.is-aborted,
+.chat-tool-invocation-part .structured-tool-row-aborted {
+  background: color-mix(in srgb, var(--color-vscode-fg-muted) 5%, transparent);
+}
+
+.chat-tool-invocation-part .terminal-command-row-error.is-aborted .terminal-command-text,
+.chat-tool-invocation-part .structured-tool-row-aborted .structured-tool-label {
+  color: var(--color-vscode-fg-muted);
+}
+
+.chat-tool-invocation-part .terminal-command-output {
+  opacity: 0.9;
+}
+
+.chat-tool-invocation-part .terminal-command-output-viewport {
+  max-height: calc(7.25em + 16px);
+  overflow-y: auto;
+}
+
+/* Muted, not italic: these panels are monospace, and the mono fallbacks render
+   italic as a slanted synthetic face that reads as a different font. */
+.chat-tool-invocation-part .terminal-command-output-empty {
+  color: var(--color-vscode-fg-muted);
+}
+
+/* Same surface as .terminal-command-card, deliberately: both are tool detail
+   panels and should read as one component with different row anatomy. Keep
+   these two in sync - if the terminal panel's background or radius changes,
+   this changes with it. The `black 14%` mix only works on a dark theme; the
+   light/high-contrast-light override lives in base.css and lists every panel
+   using this background, so add to that list before using it anywhere new. */
+.chat-tool-invocation-part .structured-tool-card {
+  overflow: hidden;
+  border-radius: var(--radius-inset);
+  background: color-mix(in srgb, black 14%, var(--color-vscode-list-bg));
+  font-family: var(--font-mono);
+}
+
+/* Every row uses this one grid, including multi-line values like prompt and
+   result - those used to stack their value under the label, which broke the
+   label/value alignment the rest of the card holds to.
+   The label/value gutter comes from column-gap; the 10px outer inset matches
+   the terminal panel's rows so both panels breathe the same. */
+.chat-tool-invocation-part .structured-tool-row {
+  display: grid;
+  grid-template-columns: minmax(120px, max-content) minmax(0, 1fr);
+  column-gap: var(--space-6);
+  align-items: center;
+}
+
+/* Each row is its own grid, so a per-row max-content label column would leave
+   the values ragged. Subgrid hands every row the card's single column pair, so
+   the labels size to the widest one and all values start on the same edge -
+   short labels (pattern/path) hug without a hardcoded floor. */
+@supports (grid-template-columns: subgrid) {
+  .chat-tool-invocation-part .structured-tool-card {
+    display: grid;
+    grid-template-columns: max-content minmax(0, 1fr);
+  }
+
+  .chat-tool-invocation-part .structured-tool-row {
+    grid-column: 1 / -1;
+    grid-template-columns: subgrid;
+  }
+}
+
+.chat-tool-invocation-part .structured-tool-row + .structured-tool-row {
+  border-top: 1px solid color-mix(in srgb, var(--color-vscode-border) 40%, transparent);
+}
+
+.chat-tool-invocation-part .structured-tool-label {
+  padding: var(--space-4) 0 var(--space-4) 10px;
+  color: var(--color-vscode-fg-muted);
+  font-family: var(--font-mono);
+  font-size: inherit;
+  line-height: 1.45;
+  user-select: none;
+  opacity: 0.78;
+  white-space: nowrap;
+}
+
+.chat-tool-invocation-part .structured-tool-value {
+  min-width: 0;
+  margin: 0;
+  padding: var(--space-4) 10px var(--space-4) 0;
+  color: var(--color-vscode-fg);
+  font-family: var(--font-mono);
+  font-size: inherit;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* Holds the value and its copy button in the grid's value column. */
+.chat-tool-invocation-part .structured-tool-value-line {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+/* Both classes, for the same cascade reason as .terminal-command-single-line:
+   .structured-tool-value sets white-space: pre-wrap later in this file. */
+.chat-tool-invocation-part .structured-tool-value.structured-tool-value-single {
+  flex: 1;
+  /* The copy button sits to the right and carries its own 8px, so the value
+     must not add a second gutter between the text and the button. */
+  padding-right: 0;
+  overflow: hidden;
+  white-space: pre;
+  text-overflow: ellipsis;
+  word-break: normal;
+}
+
+.chat-tool-invocation-part a.structured-tool-value {
+  display: block;
+  text-decoration: none;
+}
+
+.chat-tool-invocation-part a.structured-tool-value:hover {
+  text-decoration: underline;
+}
+
+/* No padding-top override: that existed to separate a result from the label
+   stacked above it, and would now push the value out of line with its label. */
+.chat-tool-invocation-part .structured-tool-value-result {
+  opacity: 0.92;
+}
+
+.chat-tool-invocation-part .tool-invocation-error {
+  font-size: inherit;
+  color: var(--color-vscode-error);
+  opacity: 0.85;
+}
+
+.chat-tool-invocation-part .tool-invocation-detail > .tool-invocation-error.tool-text-clamped {
+  margin: 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  font-family: inherit;
+  line-height: 1.4;
+}
+
+.chat-tool-invocation-part .tool-invocation-error.is-aborted {
+  color: var(--color-vscode-fg-muted);
+  opacity: 0.82;
+}
+
+.chat-tool-invocation-part .tool-invocation-running {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--color-vscode-fg-muted);
+}
+
+.chat-tool-invocation-part .tool-invocation-subagent-running {
+  width: 100%;
+  gap: 9px;
+  margin-top: 0;
+  padding: 9px 10px;
+  border: none;
+  border-radius: 0 0 var(--radius-inset) var(--radius-inset);
+  background: color-mix(in srgb, var(--color-vscode-fg) 5%, transparent);
+  font-family: inherit;
+  text-align: left;
+}
+
+.chat-tool-invocation-part .tool-invocation-subagent-running:not(:disabled) {
+  cursor: pointer;
+}
+
+.chat-tool-invocation-part .tool-invocation-subagent-running:not(:disabled):hover {
+  background: color-mix(in srgb, var(--color-vscode-fg) 8%, transparent);
+}
+
+.chat-tool-invocation-part .tool-invocation-subagent-running:focus-visible {
+  outline: 1px solid var(--color-vscode-accent);
+  outline-offset: 1px;
+}
+
+.chat-tool-invocation-part .tool-invocation-working-icon {
+  width: 12px;
+  height: 12px;
+  flex: none;
+  color: color-mix(in srgb, var(--color-vscode-fg-muted) 68%, transparent);
+}
+
+.chat-tool-invocation-part .tool-invocation-running-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.chat-tool-invocation-part .tool-invocation-running-label {
+  color: var(--color-vscode-fg);
+  font-size: 11.5px;
+  font-weight: 500;
+  line-height: 1.3;
+}
+
+.chat-tool-invocation-part .tool-invocation-running-detail {
+  overflow: hidden;
+  color: var(--color-vscode-fg-muted);
+  font-size: 10.5px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-tool-invocation-part .tool-invocation-subagent-running.is-retrying {
+  background: color-mix(in srgb, var(--color-vscode-warning) 6%, transparent);
+}
+
+.chat-tool-invocation-part
+  .tool-invocation-subagent-running.is-retrying
+  .tool-invocation-working-icon {
+  color: color-mix(in srgb, var(--color-vscode-warning) 72%, transparent);
+}
+
+.file-change-card {
+  position: relative;
+  overflow: visible;
+}
+
+.file-change-card-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--assistant-bordered-block-gap, 9px);
+}
+
+.file-change-inline-diffs {
+  padding: 0 8px 8px;
+}
+
+.file-change-inline-diffs-unwrapped {
+  padding: 0;
+}
+
+.file-change-card + .file-change-inline-diffs {
+  margin-top: 4px;
+}
+
+.file-change-truncated-summary,
+.file-edit-error-detail {
+  padding: 7px 10px;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.file-change-truncated-summary {
+  margin-top: 4px;
+  border: 1px solid color-mix(in srgb, var(--color-vscode-warning) 28%, transparent);
+  border-radius: var(--radius-chip);
+  color: color-mix(in srgb, var(--color-vscode-warning) 82%, var(--color-vscode-fg));
+  background: color-mix(in srgb, var(--color-vscode-warning) 5%, transparent);
+}
+
+.file-edit-error-detail {
+  margin: 0;
+  border-top: 1px solid color-mix(in srgb, var(--color-vscode-error) 22%, transparent);
+  color: var(--color-vscode-error);
+  background: color-mix(in srgb, var(--color-vscode-error) 5%, transparent);
+  font-family: inherit;
+}
+
+.file-change-card-header.is-expandable {
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+  caret-color: transparent;
+}
+
+.file-edit-error-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: auto;
+  padding: 1px;
+  border: none;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.file-edit-error-toggle:hover .tool-invocation-chevron {
+  opacity: 0.7;
+}
+
+.file-edit-error-toggle:focus-visible {
+  outline: 1px solid var(--color-vscode-accent);
+  outline-offset: 1px;
+}
+
+.file-change-card-header,
+.file-edit-line {
+  display: flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 0.25em;
+  width: 100%;
+  min-width: 0;
+  padding: var(--space-4) var(--space-5);
+  font-size: 12.5px;
+}
+
+.file-edit-icon {
+  align-self: center;
+  margin-right: calc(8px - 0.25em);
+}
+
+.file-change-card-header.is-standalone .file-edit-action-label {
+  color: var(--color-vscode-fg-muted);
+}
+
+.file-change-card-header.is-standalone .file-edit-action-label.is-added {
+  color: color-mix(in srgb, var(--color-vscode-success) 78%, var(--color-vscode-fg-muted));
+}
+
+.file-change-card-header.is-standalone .file-edit-action-label.is-removed {
+  color: color-mix(in srgb, var(--color-vscode-error) 78%, var(--color-vscode-fg-muted));
+}
+
+.file-change-card-header.is-standalone .file-edit-action-label.has-edit-gradient {
+  color: transparent;
+  background-image: linear-gradient(
+    to right,
+    color-mix(in srgb, var(--color-vscode-success) 78%, var(--color-vscode-fg-muted)) 0%,
+    color-mix(in srgb, var(--color-vscode-success) 78%, var(--color-vscode-fg-muted))
+      var(--file-edit-gradient-start),
+    color-mix(in srgb, var(--color-vscode-error) 78%, var(--color-vscode-fg-muted))
+      var(--file-edit-gradient-end),
+    color-mix(in srgb, var(--color-vscode-error) 78%, var(--color-vscode-fg-muted)) 100%
+  );
+  background-clip: text;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.file-edit-action-label {
+  display: inline-flex;
+  align-items: center;
+  font-size: inherit;
+  font-weight: 400;
+  color: var(--color-vscode-fg);
+  flex-shrink: 0;
+  line-height: 1.2;
+}
+
+.file-edit-path-link,
+.file-edit-path-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: inherit;
+  font-size: inherit;
+  font-weight: 400;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-vscode-fg) !important;
+  line-height: 1.2;
+  text-decoration: none;
+}
+
+.file-edit-removed-path {
+  text-decoration: line-through;
+}
+
+.file-edit-file-icon,
+.file-read-file-icon {
+  width: 14px;
+  height: 14px;
+  object-fit: contain;
+  flex: 0 0 auto;
+}
+
+.file-edit-path-link:hover {
+  text-decoration: underline;
+}
+
+.file-edit-move-paths {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25em;
+  line-height: 1.2;
+  min-width: 0;
+}
+
+.file-edit-move-arrow {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--color-vscode-fg);
+  opacity: 0.6;
+  flex-shrink: 0;
+}
+
+.file-edit-multi-list {
+  display: inline-flex;
+  align-items: center;
+  flex: 1 1 auto;
+  gap: 0.25em;
+  min-width: 0;
+  overflow: visible;
+}
+
+.file-edit-multi-list .file-edit-path-link {
+  flex: 0 1 auto;
+  max-width: none;
+}
+
+.file-edit-more-count {
+  display: inline-flex;
+  align-items: center;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--color-vscode-fg-muted);
+  cursor: pointer;
+  flex-shrink: 0;
+  font-family: inherit;
+  font-size: inherit;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.file-edit-more-count:hover,
+.file-edit-more-count[aria-expanded='true'] {
+  color: var(--color-vscode-fg);
+}
+
+.file-edit-more-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+}
+
+.file-edit-more-menu {
+  position: fixed;
+  z-index: var(--z-menu);
+  display: flex;
+  flex-direction: column;
+  width: max-content;
+  min-width: 190px;
+  max-width: min(320px, calc(100vw - 32px));
+  padding: 4px;
+  overflow-y: auto;
+  border: 1px solid color-mix(in srgb, var(--color-vscode-border-strong) 82%, transparent);
+  border-radius: var(--radius-card);
+  background: var(--color-vscode-surface-raised);
+  box-shadow: var(--shadow-popover);
+}
+
+.file-edit-more-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+  padding: 6px 8px;
+  border-radius: var(--radius-chip);
+  color: var(--color-vscode-fg) !important;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.2;
+  text-decoration: none;
+}
+
+.file-edit-more-menu-item:hover,
+.file-edit-more-menu-item:focus {
+  background: var(--color-vscode-hover);
+  text-decoration: none;
+  outline: none;
+}
+
+.file-edit-more-menu-path {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-edit-diff-stats {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+  line-height: 1.2;
+}
+
+.file-edit-error-label {
+  display: inline-flex;
+  align-items: center;
+  font-size: 11px;
+  color: var(--color-vscode-error);
+  flex-shrink: 0;
+  line-height: 1.2;
+}
+
+.file-read-card-header {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: nowrap;
+  gap: 0.25em;
+  width: 100%;
+  min-width: 0;
+  padding: var(--space-4) var(--space-5);
+  font-size: 12.5px;
+}
+
+.file-read-card-header .tool-call-icon {
+  align-self: center;
+  margin-right: calc(8px - 0.25em);
+}
+
+.file-read-card-header .file-read-action-label {
+  font-size: inherit;
+}
+
+.file-read-action-label {
+  display: inline-flex;
+  align-items: center;
+  font-size: inherit;
+  font-weight: 400;
+  color: var(--color-vscode-fg);
+  flex-shrink: 0;
+  line-height: 1.2;
+}
+
+.file-read-target {
+  display: inline-flex;
+  align-items: center;
+  align-self: center;
+  gap: 4px;
+  font-family: inherit;
+  font-size: inherit;
+  font-weight: 400;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-vscode-fg) !important;
+  line-height: 1.2;
+}
+
+.file-read-target:is(a) {
+  text-decoration: none;
+}
+
+.file-read-target:is(a):hover {
+  text-decoration: underline;
+}
+
+.file-read-range,
+.file-read-meta,
+.file-read-duration,
+.file-read-error-label {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  font-size: 11px;
+  line-height: 1.2;
+}
+
+.file-read-range,
+.file-read-meta,
+.file-read-duration {
+  font-family: var(--font-mono);
+  color: var(--color-vscode-fg-muted);
+}
+
+.file-read-duration {
+  margin-left: auto;
+}
+
+.file-read-error-label {
+  color: var(--color-vscode-error);
+}
+
+.file-read-error-label.is-aborted,
+.file-edit-error-label.is-aborted {
+  color: var(--color-vscode-fg-muted);
+}
+
+.chat-subtask-part {
+  margin: 0;
+  border: 1px solid var(--color-vscode-border-soft);
+  border-radius: var(--radius-card);
+  background: var(--color-vscode-surface-softer);
+  padding: var(--space-4) var(--space-5);
+}
+
+.chat-subtask-part .subtask-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--color-vscode-fg);
+  opacity: 0.88;
+}
+
+.chat-subtask-part .subtask-dot {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--color-vscode-muted);
+  opacity: 0.6;
+  flex-shrink: 0;
+}
+
+.chat-subtask-part .subtask-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-left: 12px;
+  margin-top: 6px;
+  font-size: 11.5px;
+  color: var(--color-vscode-fg-muted);
+}
+
+.chat-subtask-part .subtask-completion-summary {
+  font-variant-numeric: tabular-nums;
+}
+
+.chat-subtask-part .subtask-agent-name {
+  color: var(--color-vscode-fg);
+  opacity: 0.75;
+}
+
+.chat-subtask-part .subtask-check {
+  color: var(--color-vscode-success);
+  font-size: 11px;
+}
+
+.chat-retry-notice {
+  margin: 4px 0;
+  font-size: 11.5px;
+  color: var(--color-vscode-warning);
+  opacity: 0.88;
+  padding: 7px 10px;
+  border-radius: var(--radius-card);
+  background: color-mix(in srgb, var(--color-vscode-warning) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--color-vscode-warning) 16%, transparent);
+}
+
+.chat-retry-notice .chat-retry-error {
+  margin-left: 4px;
+  font-size: 11px;
+  opacity: 0.82;
+}
+
+.chat-compaction-notice {
+  margin: 4px 0;
+  padding: 7px 10px;
+  font-size: 11.5px;
+  color: var(--color-vscode-fg-muted);
+  border: 1px solid var(--color-vscode-border-soft);
+  border-radius: var(--radius-card);
+  background: var(--color-vscode-surface-softer);
+}
+
+.chat-thinking-box .thinking-text.rendered-markdown {
+  color: inherit;
+  font-size: inherit;
+  line-height: 1.5;
+}
+
+.chat-thinking-box .thinking-text.rendered-markdown > [data-markdown-segment='tail'] > :last-child,
+.chat-thinking-box
+  .thinking-text.rendered-markdown
+  > [data-markdown-segment='stable']:not(:has(+ [data-markdown-segment='tail'] > :first-child))
+  > :last-child {
+  margin-bottom: 0;
+}
+
+.chat-thinking-box .thinking-text.rendered-markdown :is(h1, h2, h3, h4, h5, h6) {
+  font-size: 1em;
+  line-height: inherit;
+}
+
+.chat-image-figure {
+  margin: 16px 0 6px 0;
+  border-radius: var(--radius-card);
+  border: 1px solid color-mix(in srgb, var(--color-vscode-widget-border) 70%, transparent);
+  padding: 10px;
+  background: color-mix(in srgb, var(--color-vscode-widget-bg) 72%, transparent);
+}
+
+.user-message-card-wrapperless .chat-image-figure {
+  border-color: color-mix(in srgb, var(--color-vscode-border) 62%, transparent);
+}
+
+.chat-image-figure .chat-image-img {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  height: 100%;
+  max-height: 100%;
+  max-width: 100%;
+  border-radius: var(--radius-xs);
+  display: block;
+  object-fit: contain;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-user-drag: none;
+}
+
+.chat-image-figure .chat-image-img-cover {
+  object-fit: cover;
+}
+
+.chat-image-ambient {
+  position: absolute;
+  inset: -18px;
+  width: calc(100% + 36px);
+  height: calc(100% + 36px);
+  object-fit: cover;
+  filter: blur(18px) saturate(0.9) brightness(0.72);
+  opacity: 0.78;
+  transform: scale(1.04);
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-user-drag: none;
+}
+
+.chat-image-preview-trigger {
+  position: relative;
+  appearance: none;
+  border: none;
+  background: transparent;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  margin-inline: auto;
+  overflow: hidden;
+  cursor: zoom-in;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.chat-image-preview-trigger:focus-visible,
+.chat-image-preview-close:focus-visible,
+.chat-image-preview-nav:focus-visible {
+  outline: 2px solid var(--color-vscode-accent);
+  outline-offset: 2px;
+}
+
+.message-image-carousel-preview-trigger {
+  width: 100%;
+  max-width: none;
+}
+
+.chat-image-figure .chat-image-caption {
+  margin-top: 6px;
+  font-size: 11px;
+  color: var(--color-vscode-muted);
+}
+
+.chat-image-figure .chat-image-caption .chat-image-mime {
+  opacity: 0.5;
+}
+
+.chat-image-preview-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-modal);
+  background: color-mix(in srgb, var(--color-vscode-bg) 86%, transparent);
+}
+
+.chat-image-preview-close {
+  position: fixed;
+  top: 20px;
+  right: max(20px, env(safe-area-inset-right));
+  z-index: var(--z-modal-raised);
+  appearance: none;
+  border: 1px solid color-mix(in srgb, var(--color-vscode-border) 34%, transparent);
+  background: color-mix(in srgb, var(--color-vscode-widget-bg) 90%, transparent);
+  color: var(--color-vscode-icon-fg);
+  border-radius: var(--radius-pill);
+  box-sizing: border-box;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 0;
+  cursor: pointer;
+}
+
+.chat-image-preview-nav {
+  position: fixed;
+  top: 50%;
+  z-index: var(--z-modal-raised);
+  appearance: none;
+  border: 1px solid color-mix(in srgb, var(--color-vscode-border) 34%, transparent);
+  background: color-mix(in srgb, var(--color-vscode-widget-bg) 90%, transparent);
+  color: var(--color-vscode-icon-fg);
+  border-radius: var(--radius-pill);
+  width: 36px;
+  height: 36px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transform: translateY(-50%);
+}
+
+.chat-image-preview-nav:hover {
+  background: var(--color-vscode-surface-hover);
+  border-color: var(--color-vscode-border-strong);
+}
+
+.chat-image-preview-nav-prev {
+  left: max(20px, env(safe-area-inset-left));
+}
+
+.chat-image-preview-nav-next {
+  right: max(20px, env(safe-area-inset-right));
+}
+
+.chat-image-preview-close .ui-icon {
+  display: block;
+  width: 14px;
+  height: 14px;
+}
+
+.chat-image-preview-nav .ui-icon {
+  width: 16px;
+  height: 16px;
+}
+
+.chat-image-preview-overlay-scroll {
+  width: 100%;
+  height: 100%;
+  overflow-y: auto;
+  padding: 28px 20px 40px;
+}
+
+.chat-image-preview-overlay-inner {
+  width: 100%;
+  min-height: 100%;
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.chat-image-preview-figure {
+  margin: 0;
+  max-width: 100%;
+  position: relative;
+}
+
+.chat-image-preview-img {
+  display: block;
+  width: auto;
+  max-width: 100%;
+  max-height: calc(100vh - 128px);
+  margin: 0 auto;
+  object-fit: contain;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-user-drag: none;
+}
+
+.chat-image-preview-nav-group {
+  display: contents;
+}
+
+.chat-image-preview-caption {
+  margin-top: 12px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--color-vscode-muted);
+  overflow-wrap: anywhere;
+}
+
+.chat-image-preview-count {
+  font-variant-numeric: tabular-nums;
+}
+
+.chat-image-preview-caption-separator {
+  margin: 0 6px;
+  opacity: 0.6;
+}
+
+.chat-image-preview-caption-mime {
+  opacity: 0.6;
+}
+
+.message-image-carousel {
+  margin-top: 12px;
+}
+
+.message-image-carousel-frame {
+  display: block;
+}
+
+.message-image-carousel-frame,
+.chat-image-figure {
+  margin: 3px 0px !important;
+}
+
+.user-message-content-has-image > .user-message-text-scroll {
+  margin-bottom: 0;
+}
+
+.user-message-leading-content {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  width: max-content;
+  min-width: 100%;
+  max-width: 100%;
+  margin-bottom: 8px;
+}
+
+.user-message-leading-content .message-file-attachments.message-attachments-leading {
+  position: relative;
+  inset: auto;
+  width: max-content;
+  min-width: 100%;
+  max-width: 100%;
+}
+
+.user-message-image-tiles-shell {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+}
+
+.user-message-image-tiles {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  justify-content: safe flex-end;
+  gap: 8px;
+  width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.user-message-image-tiles::-webkit-scrollbar {
+  display: none;
+}
+
+.user-message-image-scroll-controls {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  flex: 0 0 auto;
+}
+
+.user-message-image-scroll-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid color-mix(in srgb, var(--color-vscode-request-border) 45%, transparent);
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--color-vscode-widget-bg) 88%, transparent);
+  color: var(--color-vscode-fg-muted);
+  cursor: pointer;
+}
+
+.user-message-image-scroll-button:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.user-message-image-scroll-button:not(:disabled):hover {
+  border-color: var(--color-vscode-border-strong);
+  background: var(--color-vscode-surface-hover);
+  color: var(--color-vscode-fg);
+}
+
+.user-message-image-scroll-button:focus-visible {
+  outline: 2px solid var(--color-vscode-accent);
+  outline-offset: 1px;
+}
+
+.user-message-image-tile {
+  position: relative;
+  flex: 0 1 72px;
+  min-width: 36px;
+  width: 72px;
+  height: auto;
+  aspect-ratio: 1;
+  padding: 0;
+  overflow: hidden;
+  appearance: none;
+  border: 1px solid color-mix(in srgb, var(--color-vscode-request-border) 45%, transparent);
+  border-radius: var(--radius-card);
+  background: var(--color-vscode-surface-softer);
+  cursor: zoom-in;
+}
+
+.user-message-image-tile .chat-image-img {
+  position: relative;
+  z-index: 1;
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-user-drag: none;
+}
+
+.user-message-image-tile:focus-visible {
+  outline: 2px solid var(--color-vscode-accent);
+  outline-offset: 2px;
+}
+
+.user-message-card:has(.user-message-leading-content) {
+  width: min(78%, 720px);
+  max-width: min(78%, 720px);
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.user-message-image-text-bubble {
+  position: relative;
+  box-sizing: border-box;
+  width: fit-content;
+  max-width: 100%;
+  margin-left: auto;
+  padding: 12px 15px;
+  border: 1px solid color-mix(in srgb, var(--color-vscode-request-border) 45%, transparent);
+  border-radius: var(--chat-radius-card);
+  border-top-right-radius: var(--radius-card);
+  background: var(--color-vscode-request-bubble);
+}
+
+.user-message-card-editable .user-message-image-text-bubble:hover {
+  border-color: color-mix(in srgb, var(--color-vscode-accent) 50%, transparent);
+}
+
+.message-image-carousel-slide {
+  min-width: 0;
+}
+
+.message-image-carousel-figure {
+  margin: 0;
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  overflow: hidden;
+}
+
+.message-image-carousel-figure .chat-image-img {
+  width: 100%;
+  margin: 0 auto;
+}
+
+.message-image-carousel-caption-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 0;
+  padding: 6px 10px;
+}
+
+.message-image-carousel-caption {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.message-image-carousel-separator {
+  margin: 0 4px;
+}
+
+.message-image-carousel-controls {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  flex-shrink: 0;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.message-image-carousel-nav {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 1px solid color-mix(in srgb, var(--color-vscode-border) 40%, transparent);
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--color-vscode-widget-bg) 88%, transparent);
+  color: var(--color-vscode-fg-muted);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.message-image-carousel-nav .ui-icon {
+  width: 12px;
+  height: 12px;
+  opacity: 0.72;
+}
+
+.message-image-carousel-nav:hover {
+  background: var(--color-vscode-surface-hover);
+  border-color: color-mix(in srgb, var(--color-vscode-border) 58%, transparent);
+  color: var(--color-vscode-fg);
+}
+
+.message-image-carousel-nav:focus-visible,
+.message-image-carousel-count:focus-visible {
+  outline: 2px solid var(--color-vscode-accent);
+  outline-offset: 2px;
+}
+
+.message-image-carousel-count {
+  font-size: 11px;
+  color: var(--color-vscode-muted);
+  font-variant-numeric: tabular-nums;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+@media (max-width: 640px) {
+  .message-image-carousel-nav {
+    width: 20px;
+    height: 20px;
+  }
+
+  .chat-image-preview-overlay-scroll {
+    padding: 16px 14px 28px;
+  }
+
+  .chat-image-preview-close {
+    top: 16px;
+    right: max(14px, env(safe-area-inset-right));
+  }
+
+  .chat-image-preview-nav-group {
+    display: flex;
+    justify-content: center;
+    gap: 12px;
+    margin-top: 12px;
+  }
+
+  .chat-image-preview-nav {
+    position: static;
+    width: 32px;
+    height: 32px;
+    transform: none;
+  }
+
+  .chat-image-preview-nav-prev {
+    left: auto;
+  }
+
+  .chat-image-preview-nav-next {
+    right: auto;
+  }
+
+  .chat-image-preview-img {
+    max-height: calc(100vh - 96px);
+  }
+}
+
+.interactive-loading-row {
+  height: 24px;
+  min-height: 24px;
+  flex-shrink: 0;
+  box-sizing: border-box;
+  padding: 6px 0 0;
+  overflow: hidden;
+  overflow-anchor: none;
+}
+
+.interactive-loading-row .loading-indicator {
+  height: auto;
+  box-sizing: border-box;
+  padding-top: 0;
+}
+
+.interactive-loading-row.is-reserved .loading-indicator {
+  visibility: hidden;
+}
+
+.interactive-loading-row.trailing-assistant-summary-row {
+  height: auto;
+  min-height: 24px;
+  padding: 0;
+  overflow: visible;
+}
+
+.trailing-assistant-summary-row .assistant-dialog-summary {
+  margin-top: 0;
+  width: 100%;
+}
+
+.user-message-text {
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.6;
+}
+
+.user-message-markdown {
+  white-space: normal;
+  word-break: break-word;
+  line-height: 1.6;
+}
+
+.markdown-inline-slot {
+  display: inline;
+}
+
+.user-message-text > .inline-chip,
+.user-message-markdown .inline-chip {
+  vertical-align: -2px;
+  margin: 0 1px;
+  gap: 4px;
+  padding: 1px 5px;
+  font-size: 11px;
+  border: 1px solid color-mix(in srgb, var(--color-vscode-request-border) 42%, transparent);
+  background: color-mix(in srgb, var(--color-vscode-request-bubble-hover) 84%, transparent);
+  color: var(--color-vscode-fg-soft);
+  box-shadow: none;
+  line-height: 1.35;
+}
+
+.user-message-text > .inline-chip .inline-chip-icon,
+.user-message-markdown .inline-chip .inline-chip-icon {
+  width: 12px;
+  height: 12px;
+}
+
+.user-message-text > .user-message-format-chip {
+  margin: 0;
+  padding: 3px 7px;
+  letter-spacing: 0.02em;
+}
+
+.user-message-text > .inline-chip-clickable,
+.user-message-markdown .inline-chip-clickable {
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+  font-family: inherit;
+}
+
+.user-message-text > .inline-chip-clickable:hover,
+.user-message-markdown .inline-chip-clickable:hover {
+  background: color-mix(
+    in srgb,
+    var(--color-vscode-request-bubble-hover) 82%,
+    var(--color-vscode-fg) 6%
+  );
+  border-color: color-mix(in srgb, var(--color-vscode-request-border) 60%, transparent);
+}
+
+.user-message-text > .inline-chip-clickable:focus-visible,
+.user-message-markdown .inline-chip-clickable:focus-visible {
+  outline: 1px solid var(--color-vscode-accent);
+  outline-offset: 1px;
+}
+
+.user-message-text-scroll {
+  display: flex;
+  flex-direction: column;
+  row-gap: 10px;
+  max-height: min(280px, 40vh);
+  overflow-y: auto;
+  overscroll-behavior-y: auto;
+  margin-right: -14px;
+  padding-right: 14px;
+  scrollbar-color: color-mix(in srgb, var(--color-vscode-fg) 20%, transparent) transparent;
+}
+
+.user-message-card:hover .user-message-text-scroll {
+  scrollbar-color: color-mix(in srgb, var(--color-vscode-fg) 32%, transparent) transparent;
+}
+
+.user-message-text-scroll.has-more-below {
+  -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 1.6em), transparent);
+  mask-image: linear-gradient(to bottom, #000 calc(100% - 1.6em), transparent);
+}
+
+.user-message-card > .rendered-markdown.user-message-content-has-image {
+  padding-top: 0px;
+  padding-bottom: 0px;
+}
+
+.chat-turn-user .user-message-card:has(.message-image-carousel) {
+  width: min(78%, 720px);
+}
+
+.user-message-content-has-image > .chat-image-figure:not(.message-image-carousel-figure) {
+  padding: 0;
+  overflow: hidden;
+}
+
+.user-message-card > .rendered-markdown > .chat-attachment-chip {
+  --attachment-chip-max-width: 100%;
+}
+
+.user-message-card > .rendered-markdown > .user-message-text-scroll + .chat-image-figure {
+  margin-top: 10px;
+}
+
+.user-message-card > .rendered-markdown > .user-message-text-scroll + .message-image-carousel {
+  margin-top: 12px;
+}
+
+.user-message-card:not(.user-message-card-wrapperless)
+  > .rendered-markdown.user-message-content-has-image
+  > :is(.chat-image-figure, .message-image-carousel) {
+  width: calc(100% + 30px);
+  margin-right: -15px !important;
+  margin-bottom: -12px !important;
+  margin-left: -15px !important;
+}
+
+.user-message-card:not(.user-message-card-wrapperless)
+  > .rendered-markdown.user-message-content-has-image
+  > :is(.chat-image-figure, .message-image-carousel)
+  .chat-image-figure,
+.user-message-card:not(.user-message-card-wrapperless)
+  > .rendered-markdown.user-message-content-has-image
+  > .chat-image-figure {
+  border-radius: 0 0 var(--chat-radius-card) var(--chat-radius-card);
+}
+
+.user-message-card:not(.user-message-card-wrapperless)
+  > .rendered-markdown.user-message-content-has-image
+  > .message-image-carousel
+  .message-image-carousel-frame,
+.user-message-card:not(.user-message-card-wrapperless)
+  > .rendered-markdown.user-message-content-has-image
+  > .message-image-carousel
+  .message-image-carousel-figure {
+  margin: 0 !important;
+}
+
+.interactive-session
+  .interactive-item-container.interactive-request
+  .chat-turn-card
+  > .rendered-markdown
+  p.user-message-text {
+  margin: 0;
+}
+
+.interactive-session
+  .interactive-item-container.interactive-request
+  .chat-turn-card
+  > .rendered-markdown
+  p.user-message-text
+  + p.user-message-format-chip-row {
+  margin-top: -10px;
+}
+
+.interactive-session
+  .interactive-item-container.interactive-request
+  .chat-turn-card
+  > .rendered-markdown
+  .user-message-text
+  > .inline-chip {
+  padding: 1px 5px;
+  max-width: min(220px, 100%);
+}
+
+.user-message-code-block {
+  margin: 0;
+}
+
+.interactive-result-code-block.user-message-terminal-code-block .code-block-header {
+  height: 24px;
+  box-sizing: border-box;
+  padding-block: 0;
+}
+
+.interactive-result-code-block.user-message-terminal-code-block
+  .code-block-header
+  .code-block-lang {
+  display: inline-flex;
+  align-items: center;
+  height: 14px;
+  font-size: 10px;
+  line-height: 14px;
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+.user-message-terminal-header-icon {
+  display: block;
+  width: 12px;
+  height: 12px;
+  flex: 0 0 auto;
+  object-fit: contain;
+}
+
+.interactive-result-code-block.user-message-terminal-code-block
+  .code-block-header
+  .code-block-detail {
+  display: inline-flex;
+  align-items: center;
+  height: 14px;
+  font-size: 10px;
+  line-height: 14px;
+}
+
+.interactive-result-code-block.user-message-terminal-code-block {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  border-color: color-mix(in srgb, var(--color-vscode-border) 62%, transparent);
+}
+
+.user-message-terminal-preview {
+  container-type: inline-size;
+  cursor: default;
+}
+
+.user-message-terminal-preview .code-block-header {
+  cursor: pointer;
+}
+
+.user-message-card-wrapperless:has(.user-message-terminal-preview) {
+  width: min(78%, 720px);
+}
+
+.user-message-terminal-preview:focus-visible {
+  outline: 2px solid var(--color-vscode-accent);
+  outline-offset: 2px;
+  border-radius: var(--radius-card);
+}
+
+.user-message-text-scroll > .user-message-code-block:not(:last-child) {
+  margin-bottom: 8px;
+}
+
+.user-message-code-block:not(.user-message-terminal-code-block) pre.code-block {
+  max-height: min(160px, 24vh);
+  overflow: hidden;
+  scrollbar-gutter: auto;
+}
+
+.user-message-code-block:not(.user-message-terminal-code-block) pre.code-block.is-truncated {
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    black calc(100% - 2.6em),
+    transparent calc(100% - 8px)
+  );
+  mask-image: linear-gradient(to bottom, black calc(100% - 2.6em), transparent calc(100% - 8px));
+}
+
+.user-message-terminal-code-block pre.code-block {
+  min-height: 0;
+  flex: 1;
+  max-height: calc(56.25cqi - 26px);
+  overflow: hidden;
+  overscroll-behavior: auto;
+  scrollbar-gutter: auto;
+  cursor: pointer;
+  font-size: calc(var(--vscode-font-size, 13px) - 2px);
+  mask-image: linear-gradient(to bottom, black calc(100% - 2.6em), transparent calc(100% - 8px));
+}
+
+.user-message-empty {
+  color: var(--color-vscode-muted);
+  font-style: italic;
+  margin: 0;
+}
+
+.message-attachments {
+  display: flex;
+  flex-direction: row;
+  gap: 12px;
+  flex-wrap: nowrap;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.message-attachments.message-attachments-leading {
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+}
+
+.user-message-card:has(.message-file-attachments.message-attachments-leading) {
+  margin-top: 33px;
+  border-top-right-radius: var(--radius-chip);
+}
+
+.message-file-attachments {
+  --attachment-chip-max-width: min(220px, 80vw);
+  position: relative;
+  align-items: center;
+  gap: 8px;
+  overflow: visible;
+}
+
+.message-file-attachments.message-attachments-leading {
+  position: absolute;
+  top: -32px;
+  right: 0;
+  bottom: auto;
+  width: max-content;
+  min-width: 100%;
+  max-width: calc(100vw - 28px);
+  justify-content: flex-end;
+}
+
+.user-message-card-editable:has(.message-file-attachments:hover) {
+  border-color: color-mix(in srgb, var(--color-vscode-request-border) 45%, transparent);
+}
+
+.message-attachment-visible {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.message-attachment-measure {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  visibility: hidden;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+.message-attachment-measure-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 5px;
+  border: 1px dashed var(--color-vscode-border-strong);
+  border-radius: var(--radius-chip);
+  font-size: 11.5px;
+  font-weight: 500;
+  max-width: min(220px, 80vw);
+  overflow: hidden;
+}
+
+.message-attachment-measure-item .file-type-icon {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+}
+
+.message-attachments.message-attachments-standalone {
+  margin: 0;
+  padding: 0;
+  border: none;
+}
+
+.message-file-attachments .message-attachment-chip {
+  flex: 0 0 auto;
+}
+
+.message-attachment-overflow-trigger {
+  flex: 0 0 auto;
+  min-width: 26px;
+  justify-content: center;
+  color: var(--color-vscode-muted);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.message-attachment-overflow-menu {
+  position: fixed;
+  z-index: var(--z-menu-raised);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: max-content;
+  min-width: 180px;
+  max-width: min(300px, calc(100vw - 40px));
+  padding: 5px;
+  border: 1px solid var(--color-vscode-border-strong);
+  border-radius: 8px;
+  background: var(--color-vscode-widget-bg);
+  box-shadow: var(--shadow-popover);
+}
+
+.message-attachment-overflow-menu .message-attachment-chip {
+  justify-content: flex-start;
+  width: 100%;
+  max-width: 100%;
+  padding: 6px 7px;
+  text-align: left;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--color-vscode-fg);
+}
+
+.message-attachment-overflow-menu .message-attachment-chip:hover {
+  background: var(--color-vscode-surface-hover);
+  color: var(--color-vscode-fg);
+}
+
+.message-attachment-overflow-menu .message-attachment-chip:hover .chip-label {
+  color: var(--color-vscode-fg);
+  text-decoration: none;
+}
+
+@media (max-width: 480px) {
+  .chat-attachments-container {
+    --attachment-chip-gap: 4px;
+    --attachment-chip-pair-min-width: 14ch;
+  }
+
+  .chat-attachment-chip {
+    gap: 4px;
+    padding: 2px 5px;
+  }
+
+  .message-attachments {
+    gap: 10px;
+  }
+
+  .message-file-attachments {
+    gap: 6px;
+  }
+
+  .message-attachment-visible,
+  .message-attachment-measure {
+    gap: 8px;
+  }
+}
+
+.chat-drop-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-topmost);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: color-mix(in srgb, var(--color-vscode-bg) 55%, transparent);
+  backdrop-filter: blur(3px);
+  pointer-events: none;
+  animation: fade-in 0.12s ease-out;
+}
+
+.chat-drop-overlay-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  max-width: 320px;
+  padding: 26px 22px;
+  border-radius: var(--radius-bubble);
+  border: 1.5px dashed color-mix(in srgb, var(--color-vscode-accent) 70%, transparent);
+  background: color-mix(in srgb, var(--color-vscode-bg) 88%, transparent);
+  box-shadow: 0 10px 32px color-mix(in srgb, var(--color-vscode-widget-shadow) 80%, transparent);
+  text-align: center;
+}
+
+.chat-drop-overlay-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--color-vscode-accent) 18%, transparent);
+  color: var(--color-vscode-accent);
+}
+
+.chat-drop-overlay-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-vscode-fg);
+}

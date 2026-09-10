@@ -1,0 +1,17 @@
+const LEGACY_NEW_SESSION_TITLE = 'New session';
+
+const GENERATED_NEW_SESSION_TITLE =
+  /^(?:New|Child) session\s+-\s+\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
+
+export function normalizeSessionTitle(title: string | null | undefined): string {
+  const trimmed = title?.trim();
+  if (!trimmed) return '';
+  if (trimmed === LEGACY_NEW_SESSION_TITLE) return 'New Chat';
+  if (GENERATED_NEW_SESSION_TITLE.test(trimmed)) return 'New Chat';
+  return trimmed;
+}
+
+export function isPlaceholderSessionTitle(title: string | null | undefined): boolean {
+  const normalized = normalizeSessionTitle(title).toLowerCase();
+  return !normalized || normalized === 'new chat';
+}

@@ -1,0 +1,483 @@
+import { createEffect, createMemo, on, onCleanup } from 'solid-js';
+import type { ProviderLimitStatus } from '../../../shared/protocol';
+import { DEFAULT_PROVIDER_LIMIT_POLL_INTERVAL_SECONDS } from '../../../shared/provider-limit-config';
+import type { SessionStatus } from '../../types';
+
+type ProviderSelection = { providerID: string; modelID?: string | null };
+
+const DEFAULT_PROVIDER_LIMIT_POLL_INTERVAL_MS = DEFAULT_PROVIDER_LIMIT_POLL_INTERVAL_SECONDS * 1000;
+const ACTIVE_PROVIDER_LIMIT_POLL_INTERVAL_MS = 30_000;
+const PROVIDER_LIMIT_COMPLETION_REFRESH_DELAY_MS = 31_000;
+const DEGRADED_LOADING_STATUS_POLL_MS = 1_000;
+const HEALTHY_LOADING_STATUS_POLL_INITIAL_MS = 4_000;
+const HEALTHY_LOADING_STATUS_POLL_MAX_MS = 16_000;
+const DEGRADED_RUNNING_SESSION_SYNC_INTERVAL_MS = 4_000;
+const HEALTHY_RUNNING_SESSION_SYNC_INTERVAL_MS = 16_000;
+const DEGRADED_IDLE_STATUS_SYNC_INTERVAL_MS = 10_000;
+const HEALTHY_IDLE_STATUS_SYNC_INTERVAL_MS = 60_000;
+const MESSAGE_SYNC_FRESHNESS_MS = 4_000;
+const MAX_TRACKED_MESSAGE_SYNC_SESSIONS = 500;
+const RUNNING_SESSION_SYNC_KEY_SEPARATOR = '\u0000';
+
+type EventStreamState = 'healthy' | 'degraded' | undefined;
+
+export function createSessionMessageSyncCoordinator(
+  syncSessionMessages: (sessionId: string) => Promise<boolean | void>,
+  freshnessMs = MESSAGE_SYNC_FRESHNESS_MS
+) {
+  type ForceWaiter = {
+    generation: number;
+    resolve(): void;
+    reject(cause: unknown): void;
+  };
+  type SessionSyncState = {
+    active: Promise<boolean | void> | null;
+    requestedForceGeneration: number;
+    lastCompletedAt?: number;
+    forceWaiters: ForceWaiter[];
+    accessSequence: number;
+    discardWhenIdle: boolean;
+  };
+
+  const states = new Map<string, SessionSyncState>();
+  let nextAccessSequence = 0;
+  const pruneIdleStates = () => {
+    while (states.size >= MAX_TRACKED_MESSAGE_SYNC_SESSIONS) {
+      let oldest: { sessionId: string; accessSequence: number } | null = null;
+      for (const [sessionId, state] of states) {
+        if (state.active || state.forceWaiters.length > 0) continue;
+        if (!oldest || state.accessSequence < oldest.accessSequence) {
+          oldest = { sessionId, accessSequence: state.accessSequence };
+        }
+      }
+      if (!oldest) return;
+      states.delete(oldest.sessionId);
+    }
+  };
+  const getState = (sessionId: string) => {
+    let state = states.get(sessionId);
+    if (!state) {
+      pruneIdleStates();
+      state = {
+        active: null,
+        requestedForceGeneration: 0,
+        forceWaiters: [],
+        accessSequence: ++nextAccessSequence,
+        discardWhenIdle: false,
+      };
+      states.set(sessionId, state);
+    } else {
+      state.accessSequence = ++nextAccessSequence;
+      state.discardWhenIdle = false;
+    }
+    return state;
+  };
+
+  const takeForceWaiters = (state: SessionSyncState, throughGeneration: number) => {
+    const settled: ForceWaiter[] = [];
+    const remaining: ForceWaiter[] = [];
+    for (const waiter of state.forceWaiters) {
+      (waiter.generation <= throughGeneration ? settled : remaining).push(waiter);
+    }
+    state.forceWaiters = remaining;
+    return settled;
+  };
+
+  const startRequest = (
+    sessionId: string,
+    state: SessionSyncState,
+    forceGeneration: number
+  ): Promise<boolean | void> => {
+    const request = Promise.resolve().then(() => syncSessionMessages(sessionId));
+    state.active = request;
+
+    const finish = () => {
+      if (state.active !== request) return;
+      state.active = null;
+      if (state.requestedForceGeneration > forceGeneration) {
+        void startRequest(sessionId, state, state.requestedForceGeneration);
+      } else if (state.discardWhenIdle) {
+        states.delete(sessionId);
+      } else {
+        pruneIdleStates();
+      }
+    };
+    void request.then(
+      (applied) => {
+        if (applied !== false && forceGeneration >= state.requestedForceGeneration) {
+          state.lastCompletedAt = Date.now();
+        }
+        for (const waiter of takeForceWaiters(state, forceGeneration)) waiter.resolve();
+        finish();
+      },
+      (cause: unknown) => {
+        for (const waiter of takeForceWaiters(state, forceGeneration)) waiter.reject(cause);
+        finish();
+      }
+    );
+    return request;
+  };
+
+  const sync = (sessionId: string): Promise<void> => {
+    const state = getState(sessionId);
+    state.lastCompletedAt = undefined;
+    const generation = ++state.requestedForceGeneration;
+    const result = new Promise<void>((resolve, reject) => {
+      state.forceWaiters.push({ generation, resolve: () => resolve(), reject });
+    });
+    if (!state.active) void startRequest(sessionId, state, generation);
+    return result;
+  };
+
+  const syncIfStale = (sessionId: string): Promise<void> => {
+    const state = getState(sessionId);
+    if (state.active) return state.active.then(() => undefined);
+    const completedAt = state.lastCompletedAt;
+    if (completedAt !== undefined && Date.now() - completedAt < freshnessMs) {
+      return Promise.resolve();
+    }
+    return startRequest(sessionId, state, state.requestedForceGeneration).then(() => undefined);
+  };
+
+  const forget = (sessionId: string) => {
+    const state = states.get(sessionId);
+    if (!state) return;
+    if (!state.active && state.forceWaiters.length === 0) states.delete(sessionId);
+    else state.discardWhenIdle = true;
+  };
+  const clear = () => {
+    for (const [sessionId, state] of states) {
+      if (!state.active && state.forceWaiters.length === 0) states.delete(sessionId);
+      else state.discardWhenIdle = true;
+    }
+  };
+
+  return { sync, syncIfStale, forget, clear };
+}
+
+function resolveProviderLimitPollIntervalMs(baseIntervalMs: number, isProviderWorking: boolean) {
+  if (!isProviderWorking || baseIntervalMs !== DEFAULT_PROVIDER_LIMIT_POLL_INTERVAL_MS) {
+    return baseIntervalMs;
+  }
+
+  return ACTIVE_PROVIDER_LIMIT_POLL_INTERVAL_MS;
+}
+
+export function registerLoadingStatusPollEffect(deps: {
+  isLoading(): boolean;
+  getActiveSessionId(): string | null;
+  isDocumentVisible(): boolean;
+  getEventStreamState(): EventStreamState;
+  recheckSessionStatus(sessionId: string): Promise<void>;
+  logError?(context: string, cause: unknown): void;
+}) {
+  const inFlight = new Map<string, Promise<void>>();
+  const recheck = (sessionId: string): Promise<void> => {
+    const existing = inFlight.get(sessionId);
+    if (existing) return existing;
+
+    const request = Promise.resolve().then(() => deps.recheckSessionStatus(sessionId));
+    const tracked = request.finally(() => {
+      inFlight.delete(sessionId);
+    });
+    inFlight.set(sessionId, tracked);
+    return tracked;
+  };
+
+  createEffect(() => {
+    const loading = deps.isLoading();
+    const sessionId = deps.getActiveSessionId();
+    const visible = deps.isDocumentVisible();
+    const eventStreamState = deps.getEventStreamState();
+    if (!loading || !sessionId || !visible) return;
+
+    let cancelled = false;
+    let timer: number | undefined;
+    let nextDelay =
+      eventStreamState === 'healthy'
+        ? HEALTHY_LOADING_STATUS_POLL_INITIAL_MS
+        : DEGRADED_LOADING_STATUS_POLL_MS;
+    const schedule = () => {
+      timer = window.setTimeout(() => {
+        void poll();
+      }, nextDelay);
+    };
+    const poll = async () => {
+      const activeSessionId = deps.getActiveSessionId();
+      if (cancelled || !deps.isLoading() || !activeSessionId || !deps.isDocumentVisible()) return;
+      try {
+        await recheck(activeSessionId);
+      } catch (err) {
+        deps.logError?.('loadingStatusPoll', err);
+      }
+      if (cancelled) return;
+      if (eventStreamState === 'healthy') {
+        nextDelay = Math.min(nextDelay * 2, HEALTHY_LOADING_STATUS_POLL_MAX_MS);
+      }
+      schedule();
+    };
+    schedule();
+
+    onCleanup(() => {
+      cancelled = true;
+      if (timer !== undefined) window.clearTimeout(timer);
+    });
+  });
+}
+
+export function registerEventStreamRecoveryEffect(deps: {
+  getEventStreamState(): EventStreamState;
+  isLoading(): boolean;
+  getActiveSessionId(): string | null;
+  recheckSessionStatus(sessionId: string): Promise<void>;
+  logError(context: string, cause: unknown): void;
+}) {
+  createEffect(
+    on(deps.getEventStreamState, (current, previous) => {
+      if (previous !== 'degraded' || current !== 'healthy') return;
+      const sessionId = deps.getActiveSessionId();
+      if (!sessionId || !deps.isLoading()) return;
+      void deps
+        .recheckSessionStatus(sessionId)
+        .catch((err) => deps.logError('eventStreamRecovery', err));
+    })
+  );
+}
+
+export function registerVisibleRunningSessionSyncEffect(deps: {
+  getServerState(): string;
+  isDocumentVisible(): boolean;
+  getEventStreamState(): EventStreamState;
+  getActiveSessionId(): string | null;
+  getSessionStatuses(): Record<string, SessionStatus>;
+  loadSessions(): Promise<void>;
+  hydrateSessionStatuses(): Promise<void>;
+  loadQuestions(): Promise<void>;
+  loadPendingPermissions?(): Promise<void>;
+  syncSessionMessages(sessionId: string): Promise<void>;
+  logError(context: string, cause: unknown): void;
+}) {
+  const syncTarget = createMemo(() => {
+    if (deps.getServerState() !== 'running' || !deps.isDocumentVisible()) return null;
+    const eventStreamState = deps.getEventStreamState();
+    const statuses = deps.getSessionStatuses();
+    const runningIds = Object.entries(statuses)
+      .filter(([, status]) => status?.type === 'busy' || status?.type === 'retry')
+      .map(([sessionId]) => sessionId)
+      .toSorted();
+    const activeSessionId = deps.getActiveSessionId();
+    const activeRunningSessionId =
+      activeSessionId && runningIds.includes(activeSessionId) ? activeSessionId : '';
+    return `${runningIds.join('\n')}${RUNNING_SESSION_SYNC_KEY_SEPARATOR}${activeRunningSessionId}${RUNNING_SESSION_SYNC_KEY_SEPARATOR}${eventStreamState === 'healthy' ? 'healthy' : 'degraded'}`;
+  });
+
+  let refreshInFlight: Promise<void> | null = null;
+  createEffect(
+    on(syncTarget, (target) => {
+      if (!target) return;
+      const [runningSessionIdsText = '', activeRunningSessionId = '', eventStreamState] =
+        target.split(RUNNING_SESSION_SYNC_KEY_SEPARATOR, 3);
+      const runningSessionIds = runningSessionIdsText
+        .split('\n')
+        .filter((sessionId) => sessionId.length > 0);
+      const messageSyncSessionIds = activeRunningSessionId
+        ? [
+            activeRunningSessionId,
+            ...runningSessionIds.filter((sessionId) => sessionId !== activeRunningSessionId),
+          ]
+        : runningSessionIds;
+      const hasRunningSessions = messageSyncSessionIds.length > 0;
+      const runningSessionIdSet = new Set(runningSessionIds);
+
+      let cancelled = false;
+      const refresh = (): Promise<void> => {
+        if (cancelled || !deps.isDocumentVisible()) return Promise.resolve();
+        if (refreshInFlight) return refreshInFlight;
+
+        const tracked = (async () => {
+          const results: PromiseSettledResult<void>[] = [];
+          results.push(await settleVoid(deps.hydrateSessionStatuses()));
+          const latestRunningIds = Object.entries(deps.getSessionStatuses())
+            .filter(([, status]) => status?.type === 'busy' || status?.type === 'retry')
+            .map(([sessionId]) => sessionId)
+            .toSorted();
+          if (latestRunningIds.length === 0) {
+            for (const result of results) {
+              if (result.status === 'rejected') deps.logError('runningSessionSync', result.reason);
+            }
+            return;
+          }
+
+          results.push(await settleVoid(deps.loadSessions()));
+          results.push(await settleVoid(deps.loadQuestions()));
+          if (deps.loadPendingPermissions) {
+            results.push(await settleVoid(deps.loadPendingPermissions()));
+          }
+          const latestActiveSessionId = deps.getActiveSessionId();
+          const latestMessageSyncSessionIds =
+            latestActiveSessionId && latestRunningIds.includes(latestActiveSessionId)
+              ? [
+                  latestActiveSessionId,
+                  ...latestRunningIds.filter((sessionId) => sessionId !== latestActiveSessionId),
+                ]
+              : latestRunningIds;
+          // Healthy SSE owns transcript delivery. Hydration only recovers transcripts for running
+          // sessions that SSE failed to reveal; degraded polling continues to reconcile every one.
+          const transcriptSyncSessionIds =
+            eventStreamState === 'healthy'
+              ? latestMessageSyncSessionIds.filter(
+                  (sessionId) => !runningSessionIdSet.has(sessionId)
+                )
+              : latestMessageSyncSessionIds;
+          for (const sessionId of transcriptSyncSessionIds) {
+            results.push(await settleVoid(deps.syncSessionMessages(sessionId)));
+          }
+          for (const result of results) {
+            if (result.status === 'rejected') {
+              deps.logError('runningSessionSync', result.reason);
+            }
+          }
+        })().finally(() => {
+          refreshInFlight = null;
+        });
+        refreshInFlight = tracked;
+        return tracked;
+      };
+
+      const timer = window.setInterval(
+        () => {
+          void refresh().catch((err) => deps.logError('runningSessionSync', err));
+        },
+        hasRunningSessions
+          ? eventStreamState === 'healthy'
+            ? HEALTHY_RUNNING_SESSION_SYNC_INTERVAL_MS
+            : DEGRADED_RUNNING_SESSION_SYNC_INTERVAL_MS
+          : eventStreamState === 'healthy'
+            ? HEALTHY_IDLE_STATUS_SYNC_INTERVAL_MS
+            : DEGRADED_IDLE_STATUS_SYNC_INTERVAL_MS
+      );
+
+      onCleanup(() => {
+        cancelled = true;
+        window.clearInterval(timer);
+      });
+    })
+  );
+}
+
+async function settleVoid(promise: Promise<void>): Promise<PromiseSettledResult<void>> {
+  try {
+    await promise;
+    return { status: 'fulfilled', value: undefined };
+  } catch (reason) {
+    return { status: 'rejected', reason };
+  }
+}
+
+export function registerProviderLimitRefreshEffect(deps: {
+  getServerState(): string;
+  areProvidersLoaded(): boolean;
+  isDocumentVisible(): boolean;
+  isProviderWorking(providerID: string): boolean;
+  getRequestScope(): number;
+  getActiveProviderSelection(): ProviderSelection | null;
+  getProviderLimit(
+    providerID: string,
+    modelID?: string | null
+  ): ProviderLimitStatus | null | undefined;
+  loadProviderLimit(
+    providerID: string,
+    modelID?: string | null
+  ): Promise<ProviderLimitStatus | null>;
+  setProviderLimit(
+    providerID: string,
+    modelID: string | null | undefined,
+    limit: ProviderLimitStatus | null
+  ): void;
+  getPollIntervalMs(): number;
+  logError(context: string, cause: unknown): void;
+}) {
+  const pollingTarget = createMemo(
+    () => {
+      if (deps.getServerState() !== 'running' || !deps.areProvidersLoaded()) return null;
+      const pollIntervalMs = deps.getPollIntervalMs();
+      if (pollIntervalMs < 0) return null;
+      const active = deps.getActiveProviderSelection();
+      if (!active) return null;
+      const working = deps.isProviderWorking(active.providerID);
+
+      return {
+        providerID: active.providerID,
+        modelID: active.modelID,
+        scope: deps.getRequestScope(),
+        working,
+        pollIntervalMs: resolveProviderLimitPollIntervalMs(pollIntervalMs, working),
+      };
+    },
+    null,
+    {
+      equals: (a, b) =>
+        a?.providerID === b?.providerID &&
+        a?.modelID === b?.modelID &&
+        a?.scope === b?.scope &&
+        a?.working === b?.working &&
+        a?.pollIntervalMs === b?.pollIntervalMs,
+    }
+  );
+  createEffect(
+    on(pollingTarget, (target, previous) => {
+      if (!target) return;
+
+      let cancelled = false;
+      let inFlight = false;
+      const refresh = async (completion = false) => {
+        if (
+          cancelled ||
+          inFlight ||
+          (!completion && !target.working && !deps.isDocumentVisible()) ||
+          target.scope !== deps.getRequestScope()
+        )
+          return;
+        inFlight = true;
+        try {
+          const limit = await deps.loadProviderLimit(target.providerID, target.modelID);
+          if (!cancelled && target.scope === deps.getRequestScope()) {
+            deps.setProviderLimit(target.providerID, target.modelID, limit);
+          }
+        } catch (err) {
+          deps.logError('loadProviderLimit', err);
+        } finally {
+          inFlight = false;
+        }
+      };
+
+      const shouldPoll = createMemo(() => target.working || deps.isDocumentVisible());
+      createEffect(
+        on(shouldPoll, (enabled) => {
+          if (!enabled) return;
+          void refresh();
+          const timer = window.setInterval(() => {
+            void refresh();
+          }, target.pollIntervalMs);
+          onCleanup(() => window.clearInterval(timer));
+        })
+      );
+      // Wait beyond the backend's 30-second TTL for final usage, even while hidden.
+      const completionTimer =
+        previous?.working &&
+        !target.working &&
+        previous.providerID === target.providerID &&
+        previous.modelID === target.modelID &&
+        previous.scope === target.scope
+          ? window.setTimeout(() => {
+              void refresh(true);
+            }, PROVIDER_LIMIT_COMPLETION_REFRESH_DELAY_MS)
+          : undefined;
+
+      onCleanup(() => {
+        cancelled = true;
+        if (completionTimer !== undefined) window.clearTimeout(completionTimer);
+      });
+    })
+  );
+}

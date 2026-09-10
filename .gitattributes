@@ -1,0 +1,18 @@
+# Normalize line endings so the vendored webview and the Gradle wrapper behave
+# the same on every platform.
+* text=auto eol=lf
+
+*.bat text eol=crlf
+gradlew text eol=lf
+
+*.jar binary
+*.zip binary
+*.png binary
+*.jpg binary
+*.ttf binary
+*.woff binary
+*.woff2 binary
+
+# The vendored upstream webview is not authored here: keep it out of diffs and
+# out of language statistics.
+webview/vendor/** linguist-vendored

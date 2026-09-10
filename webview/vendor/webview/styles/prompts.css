@@ -1,0 +1,933 @@
+/* Question Prompt */
+.question-prompt {
+  margin: 0;
+  padding: 0;
+}
+
+.question-prompt-card {
+  padding: 0;
+  border-color: color-mix(in srgb, var(--color-vscode-accent) 34%, var(--color-vscode-border));
+  background: color-mix(in srgb, var(--color-vscode-fg) 4%, var(--color-vscode-sidebar));
+  box-shadow: 0 4px 14px color-mix(in srgb, var(--color-vscode-widget-shadow) 22%, transparent);
+}
+
+.question-summary-card {
+  border-color: color-mix(in srgb, var(--color-vscode-accent) 22%, var(--color-vscode-border));
+  background: color-mix(in srgb, var(--color-vscode-fg) 2%, transparent);
+}
+
+.question-summary-card.is-skipped {
+  border-color: color-mix(in srgb, var(--color-vscode-warning) 28%, var(--color-vscode-border));
+  background: color-mix(in srgb, var(--color-vscode-warning) 3%, transparent);
+}
+
+.question-summary-card.is-skipped .question-summary-icon {
+  color: var(--color-vscode-warning);
+}
+
+.question-summary-header {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 10px;
+  border-bottom: 1px solid color-mix(in srgb, var(--color-vscode-border) 18%, transparent);
+}
+
+.question-summary-icon {
+  flex-shrink: 0;
+  color: var(--color-vscode-fg);
+}
+
+.question-summary-title {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--color-vscode-fg);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.question-summary-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.question-summary-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: baseline;
+  gap: 2px;
+  padding: 7px 10px;
+  font-size: 11.5px;
+  line-height: 1.4;
+}
+
+.question-summary-item + .question-summary-item {
+  border-top: 1px solid color-mix(in srgb, var(--color-vscode-border) 12%, transparent);
+}
+
+.question-summary-question {
+  min-width: 0;
+  color: var(--color-vscode-fg-soft);
+  overflow-wrap: anywhere;
+}
+
+.question-summary-answer {
+  color: var(--color-vscode-fg);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+  text-align: left;
+}
+
+.question-summary-answer.is-unanswered {
+  color: var(--color-vscode-fg-muted);
+  font-style: italic;
+  font-weight: 400;
+}
+
+.question-summary-answer.is-skipped {
+  color: var(--color-vscode-warning);
+  font-style: italic;
+  font-weight: 500;
+}
+
+.question-prompt-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px 8px;
+  border-bottom: 1px solid color-mix(in srgb, var(--color-vscode-accent) 18%, transparent);
+  background: color-mix(in srgb, var(--color-vscode-accent) 8%, transparent);
+}
+
+.question-prompt-header-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.question-prompt-icon {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  color: var(--color-vscode-fg-muted);
+}
+
+.question-prompt-heading {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 0;
+}
+
+.question-prompt-title {
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.25;
+  color: var(--color-vscode-fg);
+}
+
+.question-prompt-step {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--color-vscode-muted);
+}
+
+.question-prompt-body {
+  display: flex;
+  flex-direction: column;
+}
+
+.question-prompt-text {
+  font-size: 14px;
+  line-height: 1.45;
+  color: var(--color-vscode-fg);
+  padding: 9px 12px 0;
+}
+
+.question-prompt-hint {
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--color-vscode-fg-muted);
+  padding: 3px 12px 8px;
+}
+
+.question-prompt-options {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-top: 2px;
+  padding: 5px 8px;
+  border-top: 1px solid color-mix(in srgb, var(--color-vscode-border) 12%, transparent);
+}
+
+.question-option {
+  display: grid;
+  width: 100%;
+  grid-template-columns: 14px minmax(0, 1fr);
+  align-items: flex-start;
+  gap: 10px;
+  padding: 8px 9px;
+  text-align: left;
+  cursor: pointer;
+  border: 1px solid transparent;
+  background: transparent;
+  border-radius: var(--radius-chip);
+  transition:
+    background-color 0.1s,
+    border-color 0.1s,
+    color 0.1s;
+  position: relative;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.question-option-input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.question-option:hover {
+  border-color: color-mix(in srgb, var(--color-vscode-border) 24%, transparent);
+  background: color-mix(in srgb, var(--color-vscode-hover) 84%, transparent);
+}
+
+.question-option.selected {
+  border-color: color-mix(in srgb, var(--color-vscode-accent) 42%, transparent);
+  background: color-mix(in srgb, var(--color-vscode-accent) 10%, var(--color-vscode-list-bg));
+}
+
+.question-option:focus-visible {
+  outline: 2px solid var(--color-vscode-accent);
+  outline-offset: 1px;
+}
+
+.question-option-input:focus-visible {
+  outline: none;
+}
+
+.question-radio,
+.question-checkbox {
+  display: flex;
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  margin-top: 1px;
+}
+
+.question-radio {
+  border-radius: 50%;
+  border: 1.5px solid color-mix(in srgb, var(--color-vscode-muted) 58%, transparent);
+  transition:
+    border-color 0.1s,
+    background-color 0.1s;
+}
+
+.question-radio.checked {
+  border-color: var(--color-vscode-accent);
+  background: color-mix(in srgb, var(--color-vscode-accent) 10%, transparent);
+}
+
+.question-option:hover .question-radio {
+  border-color: color-mix(in srgb, var(--color-vscode-muted) 78%, transparent);
+}
+
+.question-radio-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--color-vscode-accent);
+}
+
+.question-checkbox {
+  border-radius: var(--radius-xs);
+  border: 1.5px solid color-mix(in srgb, var(--color-vscode-muted) 58%, transparent);
+  transition:
+    border-color 0.1s,
+    background-color 0.1s;
+}
+
+.question-checkbox.checked {
+  border-color: var(--color-vscode-accent);
+  background: var(--color-vscode-accent);
+}
+
+.question-option:hover .question-checkbox {
+  border-color: color-mix(in srgb, var(--color-vscode-muted) 78%, transparent);
+}
+
+.question-option-text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  flex: 1;
+}
+
+.question-option-label {
+  font-size: 12px;
+  line-height: 1.35;
+  font-weight: 500;
+  color: var(--color-vscode-fg);
+  word-break: break-word;
+}
+
+.question-option.selected .question-option-label {
+  color: var(--color-vscode-fg);
+  font-weight: 600;
+}
+
+.question-option-desc {
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--color-vscode-fg-muted);
+  word-break: break-word;
+}
+
+.question-option-custom {
+  cursor: text;
+}
+
+.question-option-custom:hover,
+.question-option-custom:focus-within {
+  background: color-mix(in srgb, var(--color-vscode-hover) 84%, transparent);
+}
+
+.question-option-custom.selected {
+  background: color-mix(in srgb, var(--color-vscode-accent) 10%, var(--color-vscode-list-bg));
+}
+
+.question-option-custom:focus-within {
+  outline: none;
+}
+
+.question-custom-content {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.question-custom-input {
+  flex: 1;
+  field-sizing: content;
+  min-height: 30px;
+  max-height: none;
+  padding: 6px 8px;
+  border: 1px solid var(--color-vscode-input-border, transparent);
+  background: var(--color-vscode-input-bg);
+  outline: none;
+  box-shadow: none;
+  border-radius: var(--radius-chip);
+  font-size: 12px;
+  user-select: text;
+  -webkit-user-select: text;
+  line-height: 1.35;
+  color: var(--color-vscode-fg);
+  min-width: 0;
+  resize: none;
+  overflow: hidden;
+  transition:
+    border-color 0.1s,
+    background-color 0.1s;
+}
+
+body.vscode-high-contrast-light .question-custom-input {
+  border-color: color-mix(in srgb, var(--color-vscode-border) 26%, transparent);
+  background: color-mix(in srgb, var(--color-vscode-fg) 1.5%, var(--color-vscode-input-bg));
+}
+
+body.vscode-light .question-custom-input {
+  border-color: var(--color-vscode-border-default);
+  background: color-mix(in srgb, var(--color-vscode-fg) 3%, var(--color-vscode-input-bg));
+}
+
+.question-option-custom:hover .question-custom-input,
+.question-custom-input:focus {
+  background: var(--color-vscode-input-bg);
+}
+
+.question-custom-input:focus {
+  border-color: var(--color-vscode-accent);
+  outline: none;
+  box-shadow: none;
+}
+
+.question-custom-input::placeholder {
+  color: color-mix(in srgb, var(--color-vscode-input-fg) 52%, transparent);
+}
+
+.question-prompt-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 2px;
+  padding: 8px 12px 10px;
+  border-top: 1px solid color-mix(in srgb, var(--color-vscode-border) 12%, transparent);
+}
+
+.question-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-radius: var(--radius-chip);
+  min-height: 28px;
+  padding: 4px 12px;
+  font-size: 11.5px;
+  font-weight: 500;
+  line-height: 1;
+  cursor: pointer;
+  transition:
+    opacity 0.1s,
+    background-color 0.1s,
+    color 0.1s,
+    border-color 0.1s;
+}
+
+.question-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.question-btn:focus-visible {
+  outline: 1px solid var(--color-vscode-accent);
+  outline-offset: 1px;
+}
+
+.question-btn-secondary {
+  background: var(--color-vscode-button-secondary-bg);
+  color: var(--color-vscode-button-secondary-fg);
+}
+
+.question-btn-secondary:hover:not(:disabled) {
+  background: var(--color-vscode-button-secondary-hover);
+}
+
+.question-btn-danger {
+  background: color-mix(in srgb, var(--color-vscode-error) 72%, black);
+  color: #fff;
+}
+
+.question-btn-danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--color-vscode-error) 84%, black);
+}
+
+.question-btn-tertiary {
+  background: transparent;
+  color: var(--color-vscode-fg-muted);
+}
+
+.question-btn-tertiary:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--color-vscode-hover) 84%, transparent);
+  color: var(--color-vscode-fg);
+}
+
+.server-status-surface {
+  justify-content: safe center;
+}
+
+.server-status-close {
+  position: absolute;
+}
+
+.server-status-detecting-logo {
+  width: clamp(64px, 12vw, 88px);
+  height: auto;
+  filter: grayscale(1);
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+.server-status-action-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 32px;
+  padding: 7px 14px;
+  border-radius: var(--radius-chip);
+  background: var(--color-vscode-button-bg);
+  color: var(--color-vscode-button-fg);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+  text-align: center;
+}
+
+.server-status-action-button:hover:not(:disabled) {
+  background: var(--color-vscode-button-hover);
+}
+
+.server-status-action-button:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.server-status-secondary-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 28px;
+  padding: 5px 12px;
+  border: 1px solid var(--color-vscode-border);
+  border-radius: var(--radius-chip);
+  color: var(--color-vscode-fg);
+  font-size: 12px;
+  line-height: 1;
+  text-align: center;
+}
+
+.server-status-secondary-button:hover:not(:disabled) {
+  background: var(--color-vscode-hover);
+}
+
+.server-status-secondary-button:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.question-btn-primary {
+  background: var(--color-vscode-accent);
+  color: var(--color-vscode-button-fg);
+}
+
+.question-btn-primary:hover:not(:disabled) {
+  background: var(--color-vscode-button-hover);
+}
+
+@media (max-width: 560px) {
+  .question-prompt-actions {
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+}
+
+body.vscode-high-contrast,
+body.vscode-high-contrast-light {
+  --color-vscode-widget-shadow: transparent;
+  --color-vscode-preformat-border: var(
+    --vscode-textPreformat-border,
+    var(--color-vscode-contrast-border)
+  );
+  /* High-contrast themes tune their ANSI palette for maximum legibility;
+     softening toward the foreground would undo that, so use them as-is. */
+  --color-code-comment: var(--vscode-terminal-ansiGreen, var(--color-vscode-muted));
+  --color-code-keyword: var(--vscode-terminal-ansiMagenta, var(--color-vscode-fg));
+  --color-code-string: var(--vscode-terminal-ansiRed, var(--color-vscode-fg));
+  --color-code-title: var(--vscode-terminal-ansiYellow, var(--color-vscode-fg));
+  --color-code-number: var(--vscode-terminal-ansiGreen, var(--color-vscode-fg));
+  --color-code-literal: var(--vscode-terminal-ansiBlue, var(--color-vscode-fg));
+  --color-code-built_in: var(--vscode-terminal-ansiCyan, var(--color-vscode-fg));
+  --color-code-attr: var(--vscode-terminal-ansiBrightBlue, var(--color-vscode-fg));
+  --color-code-variable: var(--vscode-terminal-ansiBrightBlue, var(--color-vscode-fg));
+  --color-code-operator: var(--color-vscode-fg);
+}
+
+body.vscode-high-contrast
+  :is(
+    .assistant-turn-content,
+    .todo-block,
+    .chat-queue-container,
+    .chat-tool-invocation-part,
+    .chat-thinking-box,
+    .diff-view-widget,
+    .composer-completion-menu,
+    .toolbar-popover,
+    .dropdown-menu,
+    .model-picker-details,
+    .provider-limit-popup,
+    .context-popup
+  ),
+body.vscode-high-contrast-light
+  :is(
+    .assistant-turn-content,
+    .todo-block,
+    .chat-queue-container,
+    .chat-tool-invocation-part,
+    .chat-thinking-box,
+    .diff-view-widget,
+    .composer-completion-menu,
+    .toolbar-popover,
+    .dropdown-menu,
+    .model-picker-details,
+    .provider-limit-popup,
+    .context-popup
+  ) {
+  border-color: var(--color-vscode-contrast-border);
+  box-shadow: none;
+}
+
+body.vscode-high-contrast
+  :is(
+    .toolbar-picker,
+    .chat-send-button.enabled,
+    .send-mode-options,
+    .question-btn,
+    .chat-stop-button,
+    .question-option,
+    .server-status-action-button
+  ),
+body.vscode-high-contrast-light
+  :is(
+    .toolbar-picker,
+    .chat-send-button.enabled,
+    .send-mode-options,
+    .question-btn,
+    .chat-stop-button,
+    .question-option,
+    .server-status-action-button
+  ) {
+  outline: 1px solid var(--color-vscode-contrast-border);
+  outline-offset: -1px;
+}
+
+body.vscode-high-contrast :is(button:focus-visible, input:focus-visible, textarea:focus-visible),
+body.vscode-high-contrast-light
+  :is(button:focus-visible, input:focus-visible, textarea:focus-visible) {
+  outline: 2px solid var(--color-vscode-contrast-active-border);
+}
+
+/* Permission Prompt */
+.permission-prompt {
+  --permission-surface: color-mix(in srgb, var(--color-vscode-fg) 4%, var(--color-vscode-sidebar));
+
+  margin: 0;
+  padding: 0;
+  border-color: color-mix(in srgb, var(--color-vscode-accent) 34%, var(--color-vscode-border));
+  background: var(--permission-surface);
+}
+
+.permission-prompt-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid color-mix(in srgb, var(--color-vscode-warning) 18%, transparent);
+  background: color-mix(in srgb, var(--color-vscode-warning) 8%, transparent);
+}
+
+.permission-prompt-icon {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  color: var(--color-vscode-warning);
+}
+
+.permission-prompt-label {
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.25;
+  color: var(--color-vscode-warning);
+}
+
+.permission-prompt-indicators {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: auto;
+}
+
+.permission-prompt-step {
+  color: var(--color-vscode-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  line-height: 18px;
+}
+
+.permission-prompt-count {
+  min-width: 18px;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--color-vscode-warning) 22%, transparent);
+  color: var(--color-vscode-warning);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 18px;
+  text-align: center;
+}
+
+.permission-prompt-content {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 8px 12px 6px;
+}
+
+.permission-prompt-text-shell {
+  display: flex;
+  min-width: 0;
+  padding: 2px 0;
+}
+
+.permission-prompt-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--color-vscode-fg);
+}
+
+.permission-prompt-details {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 5px 8px;
+}
+
+.permission-prompt-meta {
+  --permission-meta-surface: color-mix(
+    in srgb,
+    var(--color-vscode-fg) 4%,
+    var(--color-vscode-list-bg)
+  );
+
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: subgrid;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--color-vscode-fg) 20%, var(--color-vscode-border));
+  border-radius: var(--radius-inset);
+  background: var(--permission-meta-surface);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.permission-meta-entry {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: subgrid;
+  align-items: baseline;
+  column-gap: 7px;
+  padding: 5px 7px;
+  line-height: 1.45;
+}
+
+.permission-meta-entry + .permission-meta-entry {
+  border-top: 1px solid color-mix(in srgb, var(--color-vscode-fg) 12%, var(--color-vscode-border));
+}
+
+.permission-meta-key {
+  align-self: baseline;
+  color: var(--color-vscode-muted);
+  flex-shrink: 0;
+  line-height: inherit;
+}
+
+.permission-meta-key::after {
+  content: ':';
+}
+
+.permission-meta-value {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-vscode-fg);
+  line-height: inherit;
+}
+
+.permission-meta-value-shell {
+  position: relative;
+  display: flex;
+  align-items: baseline;
+  min-width: 0;
+  line-height: inherit;
+}
+
+.permission-meta-value-shell > .tool-copy-button {
+  position: absolute;
+  top: 50%;
+  right: 0;
+  z-index: var(--z-chrome);
+  pointer-events: none;
+  transform: translateY(-50%);
+}
+
+.permission-meta-value-shell > .tool-copy-button {
+  padding: 2px 0 2px 6px;
+  background: var(--permission-meta-surface);
+}
+
+.permission-prompt-auto-reason {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: subgrid;
+  padding: 5px 7px;
+  border: 1px solid color-mix(in srgb, var(--color-vscode-warning) 22%, transparent);
+  border-radius: var(--radius-inset);
+  background: color-mix(in srgb, var(--color-vscode-warning) 8%, transparent);
+  color: var(--color-vscode-muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.permission-prompt-auto-reason-label {
+  flex-shrink: 0;
+  color: var(--color-vscode-warning);
+  font-weight: 600;
+}
+
+.permission-prompt-auto-reason-label::after {
+  content: ':';
+}
+
+.permission-meta-entry:hover .tool-copy-button,
+.permission-prompt .tool-copy-button.is-copied,
+.permission-prompt .tool-copy-button:focus-visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.permission-prompt-group-note,
+.permission-prompt-scope-note {
+  margin: 2px 12px 4px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--color-vscode-muted);
+}
+
+.permission-prompt-scope-note {
+  margin-top: 4px;
+}
+
+.permission-prompt-actions {
+  display: grid;
+  grid-template-columns: repeat(3, 112px);
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 2px;
+  padding: 8px 12px 10px;
+  border-top: 1px solid color-mix(in srgb, var(--color-vscode-border) 12%, transparent);
+}
+
+.permission-prompt-actions .question-btn.permission-always-main {
+  position: relative;
+  justify-content: flex-start;
+  padding-right: 20px;
+  padding-left: 12px;
+  border-radius: var(--radius-control);
+  background: color-mix(in srgb, var(--color-vscode-fg) 12%, var(--permission-surface));
+  color: var(--color-vscode-fg);
+}
+
+.permission-always-label {
+  min-width: 0;
+}
+
+.permission-always-chevron {
+  position: absolute;
+  right: 6px;
+  width: 12px;
+  height: 12px;
+}
+
+.permission-prompt-actions .question-btn.permission-always-main:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--color-vscode-fg) 18%, var(--permission-surface));
+}
+
+.permission-always-menu {
+  position: fixed;
+  z-index: var(--z-context-menu);
+  display: flex;
+  width: min(220px, calc(100vw - 16px));
+  flex-direction: column;
+  overflow: hidden;
+  padding: 4px;
+  border: 1px solid var(--color-vscode-border);
+  border-radius: var(--radius-card);
+  background: var(--color-vscode-list-bg);
+  box-shadow: var(--shadow-popover);
+}
+
+.permission-always-menu button {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 7px 9px;
+  border: 0;
+  border-radius: var(--radius-inset);
+  background: transparent;
+  color: var(--color-vscode-fg);
+  text-align: left;
+}
+
+.permission-always-menu button:hover,
+.permission-always-menu button:focus-visible {
+  background: var(--color-vscode-hover);
+  outline: none;
+}
+
+.permission-always-menu small {
+  color: var(--color-vscode-muted);
+  font-size: 10px;
+}
+
+.permission-prompt-actions .question-btn {
+  width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  padding-right: 8px;
+  padding-left: 8px;
+  white-space: nowrap;
+}
+
+.permission-action-label {
+  display: block;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.permission-action-label-short {
+  display: none;
+}
+
+.permission-prompt-actions .question-btn-secondary:not(.permission-always-main) {
+  border: 1px solid color-mix(in srgb, var(--color-vscode-fg) 20%, var(--color-vscode-border));
+  background: color-mix(in srgb, var(--color-vscode-fg) 12%, var(--permission-surface));
+  color: var(--color-vscode-fg);
+}
+
+.permission-prompt-actions
+  .question-btn-secondary:not(.permission-always-main):hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--color-vscode-fg) 30%, var(--color-vscode-border));
+  background: color-mix(in srgb, var(--color-vscode-fg) 18%, var(--permission-surface));
+}
+
+@media (max-width: 420px) {
+  .permission-prompt-actions {
+    grid-template-columns: repeat(3, 84px);
+  }
+
+  .permission-action-label-full {
+    display: none;
+  }
+
+  .permission-action-label-short {
+    display: block;
+  }
+}
+
+@media (max-width: 300px) {
+  .permission-prompt-actions {
+    padding-right: 6px;
+    padding-left: 6px;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    justify-content: stretch;
+  }
+}

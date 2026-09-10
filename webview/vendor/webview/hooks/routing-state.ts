@@ -1,0 +1,241 @@
+import type { SelectedModel } from '../lib/app-state-types';
+import { resolveSelectedModel } from '../lib/state';
+import type { Agent, MessageEntry, Provider, Session, SessionStatus } from '../types';
+
+type AgentSelectionUpdate = {
+  value: string | null;
+  options: { sessionId?: string | null; persistGlobal: boolean };
+};
+
+export function getDefaultPrimaryAgentName(agents: Agent[]) {
+  return agents.find((agent) => agent.name === 'build')?.name || agents[0]?.name || null;
+}
+
+export function getBuildAgentName(agents: Agent[]) {
+  return agents.find((agent) => agent.name === 'build')?.name || null;
+}
+
+export function deriveSelectedModelFromMessages(messages: MessageEntry[]) {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index]?.info;
+    if (!message) continue;
+    if (message.role === 'user') {
+      return message.model;
+    }
+    return {
+      providerID: message.providerID,
+      modelID: message.modelID,
+      variant: message.variant,
+    } satisfies SelectedModel;
+  }
+
+  return null;
+}
+
+export function deriveSelectedModelFromSession(session: Session | null | undefined) {
+  if (!session?.model) return null;
+  return {
+    providerID: session.model.providerID,
+    modelID: session.model.id,
+    variant: session.model.variant,
+  } satisfies SelectedModel;
+}
+
+export function deriveSelectedAgentFromMessages(messages: MessageEntry[]) {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index]?.info;
+    if (!message) continue;
+    if (message.role === 'user') return message.agent;
+    if (message.agent) return message.agent;
+  }
+
+  return null;
+}
+
+export function reconcileLoadedAgents(args: {
+  loadedAgents: Agent[];
+  activeSessionId: string | null;
+  selectedAgent: string | null;
+  sessionSelectedAgent: string | null;
+  persistedSelectedAgent: string | null;
+}) {
+  const visibleAgents = args.loadedAgents.filter((agent) => !agent.hidden);
+  const primaryAgents = visibleAgents.filter((agent) => agent.mode !== 'subagent');
+  let nextSelectedAgent: AgentSelectionUpdate | null = null;
+
+  if (!args.activeSessionId) {
+    const fallback = [
+      args.persistedSelectedAgent,
+      args.selectedAgent,
+      getDefaultPrimaryAgentName(primaryAgents),
+    ].find(
+      (candidate): candidate is string =>
+        !!candidate && primaryAgents.some((agent) => agent.name === candidate)
+    );
+    if ((fallback ?? null) !== args.selectedAgent) {
+      nextSelectedAgent = {
+        value: fallback ?? null,
+        options: { persistGlobal: false },
+      };
+    }
+  } else if (
+    args.selectedAgent &&
+    !primaryAgents.some((agent) => agent.name === args.selectedAgent)
+  ) {
+    nextSelectedAgent = {
+      value: null,
+      options: {
+        sessionId: args.activeSessionId,
+        persistGlobal: false,
+      },
+    };
+  } else if (!args.selectedAgent) {
+    const fallback = [
+      args.sessionSelectedAgent,
+      getDefaultPrimaryAgentName(primaryAgents),
+      args.persistedSelectedAgent,
+    ].find(
+      (candidate): candidate is string =>
+        !!candidate && primaryAgents.some((agent) => agent.name === candidate)
+    );
+    if (fallback) {
+      nextSelectedAgent = {
+        value: fallback,
+        options: {
+          sessionId: args.activeSessionId,
+          persistGlobal: false,
+        },
+      };
+    }
+  }
+
+  return { visibleAgents, primaryAgents, nextSelectedAgent };
+}
+
+export function reconcileLoadedProviders(args: {
+  selectedModel: SelectedModel | null;
+  providers: Provider[];
+  providerDefaults: Record<string, string>;
+  defaultModel?: SelectedModel | null;
+  allowHiddenSelectedModel?: boolean;
+}) {
+  const effectiveModel = resolveSelectedModel(
+    args.selectedModel,
+    args.providers,
+    args.providerDefaults,
+    { allowHidden: args.allowHiddenSelectedModel }
+  );
+
+  if (args.selectedModel && !effectiveModel) {
+    // SAFETY: The surrounding shape or discriminator check establishes the SelectedModel contract used below.
+    return { effectiveModel, nextSelectedModel: null as SelectedModel | null | undefined };
+  }
+
+  if (effectiveModel && args.selectedModel?.variant && !effectiveModel.variant) {
+    return {
+      effectiveModel,
+      nextSelectedModel: {
+        providerID: effectiveModel.providerID,
+        modelID: effectiveModel.modelID,
+      } satisfies SelectedModel,
+    };
+  }
+
+  if (!args.selectedModel && args.providers.length > 0) {
+    const fallback =
+      args.defaultModel === undefined
+        ? (() => {
+            const firstProvider = args.providers[0]!;
+            const modelID =
+              args.providerDefaults[firstProvider.id] || Object.keys(firstProvider.models)[0];
+            return modelID ? { providerID: firstProvider.id, modelID } : null;
+          })()
+        : resolveSelectedModel(args.defaultModel, args.providers, args.providerDefaults);
+    if (fallback) {
+      return {
+        effectiveModel,
+        nextSelectedModel: fallback,
+      };
+    }
+  }
+
+  return { effectiveModel, nextSelectedModel: undefined };
+}
+
+export function isProviderWorking(
+  providerID: string,
+  statuses: Record<string, SessionStatus>,
+  getSessionProviderID: (sessionId: string) => string | null | undefined
+) {
+  return Object.entries(statuses).some(
+    ([sessionId, status]) =>
+      (status.type === 'busy' || status.type === 'retry') &&
+      getSessionProviderID(sessionId) === providerID
+  );
+}
+
+export function getActiveProviderSelection(args: {
+  activeSessionId?: string | null;
+  selectedModel: SelectedModel | null;
+  providers: Provider[];
+  providerDefaults: Record<string, string>;
+  getActiveRalphModel?: (
+    sessionId: string | null
+  ) => { providerID: string; modelID?: string | null } | null;
+}) {
+  const ralphModel = args.getActiveRalphModel?.(args.activeSessionId ?? null);
+  if (ralphModel?.providerID) {
+    return { providerID: ralphModel.providerID, modelID: ralphModel.modelID };
+  }
+
+  const selected = resolveSelectedModel(args.selectedModel, args.providers, args.providerDefaults, {
+    allowHidden: true,
+  });
+  if (selected) {
+    return { providerID: selected.providerID, modelID: selected.modelID };
+  }
+
+  const firstProvider = args.providers[0];
+  if (!firstProvider) return null;
+
+  const defaultModelID = args.providerDefaults[firstProvider.id];
+  const fallbackModelID =
+    (defaultModelID && firstProvider.models[defaultModelID] ? defaultModelID : null) ||
+    Object.keys(firstProvider.models)[0];
+  if (!fallbackModelID) return null;
+
+  return { providerID: firstProvider.id, modelID: fallbackModelID };
+}
+
+export function getUsageLimitNoticeContext(args: {
+  sessionId: string;
+  messages?: MessageEntry[];
+  selectedModelForSession: SelectedModel | null;
+  providers: Provider[];
+  providerDefaults: Record<string, string>;
+  fallbackSelectedModel: SelectedModel | null;
+}) {
+  const selected = resolveSelectedModel(
+    args.selectedModelForSession,
+    args.providers,
+    args.providerDefaults
+  );
+  if (selected) {
+    return { providerID: selected.providerID, modelID: selected.modelID };
+  }
+
+  const derived = resolveSelectedModel(
+    deriveSelectedModelFromMessages(args.messages || []),
+    args.providers,
+    args.providerDefaults
+  );
+  if (derived) {
+    return { providerID: derived.providerID, modelID: derived.modelID };
+  }
+
+  return getActiveProviderSelection({
+    selectedModel: args.fallbackSelectedModel,
+    providers: args.providers,
+    providerDefaults: args.providerDefaults,
+  });
+}

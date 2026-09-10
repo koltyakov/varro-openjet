@@ -1,0 +1,186 @@
+import type { Provider } from '../types';
+import { asRecord, type UnknownRecord } from '../../shared/type-utils';
+import { isBoolean, isString } from './runtime-values';
+
+type ProviderModel = Provider['models'][string];
+
+function getModel(
+  providerID: string | null,
+  modelID: string | null,
+  providers: Provider[]
+): ProviderModel | null {
+  if (!providerID || !modelID) return null;
+  const provider = providers.find((item) => item.id === providerID);
+  return provider?.models[modelID] || null;
+}
+
+function getBooleanCapability(value: UnknownRecord | null, keys: string[]) {
+  if (!value) return null;
+  for (const key of keys) {
+    const item = value[key];
+    if (isBoolean(item)) return Boolean(item);
+  }
+  return null;
+}
+
+function getBooleanCapabilityFromRecord<T>(value: T, keys: string[]) {
+  return getBooleanCapability(asRecord(value), keys);
+}
+
+function getVariantNames(model: ProviderModel | null) {
+  if (!model?.variants) return [];
+  return Object.keys(model.variants).filter((variant) => variant !== 'none');
+}
+
+function normalizeSignal(value: string) {
+  return value.toLowerCase().replace(/[_-]+/g, ' ');
+}
+
+function hasImageInputSignal<T>(value: T): boolean {
+  if (value === null || value === undefined) return false;
+
+  if (isString(value)) {
+    return /\b(image|vision|multimodal)\b/.test(normalizeSignal(value));
+  }
+
+  if (Array.isArray(value)) {
+    return value.some((item) => hasImageInputSignal(item));
+  }
+
+  const record = asRecord(value);
+  if (!record) return false;
+  if (isBoolean(record.image)) return record.image;
+  return (
+    ('input' in record && hasImageInputSignal(record.input)) ||
+    ('inputs' in record && hasImageInputSignal(record.inputs)) ||
+    ('modalities' in record && hasImageInputSignal(record.modalities)) ||
+    ('inputModalities' in record && hasImageInputSignal(record.inputModalities)) ||
+    ('supportedInputs' in record && hasImageInputSignal(record.supportedInputs))
+  );
+}
+
+const VISION_MODEL_PATTERNS = [
+  /\bgpt[-/. ]?(4o|4\.1|4\.5|5(\b|[-/. ]))/,
+  /\bo[134](\b|[-/. ])/,
+  /\bclaude\b/,
+  /\bgemini\b/,
+  /\bgemma[-/. ]?3/,
+  /\bpixtral\b/,
+  /\bllava\b/,
+  /\bminicpm[-/. ]?v\b/,
+  /\binternvl\b/,
+  /\bqwen\d*(?:\.\d+)?[-/. ]?vl\b/,
+  /\bqvq\b/,
+  /\bkimi[-/. ]?vl\b/,
+  /\bmolmo\b/,
+  /\bvision\b/,
+  /\bmultimodal\b/,
+  /\bomni\b/,
+];
+
+function modelLooksVisionCapable(providerID: string, model: ProviderModel) {
+  const haystack = `${providerID} ${model.id} ${model.name}`.toLowerCase();
+  return VISION_MODEL_PATTERNS.some((pattern) => pattern.test(haystack));
+}
+
+export function modelSupportsReasoning(
+  providerID: string | null,
+  modelID: string | null,
+  providers: Provider[]
+): boolean {
+  const model = getModel(providerID, modelID, providers);
+  if (!model) return false;
+  return !!model.capabilities?.reasoning || getVariantNames(model).length > 0;
+}
+
+export function modelSupportsTools(
+  providerID: string | null,
+  modelID: string | null,
+  providers: Provider[]
+): boolean {
+  const model = getModel(providerID, modelID, providers);
+  return !!getBooleanCapabilityFromRecord(model?.capabilities, ['toolcall', 'tool_call', 'tools']);
+}
+
+export function modelSupportsVariants(
+  providerID: string | null,
+  modelID: string | null,
+  providers: Provider[]
+): boolean {
+  const model = getModel(providerID, modelID, providers);
+  return getVariantNames(model).length > 0;
+}
+
+export function modelSupportsVision(
+  providerID: string | null,
+  modelID: string | null,
+  providers: Provider[]
+): boolean {
+  const model = getModel(providerID, modelID, providers);
+  if (!model || !providerID) return false;
+
+  // SAFETY: The surrounding shape or discriminator check establishes the UnknownRecord contract used below.
+  const rawModel = model as UnknownRecord;
+  const capabilities = asRecord(rawModel.capabilities);
+  const explicitCapability = getBooleanCapability(capabilities, [
+    'vision',
+    'image',
+    'imageInput',
+    'multimodal',
+  ]);
+  if (explicitCapability != null) return explicitCapability;
+  if (capabilities?.attachment === true) return true;
+
+  const modalityCandidates = [
+    rawModel.modalities,
+    rawModel.inputModalities,
+    rawModel.supportedInputs,
+    rawModel.inputs,
+    rawModel.input,
+    capabilities?.modalities,
+    capabilities?.inputModalities,
+    capabilities?.supportedInputs,
+    capabilities?.inputs,
+    capabilities?.input,
+  ];
+  if (modalityCandidates.some((value) => hasImageInputSignal(value))) return true;
+
+  return modelLooksVisionCapable(providerID, model);
+}
+
+export function modelSupportsPdf(
+  providerID: string | null,
+  modelID: string | null,
+  providers: Provider[]
+): boolean {
+  const input = getModel(providerID, modelID, providers)?.capabilities?.input;
+  if (Array.isArray(input)) return input.includes('pdf');
+  return asRecord(input)?.pdf === true;
+}
+
+export function modelSupportsAudio(
+  providerID: string | null,
+  modelID: string | null,
+  providers: Provider[]
+): boolean {
+  return modelSupportsInputModality(providerID, modelID, providers, 'audio');
+}
+
+export function modelSupportsVideo(
+  providerID: string | null,
+  modelID: string | null,
+  providers: Provider[]
+): boolean {
+  return modelSupportsInputModality(providerID, modelID, providers, 'video');
+}
+
+function modelSupportsInputModality(
+  providerID: string | null,
+  modelID: string | null,
+  providers: Provider[],
+  modality: 'audio' | 'video'
+): boolean {
+  const input = getModel(providerID, modelID, providers)?.capabilities?.input;
+  if (Array.isArray(input)) return input.includes(modality);
+  return asRecord(input)?.[modality] === true;
+}

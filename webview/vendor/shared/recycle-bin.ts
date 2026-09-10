@@ -1,0 +1,201 @@
+import { isSessionWorkspaceScope } from './protocol';
+import type { RecycleBinEntry, RecycleBinSession } from './protocol';
+import { asRecord, isNumber, isString } from './type-utils';
+import type { UnknownRecord } from './type-utils';
+import { isSameWorkspacePath } from './workspace-path';
+
+const MAX_RECYCLE_BIN_ENTRIES = 1_000;
+const MAX_RECYCLE_BIN_SESSIONS_PER_ENTRY = 10_000;
+const MAX_RECYCLE_BIN_TOTAL_SESSIONS = 50_000;
+
+export function normalizeRecycleBinEntries<T>(value: T): RecycleBinEntry[] {
+  if (!Array.isArray(value) || value.length > MAX_RECYCLE_BIN_ENTRIES) return [];
+  const entries = value
+    .map(normalizeRecycleBinEntry)
+    .filter((entry): entry is RecycleBinEntry => !!entry);
+  const sessionIDCounts = new Map<string, number>();
+  let totalSessions = 0;
+  for (const entry of entries) {
+    totalSessions += entry.sessions.length;
+    if (totalSessions > MAX_RECYCLE_BIN_TOTAL_SESSIONS) return [];
+    for (const session of entry.sessions) {
+      sessionIDCounts.set(session.id, (sessionIDCounts.get(session.id) ?? 0) + 1);
+    }
+  }
+  return entries.filter((entry) =>
+    entry.sessions.every((session) => sessionIDCounts.get(session.id) === 1)
+  );
+}
+
+export function normalizeRecycleBinEntry<T>(value: T): RecycleBinEntry | null {
+  const record = asRecord(value);
+  if (!record) return null;
+
+  const rootID = isNonEmptyString(record.rootID) ? record.rootID : null;
+  const deletedAt = isSaneTimestamp(record.deletedAt) ? record.deletedAt : null;
+  const expiresAt = isSaneTimestamp(record.expiresAt) ? record.expiresAt : null;
+  const root = normalizeRecycleBinSession(record.root);
+  if (
+    !Array.isArray(record.sessions) ||
+    record.sessions.length > MAX_RECYCLE_BIN_SESSIONS_PER_ENTRY
+  ) {
+    return null;
+  }
+  const normalizedSessions = record.sessions.map(normalizeRecycleBinSession);
+
+  if (
+    !rootID ||
+    deletedAt === null ||
+    expiresAt === null ||
+    expiresAt < deletedAt ||
+    !root ||
+    root.id !== rootID ||
+    normalizedSessions.length === 0 ||
+    normalizedSessions.some((session) => !session)
+  ) {
+    return null;
+  }
+
+  const sessions = normalizedSessions.filter(
+    (session): session is RecycleBinSession => session !== null
+  );
+  const sessionsByID = new Map<string, RecycleBinSession>();
+  for (const session of sessions) {
+    if (sessionsByID.has(session.id)) return null;
+    sessionsByID.set(session.id, session);
+  }
+  const listedRoot = sessionsByID.get(rootID);
+  if (!listedRoot) return null;
+  if (!areRecycleBinSessionsEqual(root, listedRoot)) return null;
+  if (listedRoot.parentID && sessionsByID.has(listedRoot.parentID)) return null;
+  if (!areRootOrDescendants(sessions, rootID, sessionsByID)) return null;
+  if (
+    !sessions.every(
+      (session) =>
+        session.projectID === root.projectID &&
+        isSameWorkspacePath(session.directory, root.directory)
+    )
+  ) {
+    return null;
+  }
+
+  return { rootID, deletedAt, expiresAt, root, sessions };
+}
+
+export function normalizeRecycleBinSession<T>(value: T): RecycleBinSession | null {
+  const record = asRecord(value);
+  const time = asRecord(record?.time);
+  if (
+    !record ||
+    !isNonEmptyString(record.id) ||
+    !isNonEmptyString(record.projectID) ||
+    !isNonEmptyString(record.directory) ||
+    !isString(record.title) ||
+    !isNonEmptyString(record.version) ||
+    !isSaneTimestamp(time?.created) ||
+    !isSaneTimestamp(time.updated) ||
+    time.updated < time.created ||
+    (time.compacting !== undefined && !isSaneTimestamp(time.compacting)) ||
+    (record.parentID !== undefined && !isNonEmptyString(record.parentID)) ||
+    (record.workspaceScope !== undefined && !isSessionWorkspaceScope(record.workspaceScope))
+  ) {
+    return null;
+  }
+
+  const summary = asRecord(record.summary);
+  if (record.summary !== undefined && !isRecycleBinSummary(summary)) return null;
+  const session: RecycleBinSession = {
+    id: record.id,
+    projectID: record.projectID,
+    directory: record.directory,
+    title: record.title,
+    version: record.version,
+    time: {
+      created: time.created,
+      updated: time.updated,
+    },
+  };
+  if (isString(record.parentID)) session.parentID = record.parentID;
+  if (isSessionWorkspaceScope(record.workspaceScope)) {
+    session.workspaceScope = record.workspaceScope;
+  }
+  if (isRecycleBinSummary(summary)) {
+    session.summary = {
+      additions: summary.additions,
+      deletions: summary.deletions,
+      files: summary.files,
+    };
+  }
+  if (isNumber(time.compacting)) session.time.compacting = time.compacting;
+  return session;
+}
+
+function areRecycleBinSessionsEqual(left: RecycleBinSession, right: RecycleBinSession) {
+  return (
+    left.id === right.id &&
+    left.projectID === right.projectID &&
+    left.directory === right.directory &&
+    left.workspaceScope === right.workspaceScope &&
+    left.parentID === right.parentID &&
+    left.title === right.title &&
+    left.version === right.version &&
+    left.time.created === right.time.created &&
+    left.time.updated === right.time.updated &&
+    left.time.compacting === right.time.compacting &&
+    left.summary?.additions === right.summary?.additions &&
+    left.summary?.deletions === right.summary?.deletions &&
+    left.summary?.files === right.summary?.files
+  );
+}
+
+function isRecycleBinSummary(
+  value: UnknownRecord | null
+): value is { additions: number; deletions: number; files: number } {
+  return (
+    !!value &&
+    isSaneCount(value.additions) &&
+    isSaneCount(value.deletions) &&
+    isSaneCount(value.files)
+  );
+}
+
+function isSaneCount<T>(value: T): value is T & number {
+  return isNumber(value) && Number.isSafeInteger(value) && value >= 0;
+}
+
+function areRootOrDescendants(
+  sessions: readonly RecycleBinSession[],
+  rootID: string,
+  sessionsByID: ReadonlyMap<string, RecycleBinSession>
+) {
+  const reachesRoot = new Map<string, boolean>([[rootID, true]]);
+  for (const session of sessions) {
+    if (reachesRoot.has(session.id)) continue;
+    const path: string[] = [];
+    const visited = new Set<string>();
+    let current: RecycleBinSession | undefined = session;
+    let valid = false;
+    while (current) {
+      const known = reachesRoot.get(current.id);
+      if (known !== undefined) {
+        valid = known;
+        break;
+      }
+      if (visited.has(current.id)) break;
+      visited.add(current.id);
+      path.push(current.id);
+      current = current.parentID ? sessionsByID.get(current.parentID) : undefined;
+    }
+    for (const sessionID of path) reachesRoot.set(sessionID, valid);
+    if (!valid) return false;
+  }
+  return true;
+}
+
+function isNonEmptyString<T>(value: T): value is T & string {
+  return isString(value) && value.trim().length > 0;
+}
+
+function isSaneTimestamp<T>(value: T): value is T & number {
+  return isNumber(value) && Number.isSafeInteger(value) && value >= 0;
+}

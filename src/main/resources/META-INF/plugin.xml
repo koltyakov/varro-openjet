@@ -1,0 +1,144 @@
+<idea-plugin>
+    <id>dev.koltyakov.varro-openjet</id>
+    <name>Varro OpenJet</name>
+    <vendor url="https://github.com/koltyakov/varro-openjet">Andrew Koltyakov</vendor>
+
+    <description><![CDATA[
+        <h2>OpenCode workbench for JetBrains IDEs</h2>
+        <p>
+            Varro OpenJet runs <a href="https://opencode.ai">OpenCode</a> inside JetBrains IDEs.
+            It adds project-aware chat, parallel sessions, plan and change review, model and
+            permission controls, and usage reporting.
+        </p>
+        <p>
+            OpenCode remains responsible for agents, providers, models, commands, skills and MCP
+            servers. Varro OpenJet reads that configuration and provides an IDE interface for it,
+            so the same setup works in the OpenCode TUI, in VS Code via Varro, and here.
+        </p>
+        <p>
+            This is a port of <a href="https://github.com/koltyakov/varro">Varro</a>, the OpenCode
+            extension for VS Code. The chat interface is the upstream one, running in the IDE's
+            embedded browser; the host that drives it is written for the IntelliJ Platform.
+        </p>
+
+        <h3>Requirements</h3>
+        <ul>
+            <li>An IDE build with the JCEF runtime (the default on all current JetBrains IDEs).</li>
+            <li>The OpenCode CLI 1.16.0 or newer, on <code>PATH</code> or configured in
+                <em>Settings | Tools | Varro</em>. Install it with
+                <code>npm install -g opencode-ai</code>.</li>
+            <li>A configured provider. Run <code>opencode auth login</code>, or use
+                <code>/connect</code> in the chat.</li>
+        </ul>
+
+        <h3>Network and credential disclosure</h3>
+        <ul>
+            <li>The plugin talks only to a local OpenCode server on <code>127.0.0.1</code>
+                (port 4096 by default). It sends nothing to any other host itself.</li>
+            <li>OpenCode makes the model provider requests, using the credentials you configured
+                with the OpenCode CLI. The plugin never reads, stores or forwards API keys.</li>
+            <li>Terminal commands the chat can request are restricted to a fixed allowlist of
+                OpenCode authentication, install and upgrade commands.</li>
+        </ul>
+    ]]></description>
+
+    <depends>com.intellij.modules.platform</depends>
+
+    <!-- Git backs commit-message generation. Bundled in every IDE that supports Git. -->
+    <depends optional="true" config-file="varro-git.xml">Git4Idea</depends>
+
+    <!-- The terminal backs `terminal/run` and terminal-selection context. -->
+    <depends optional="true" config-file="varro-terminal.xml">org.jetbrains.plugins.terminal</depends>
+
+    <!-- JCEF is a separate platform module on 2026.2+; older IDEs provide it from
+         the platform without exposing the module, so this stays optional and the
+         tool window explains itself when the runtime is absent. -->
+    <depends optional="true" config-file="varro-jcef.xml">com.intellij.modules.jcef</depends>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <toolWindow id="Varro"
+                    anchor="right"
+                    icon="/icons/varro.svg"
+                    factoryClass="dev.koltyakov.varrojet.toolwindow.VarroToolWindowFactory"
+                    canCloseContents="false"/>
+
+        <applicationService serviceImplementation="dev.koltyakov.varrojet.settings.VarroSettings"/>
+        <projectService serviceImplementation="dev.koltyakov.varrojet.store.VarroStore"/>
+        <projectService serviceImplementation="dev.koltyakov.varrojet.host.VarroProjectService"/>
+
+        <applicationConfigurable
+            parentId="tools"
+            id="Varro"
+            displayName="Varro"
+            instance="dev.koltyakov.varrojet.settings.VarroConfigurable"/>
+
+        <notificationGroup id="Varro Notifications" displayType="BALLOON"/>
+    </extensions>
+
+    <actions>
+        <group id="Varro.ActionGroup" text="Varro" popup="true">
+            <add-to-group group-id="ToolsMenu" anchor="last"/>
+
+            <action id="Varro.FocusChat"
+                    class="dev.koltyakov.varrojet.actions.FocusChatAction"
+                    text="Focus Varro Chat"
+                    description="Reveal the Varro tool window and focus the composer">
+                <keyboard-shortcut keymap="$default" first-keystroke="ctrl alt V"/>
+                <keyboard-shortcut keymap="Mac OS X" first-keystroke="meta alt V"/>
+                <keyboard-shortcut keymap="macOS" first-keystroke="meta alt V"/>
+            </action>
+
+            <action id="Varro.NewSession"
+                    class="dev.koltyakov.varrojet.actions.NewSessionAction"
+                    icon="AllIcons.General.Add"
+                    text="New Varro Session"
+                    description="Start a new OpenCode session"/>
+
+            <action id="Varro.SearchSessions"
+                    class="dev.koltyakov.varrojet.actions.SearchSessionsAction"
+                    icon="AllIcons.Actions.Search"
+                    text="Search Varro Sessions"
+                    description="Search this project's OpenCode sessions"/>
+
+            <action id="Varro.PreviousSession"
+                    class="dev.koltyakov.varrojet.actions.PreviousSessionAction"
+                    text="Previous Varro Session"
+                    description="Open the previous session"/>
+
+            <action id="Varro.NextSession"
+                    class="dev.koltyakov.varrojet.actions.NextSessionAction"
+                    text="Next Varro Session"
+                    description="Open the next session"/>
+
+            <action id="Varro.Abort"
+                    class="dev.koltyakov.varrojet.actions.AbortAction"
+                    icon="AllIcons.Actions.Suspend"
+                    text="Stop Varro Run"
+                    description="Stop the active OpenCode run"/>
+
+            <action id="Varro.RestartServer"
+                    class="dev.koltyakov.varrojet.actions.RestartServerAction"
+                    icon="AllIcons.Actions.Restart"
+                    text="Restart OpenCode Server"
+                    description="Restart the OpenCode server this IDE manages"/>
+
+            <action id="Varro.OpenDevTools"
+                    class="dev.koltyakov.varrojet.actions.OpenDevToolsAction"
+                    icon="AllIcons.Xml.Browsers.Chromium"
+                    text="Open Varro Developer Tools"
+                    description="Open the embedded browser's developer tools"/>
+        </group>
+
+        <action id="Varro.AddToContext"
+                class="dev.koltyakov.varrojet.actions.AddToContextAction"
+                icon="/icons/varro.svg"
+                text="Add to Varro Context"
+                description="Send the current file or selection to the Varro composer">
+            <add-to-group group-id="EditorPopupMenu" anchor="first"/>
+            <add-to-group group-id="ProjectViewPopupMenu" anchor="first"/>
+            <keyboard-shortcut keymap="$default" first-keystroke="ctrl shift K"/>
+            <keyboard-shortcut keymap="Mac OS X" first-keystroke="meta shift K"/>
+            <keyboard-shortcut keymap="macOS" first-keystroke="meta shift K"/>
+        </action>
+    </actions>
+</idea-plugin>

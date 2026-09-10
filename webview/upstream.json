@@ -1,0 +1,14 @@
+{
+  "repository": "https://github.com/koltyakov/varro.git",
+  "ref": "main",
+  "copy": [
+    { "from": "src/webview", "to": "vendor/webview" },
+    { "from": "src/shared", "to": "vendor/shared" }
+  ],
+  "exclude": [
+    "**/*.test.ts",
+    "**/*.test.tsx",
+    "**/test-fixtures.ts",
+    "**/*.test-support.ts"
+  ]
+}

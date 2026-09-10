@@ -1,0 +1,13 @@
+<idea-plugin>
+    <!-- Loaded only when Git4Idea is present. Commit-message generation needs a
+         real `git diff`, so it is scoped to IDEs that actually have Git. -->
+    <actions>
+        <action id="Varro.GenerateCommitMessage"
+                class="dev.koltyakov.varrojet.actions.GenerateCommitMessageAction"
+                icon="/icons/varro.svg"
+                text="Generate Commit Message with Varro"
+                description="Describe the staged changes, or the working tree when nothing is staged">
+            <add-to-group group-id="Vcs.MessageActionGroup" anchor="last"/>
+        </action>
+    </actions>
+</idea-plugin>

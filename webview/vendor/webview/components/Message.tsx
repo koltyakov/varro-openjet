@@ -1,0 +1,652 @@
+import {
+  Show,
+  createEffect,
+  createMemo,
+  createResource,
+  createSignal,
+  onCleanup,
+  untrack,
+} from 'solid-js';
+import {
+  formatProviderErrorDetails,
+  formatProviderErrorMessage,
+  friendlyErrorName,
+  isAbortedAssistantError,
+  isProviderAuthFailure,
+} from '../../shared/error-classification';
+import { normalizeSessionTitle } from '../../shared/session-title';
+import { retryMessage } from '../hooks/useOpenCode';
+import {
+  getAssistantActivityPartKey,
+  isAssistantActiveInlineToolPart,
+  isAssistantActivityPart,
+  isAssistantActivityPartRunning,
+  type AssistantActivityGroupInfo,
+} from '../lib/assistant-activity';
+import { client } from '../lib/client';
+import { postMessage } from '../lib/bridge';
+import { editingMessageId, startEditingMessage } from '../lib/message-edit-state';
+import { collapseLeadingDuplicateFileEvents } from '../lib/message-event-collapse';
+import { getAssistantDiffRequest, isAssistantMessage } from '../lib/message-metrics';
+import { formatMessageSentTime } from '../lib/message-time';
+import { isWorkspaceDirectoryText, shouldShowAssistantPartInline } from '../lib/part-utils';
+import {
+  markProviderAuthFailure,
+  providerAuthRestoredForMessage,
+  requestProviderConnection,
+} from '../lib/provider-connection-state';
+import { getActiveUsageLimitNotice, isActiveSessionWorking, state } from '../lib/state';
+import { parseUsageLimitNotice, shouldDisplayUsageLimitNotice } from '../lib/usage-limit';
+import type { ToolCallPermissionMatch } from '../lib/tool-call-matching';
+import {
+  getMessageBlockExpanded,
+  trackMessageBlockExpansionState,
+} from '../lib/tool-call-expansion-state';
+import type {
+  AssistantMessage,
+  CompactionPart,
+  FileDiff,
+  Message as MessageType,
+  Part,
+  QuestionRequest,
+  ToolPart,
+} from '../types';
+import {
+  AssistantMessageContent,
+  deduplicateFileEdits,
+  getAssistantContainerVariant,
+  stripCompactionBoundaryMarkdown,
+} from './message/AssistantMessageContent';
+import { CompactionDivider } from './message/CompactionDivider';
+import { DiffSummary } from './message/DiffSummary';
+import {
+  UserMessageContent,
+  getUserMessageEditContext,
+  getUserMessageEditText,
+  hasUserMessageContent,
+  hasUserMessageEditableContent,
+  isWrapperlessUserMessageContent,
+  parseUserMessageContent,
+} from './message/UserMessageContent';
+import { isString } from '../lib/runtime-values';
+
+export {
+  getAssistantContainerVariant,
+  stripCompactionBoundaryMarkdown,
+} from './message/AssistantMessageContent';
+export {
+  getUserMessageEditText,
+  getUserMessageEditContext,
+  getUserMessageMarkupFormat,
+  getUserMessageMarkupSuffix,
+  getUserMessagePreviewText,
+  hasUserMessageEditableContent,
+  parseUserMessageContent,
+} from './message/UserMessageContent';
+export type {
+  ParsedUserMessageContent,
+  UserMessageMarkupFormat,
+  UserMessageMarkupSuffix,
+} from './message/UserMessageContent';
+
+const FINAL_MARK_PULSE_MIN_DURATION_MS = 600;
+const FINAL_MARK_PULSE_DURATION_PER_PIXEL_MS = 6;
+const FINAL_MARK_PULSE_DURATION_PROPERTY = '--assistant-final-mark-pulse-duration';
+const HOVER_INTENT_DELAY_MS = 300;
+const TIMESTAMP_TRANSITION_RETAIN_MS = 160;
+const FINAL_MARK_RAIL_SELECTOR = [
+  '.assistant-turn-content-highlighted',
+  '.assistant-turn-content-planning',
+  '.assistant-message-flow-item-final',
+].join(', ');
+
+function isManagedSubagentSession() {
+  return state.sessions.some(
+    (session) => session.id === state.activeSessionId && Boolean(session.parentID)
+  );
+}
+
+function isCompactActivityExpanded(group: AssistantActivityGroupInfo) {
+  trackMessageBlockExpansionState();
+  return getMessageBlockExpanded(group.key) ?? false;
+}
+
+export function Message(props: {
+  info: MessageType;
+  parts: Part[];
+  promptNumber?: number;
+  showPromptNumber?: boolean;
+  showSentTimestamp?: boolean;
+  userMessageSeriesEndId?: string;
+  suppressTimestampAnimation?: boolean;
+  onUserMessageHoverChange?: (messageId: string, hovering: boolean) => void;
+  onAssistantDiffSettledEmpty?: (messageId: string) => void;
+  isLastAssistant?: boolean;
+  nearViewport?: boolean;
+  outerListVirtualized?: boolean;
+  highlightFinalAnswer?: boolean;
+  highlightPlanningAnswer?: boolean;
+  previousTrailingFileEventSignature?: string | null;
+  streamingPartId?: string | null;
+  streamingText?: string;
+  allowInitialAssistantItemReveal?: boolean;
+  claimAssistantItemReveal?: (messageId: string, renderKey: string) => boolean;
+  questionRequestForTool?: (part: ToolPart) => QuestionRequest | null;
+  permissionMatchForTool?: (part: ToolPart) => ToolCallPermissionMatch | null;
+  compactActivityGroups?: readonly AssistantActivityGroupInfo[] | null;
+  retainedActivityPartKeys?: ReadonlySet<string>;
+  exitingActivityPartKeys?: ReadonlySet<string>;
+  visibleActiveActivityPartKeys?: ReadonlySet<string>;
+  groupedActiveActivityPartKeys?: ReadonlySet<string>;
+  keepReasoningInline?: boolean;
+  expandReasoning?: boolean;
+}) {
+  let turnRef: HTMLDivElement | undefined;
+  const [pulseFinalMark, setPulseFinalMark] = createSignal(false);
+  let wasCompleted = props.info.role === 'assistant' && props.info.time.completed !== undefined;
+  let finalMarkPulsePending = false;
+
+  createEffect(() => {
+    const completed = props.info.role === 'assistant' && props.info.time.completed !== undefined;
+    if (!completed) {
+      wasCompleted = false;
+      finalMarkPulsePending = false;
+      setPulseFinalMark(false);
+      return;
+    }
+
+    if (!wasCompleted) {
+      wasCompleted = true;
+      finalMarkPulsePending = true;
+    }
+
+    if (finalMarkPulsePending && props.highlightFinalAnswer) {
+      finalMarkPulsePending = false;
+      setPulseFinalMark(true);
+      return;
+    }
+
+    if (!props.highlightFinalAnswer) {
+      setPulseFinalMark(false);
+    }
+  });
+
+  createEffect(() => {
+    if (!pulseFinalMark()) {
+      turnRef?.style.removeProperty(FINAL_MARK_PULSE_DURATION_PROPERTY);
+      return;
+    }
+
+    queueMicrotask(() => {
+      if (!pulseFinalMark() || !turnRef) return;
+      const rail = turnRef.querySelector<HTMLElement>(FINAL_MARK_RAIL_SELECTOR);
+      if (!rail) return;
+      const duration = Math.max(
+        FINAL_MARK_PULSE_MIN_DURATION_MS,
+        Math.round(rail.getBoundingClientRect().height * FINAL_MARK_PULSE_DURATION_PER_PIXEL_MS)
+      );
+      turnRef.style.setProperty(FINAL_MARK_PULSE_DURATION_PROPERTY, `${duration}ms`);
+    });
+  });
+
+  const isUser = () => props.info.role === 'user';
+  const onUserMessageHoverChange = props.onUserMessageHoverChange;
+  let hoveredUserMessageId: string | null = null;
+  let hoverIntentTimer: ReturnType<typeof setTimeout> | undefined;
+  let timestampTransitionTimer: ReturnType<typeof setTimeout> | undefined;
+  const [isUserMessageHoverActive, setIsUserMessageHoverActive] = createSignal(false);
+  const [timestampTransitionActive, setTimestampTransitionActive] = createSignal(false);
+  const hoverTimestampMessageId = () => props.userMessageSeriesEndId ?? props.info.id;
+  const timestampVisible = () =>
+    !!props.showSentTimestamp ||
+    (isUserMessageHoverActive() && hoverTimestampMessageId() === props.info.id);
+  const notifyUserMessageHoverChange = (hovering: boolean) => {
+    if (hoverIntentTimer) {
+      clearTimeout(hoverIntentTimer);
+      hoverIntentTimer = undefined;
+    }
+    if (!hovering) {
+      setIsUserMessageHoverActive(false);
+      if (hoveredUserMessageId) {
+        onUserMessageHoverChange?.(hoveredUserMessageId, false);
+        hoveredUserMessageId = null;
+      }
+      return;
+    }
+    if (!isUser()) return;
+    const messageId = hoverTimestampMessageId();
+    hoverIntentTimer = setTimeout(() => {
+      hoverIntentTimer = undefined;
+      hoveredUserMessageId = messageId;
+      setIsUserMessageHoverActive(true);
+      onUserMessageHoverChange?.(messageId, true);
+    }, HOVER_INTENT_DELAY_MS);
+  };
+  createEffect(() => {
+    if (timestampTransitionTimer) {
+      clearTimeout(timestampTransitionTimer);
+      timestampTransitionTimer = undefined;
+    }
+    if (timestampVisible()) {
+      setTimestampTransitionActive(true);
+      return;
+    }
+    if (!timestampTransitionActive()) return;
+    timestampTransitionTimer = setTimeout(() => {
+      timestampTransitionTimer = undefined;
+      setTimestampTransitionActive(false);
+    }, TIMESTAMP_TRANSITION_RETAIN_MS);
+  });
+  onCleanup(() => {
+    if (hoverIntentTimer) clearTimeout(hoverIntentTimer);
+    if (timestampTransitionTimer) clearTimeout(timestampTransitionTimer);
+    if (hoveredUserMessageId) onUserMessageHoverChange?.(hoveredUserMessageId, false);
+  });
+  const sentTimestamp = createMemo(() => formatMessageSentTime(props.info.time.created));
+  const assistant = () => (isAssistantMessage(props.info) ? props.info : null);
+  // While the composer's usage-limit banner is up for this session, the latest
+  // assistant 429 error card would repeat the same message and actions; hide it
+  // until the banner clears.
+  const coveredByUsageLimitBanner = createMemo(() => {
+    if (!(props.isLastAssistant ?? false)) return false;
+    const error = assistant()?.error;
+    if (!error || isAbortedAssistantError(error)) return false;
+    if (!parseUsageLimitNotice(error.data?.message || error.name)) return false;
+    const activeNotice = getActiveUsageLimitNotice(props.info.sessionID);
+    return !!activeNotice && shouldDisplayUsageLimitNotice(activeNotice);
+  });
+  const providerAuthRequired = createMemo(() => {
+    const error = assistant()?.error;
+    return !isAbortedAssistantError(error) && isProviderAuthFailure(error);
+  });
+  const providerAuthProviderID = createMemo(() => {
+    const info = assistant();
+    if (!info) return null;
+    const data = info.error?.data;
+    const errorProviderID = data && 'providerID' in data ? data.providerID : undefined;
+    return isString(errorProviderID) && errorProviderID.trim() ? errorProviderID : info.providerID;
+  });
+  createEffect(() => {
+    const info = assistant();
+    const providerID = providerAuthProviderID();
+    if (info && providerID && providerAuthRequired()) {
+      markProviderAuthFailure(providerID, info.id, info.time.created);
+    }
+  });
+  const providerAuthRestored = createMemo(() => {
+    const info = assistant();
+    return !!info && providerAuthRestoredForMessage(info.id);
+  });
+  const assistantErrorMessage = createMemo(() => {
+    const error = assistant()?.error;
+    if (isAbortedAssistantError(error)) return null;
+    if (coveredByUsageLimitBanner()) return null;
+    if (providerAuthRequired()) {
+      if (providerAuthRestored()) {
+        return 'Authentication restored. Send a new prompt to continue.';
+      }
+      return 'You are signed out of this provider. Re-authenticate to continue.';
+    }
+    const message = error?.data?.message?.trim();
+    const info = assistant();
+    const providerMessage = formatProviderErrorMessage(error, {
+      providerID: info?.providerID,
+    });
+    if (providerMessage) return providerMessage;
+    if (message) return message;
+    return friendlyErrorName(error?.name);
+  });
+  const assistantErrorDetails = createMemo(() => {
+    if (!assistantErrorMessage()) return null;
+    const info = assistant();
+    return formatProviderErrorDetails(info?.error, {
+      providerID: info?.providerID,
+      modelID: info?.modelID,
+    });
+  });
+  const canRetryAssistant = createMemo(() => {
+    const error = assistant()?.error;
+    return !!error && !isAbortedAssistantError(error);
+  });
+  const assistantErrorAction = createMemo(() => {
+    if (!(props.isLastAssistant ?? false) || !canRetryAssistant()) return undefined;
+    if (providerAuthRequired()) {
+      if (providerAuthRestored()) return undefined;
+      return {
+        label: 'Re-authenticate',
+        run: () => requestProviderConnection(providerAuthProviderID()!),
+      };
+    }
+
+    return {
+      label: 'Retry',
+      run: () => void retryMessage(assistant()!.id, assistant()!.sessionID),
+    };
+  });
+  const isSubagent = () => assistant()?.mode === 'subagent';
+  const normalizedParts = createMemo(() =>
+    assistant()
+      ? collapseLeadingDuplicateFileEvents(
+          props.parts,
+          props.previousTrailingFileEventSignature ?? null
+        )
+      : props.parts
+  );
+  const isCompactedSummaryMessage = createMemo(
+    () => !!assistant()?.summary || normalizedParts().some((part) => part.type === 'compaction')
+  );
+  const isPartStreaming = (part: Part) => part.id === props.streamingPartId;
+  const getEffectivePartText = (part: Part) => {
+    if (part.type !== 'text' && part.type !== 'reasoning') return null;
+
+    const text = part.id === props.streamingPartId ? props.streamingText || part.text : part.text;
+    return isCompactedSummaryMessage()
+      ? stripCompactionBoundaryMarkdown(text, isPartStreaming(part))
+      : text;
+  };
+  const visibleAssistantParts = createMemo(() =>
+    assistant()
+      ? normalizedParts().filter((part) => {
+          if (part.type === 'text') {
+            const effectiveText = getEffectivePartText(part) || '';
+            return effectiveText.trim().length > 0 && !isWorkspaceDirectoryText(effectiveText);
+          }
+          return shouldShowAssistantPartInline(part);
+        })
+      : normalizedParts()
+  );
+  const layoutAssistantParts = createMemo(() =>
+    assistant() ? deduplicateFileEdits(visibleAssistantParts()) : []
+  );
+  const compactActivityPartKeys = createMemo(() => {
+    const groups = props.compactActivityGroups;
+    return new Map(
+      groups?.flatMap((group) =>
+        group.parts.map((part) => [`${part.messageID}\u0000${part.id}`, group] as const)
+      ) || []
+    );
+  });
+  const hasVisibleAssistantOutput = () => {
+    const visibleParts = visibleAssistantParts().filter((part) => {
+      if (
+        !props.visibleActiveActivityPartKeys ||
+        !isAssistantActivityPart(part) ||
+        !isAssistantActivityPartRunning(part) ||
+        isAssistantActiveInlineToolPart(part) ||
+        (part.type === 'tool' &&
+          (props.questionRequestForTool?.(part) || props.permissionMatchForTool?.(part)))
+      ) {
+        return true;
+      }
+      const key = getAssistantActivityPartKey(part);
+      return props.visibleActiveActivityPartKeys.has(key) || compactActivityPartKeys().has(key);
+    });
+    if (!props.compactActivityGroups) return visibleParts.length > 0;
+    return visibleParts.some((part) => {
+      if (!isAssistantActivityPart(part)) return true;
+      const partKey = getAssistantActivityPartKey(part);
+      if (
+        props.visibleActiveActivityPartKeys?.has(partKey) ||
+        props.retainedActivityPartKeys?.has(partKey) ||
+        props.exitingActivityPartKeys?.has(partKey)
+      ) {
+        return true;
+      }
+      const group = compactActivityPartKeys().get(partKey);
+      return !group || group.ownerMessageId === props.info.id || isCompactActivityExpanded(group);
+    });
+  };
+  const diffRequest = createMemo(() => {
+    if (assistantErrorMessage()) return null;
+    const request = getAssistantDiffRequest(props.info, props.isLastAssistant ?? false);
+    return request ? `${request.sessionID}\u0000${request.messageID}` : null;
+  });
+
+  const [diffs] = createResource(diffRequest, async (requestKey) => {
+    const [sessionID, messageID] = requestKey.split('\u0000');
+    // SAFETY: The surrounding shape or discriminator check establishes the FileDiff contract used below.
+    return client.session
+      .diff(sessionID!, messageID!, {
+        directory: state.sessions.find((session) => session.id === sessionID)?.directory,
+      })
+      .catch(() => [] as FileDiff[]);
+  });
+  const visibleDiffs = createMemo(() => (diffRequest() ? diffs() || [] : []));
+  let emptyDiffSettlementEpoch = 0;
+  const compactionDivider = createMemo<CompactionPart | null>(() => {
+    const parts = normalizedParts();
+    const compactions = parts.filter((part): part is CompactionPart => part.type === 'compaction');
+    if (compactions.length === 0) return null;
+    const hasOtherVisibleContent = parts.some((part) => {
+      if (part.type === 'compaction') return false;
+      if (part.type === 'text') return (getEffectivePartText(part) || '').trim().length > 0;
+      if (part.type === 'file') return true;
+      return false;
+    });
+    return hasOtherVisibleContent ? null : compactions[compactions.length - 1]!;
+  });
+  const shouldRender = () => {
+    if (compactionDivider()) return true;
+    if (isUser()) return hasUserContent() || hasOmittedDiffs();
+    return !!assistantErrorMessage() || hasVisibleAssistantOutput() || visibleDiffs().length > 0;
+  };
+  createEffect(() => {
+    const requestKey = diffRequest();
+    const epoch = ++emptyDiffSettlementEpoch;
+    if (!requestKey || diffs.loading) return;
+    const settledDiffs = diffs();
+    if (!settledDiffs || settledDiffs.length > 0 || shouldRender()) return;
+    queueMicrotask(() => {
+      if (
+        epoch !== emptyDiffSettlementEpoch ||
+        diffRequest() !== requestKey ||
+        diffs.loading ||
+        diffs()?.length !== 0 ||
+        shouldRender()
+      ) {
+        return;
+      }
+      untrack(() => props.onAssistantDiffSettledEmpty?.(props.info.id));
+    });
+  });
+  onCleanup(() => {
+    emptyDiffSettlementEpoch += 1;
+  });
+  const hasStructuredAssistantParts = () =>
+    assistant()
+      ? visibleAssistantParts().some((part) => part.type !== 'text' && part.type !== 'file')
+      : false;
+  const hasVisibleReasoningPart = () =>
+    assistant() ? visibleAssistantParts().some((part) => part.type === 'reasoning') : false;
+  const assistantContainerVariant = () => {
+    if (props.highlightFinalAnswer && hasVisibleReasoningPart()) {
+      return 'plain';
+    }
+
+    return getAssistantContainerVariant({
+      isUser: isUser(),
+      visibleDiffCount: visibleDiffs().length,
+      isSubagent: isSubagent(),
+      hasStructuredAssistantParts: hasStructuredAssistantParts(),
+      layoutParts: layoutAssistantParts(),
+      highlightFinalAnswer: !!props.highlightFinalAnswer,
+      hasError: !!assistantErrorMessage(),
+    });
+  };
+  const assistantContainerClass = () => {
+    const variant = assistantContainerVariant();
+    if (variant === 'bare') return 'assistant-turn-content assistant-turn-content-bare';
+    if (variant === 'plain') return 'assistant-turn-content assistant-turn-content-plain';
+    return `assistant-turn-content${props.highlightFinalAnswer ? ' assistant-turn-content-highlighted' : ''}${props.highlightPlanningAnswer ? ' assistant-turn-content-planning' : ''}`;
+  };
+  const isWrapperlessAssistant = () => assistantContainerVariant() === 'plain';
+  const parsedUserContent = createMemo(() =>
+    isUser() ? parseUserMessageContent(normalizedParts()) : null
+  );
+  const hasImageTextBubble = createMemo(() => {
+    const parsed = parsedUserContent();
+    return (
+      !!parsed &&
+      parsed.messageTexts.length > 0 &&
+      parsed.fileParts.some((part) => part.mime.startsWith('image/'))
+    );
+  });
+  const visiblePromptNumber = () =>
+    isUser() && props.showPromptNumber !== false ? props.promptNumber : undefined;
+  const hasUserContent = createMemo(() => {
+    const parsed = parsedUserContent();
+    return parsed ? hasUserMessageContent(parsed) : false;
+  });
+  const hasOmittedDiffs = () =>
+    props.info.role === 'user' && props.info.summary?.diffsOmitted === true;
+  const isWrapperlessUserMessage = createMemo(() => {
+    const parsed = parsedUserContent();
+    return parsed ? isWrapperlessUserMessageContent(parsed) : false;
+  });
+  const isEditingUserMessage = () => isUser() && editingMessageId() === props.info.id;
+  const canEditUserMessage = () =>
+    isUser() &&
+    hasUserContent() &&
+    props.info.sessionID === state.activeSessionId &&
+    !isManagedSubagentSession() &&
+    !isActiveSessionWorking() &&
+    hasUserMessageEditableContent(normalizedParts());
+  const handleUserCardClick = (event: MouseEvent) => {
+    if (props.info.role !== 'user') return;
+    const target = event.target;
+    if (target instanceof Element && target.closest('.user-message-leading-content')) return;
+    if (target instanceof Element && target.closest('button, a, textarea')) return;
+    const selection = window.getSelection();
+    if (selection && !selection.isCollapsed) return;
+    if (event.altKey) {
+      const content = getUserMessageEditText(normalizedParts());
+      if (!content.trim()) return;
+      event.preventDefault();
+      const sessionTitle = normalizeSessionTitle(
+        state.sessions.find((session) => session.id === props.info.sessionID)?.title
+      );
+      const title = `${sessionTitle || 'User message'}${props.promptNumber ? ` [${props.promptNumber}]` : ''}`;
+      postMessage({
+        type: 'vscode/open-text',
+        payload: { content, title, language: 'markdown' },
+      });
+      return;
+    }
+
+    if (!canEditUserMessage() || isEditingUserMessage()) return;
+    startEditingMessage(
+      props.info.id,
+      props.info.sessionID,
+      getUserMessageEditText(normalizedParts()),
+      getUserMessageEditContext(normalizedParts()),
+      props.info.model
+    );
+  };
+
+  return (
+    <Show when={shouldRender()}>
+      <Show
+        when={!compactionDivider()}
+        fallback={
+          <CompactionDivider
+            part={compactionDivider()!}
+            timestamp={assistant()?.time.completed ?? props.info.time.created}
+            showTimestamp={props.showSentTimestamp}
+            suppressTimestampAnimation={props.suppressTimestampAnimation}
+          />
+        }
+      >
+        <div
+          ref={(element) => {
+            turnRef = element;
+          }}
+          class={`chat-turn ${isUser() ? 'chat-turn-user' : 'chat-turn-assistant'}${isWrapperlessAssistant() ? ' chat-turn-assistant-plain' : ''}${pulseFinalMark() ? ' assistant-final-mark-pulse' : ''}`}
+          onAnimationEnd={(event) => {
+            if (event.animationName === 'assistant-final-mark-pulse') setPulseFinalMark(false);
+          }}
+        >
+          <div
+            class={`value chat-turn-content ${
+              isUser()
+                ? `chat-turn-card user-message-card${isWrapperlessUserMessage() ? ' user-message-card-wrapperless' : ''}`
+                : assistantContainerClass()
+            } ${isSubagent() ? 'chat-turn-subagent' : ''} ${canEditUserMessage() && !isEditingUserMessage() ? 'user-message-card-editable' : ''}`}
+            onClick={handleUserCardClick}
+            onMouseEnter={() => notifyUserMessageHoverChange(true)}
+            onMouseLeave={() => notifyUserMessageHoverChange(false)}
+          >
+            <Show when={!hasImageTextBubble() ? visiblePromptNumber() : undefined}>
+              {(promptNumber) => (
+                <span class="prompt-number-badge" aria-hidden="true">
+                  {promptNumber()}
+                </span>
+              )}
+            </Show>
+            <Show when={isUser() && hasUserContent()}>
+              <UserMessageContent
+                parts={normalizedParts()}
+                leadingAgent={
+                  props.info.role === 'user' && props.info.agent === 'plan' ? 'plan' : undefined
+                }
+                promptNumber={hasImageTextBubble() ? visiblePromptNumber() : undefined}
+                onMessageHoverChange={notifyUserMessageHoverChange}
+              />
+            </Show>
+            <Show when={!isUser() && assistant()}>
+              <AssistantMessageContent
+                // SAFETY: The surrounding shape or discriminator check establishes the AssistantMessage contract used below.
+                info={assistant() as AssistantMessage}
+                parts={visibleAssistantParts()}
+                errorMessage={assistantErrorMessage()}
+                errorDetails={assistantErrorDetails()}
+                errorAction={assistantErrorAction()}
+                highlightFinalAnswer={props.highlightFinalAnswer}
+                highlightPlanningAnswer={props.highlightPlanningAnswer}
+                suppressHighlightedCardMetaParts={!!props.highlightFinalAnswer}
+                isLastAssistant={props.isLastAssistant}
+                nearViewport={props.nearViewport}
+                outerListVirtualized={props.outerListVirtualized}
+                textForPart={getEffectivePartText}
+                isPartStreaming={isPartStreaming}
+                allowInitialItemReveal={props.allowInitialAssistantItemReveal}
+                claimItemReveal={props.claimAssistantItemReveal}
+                questionRequestForTool={props.questionRequestForTool}
+                permissionMatchForTool={props.permissionMatchForTool}
+                compactActivityGroups={props.compactActivityGroups}
+                retainedActivityPartKeys={props.retainedActivityPartKeys}
+                exitingActivityPartKeys={props.exitingActivityPartKeys}
+                visibleActiveActivityPartKeys={props.visibleActiveActivityPartKeys}
+                groupedActiveActivityPartKeys={props.groupedActiveActivityPartKeys}
+                keepReasoningInline={props.keepReasoningInline}
+                expandReasoning={props.expandReasoning}
+              />
+            </Show>
+          </div>
+          <Show when={isUser()}>
+            <time
+              class={`message-sent-time${timestampVisible() ? ' is-visible' : ''}${timestampTransitionActive() ? ' is-transition-active' : ''}${props.suppressTimestampAnimation ? ' is-animation-suppressed' : ''}`}
+              dateTime={new Date(props.info.time.created).toISOString()}
+              aria-hidden={!timestampVisible()}
+            >
+              {sentTimestamp()}
+            </time>
+          </Show>
+          <Show when={hasOmittedDiffs()}>
+            <div class="change-set-omission" role="note">
+              <span class="change-set-omission-title">Large change set condensed</span>
+              <span class="change-set-omission-detail">
+                File-by-file events were omitted to keep this chat responsive.
+              </span>
+            </div>
+          </Show>
+          <Show when={assistant() && visibleDiffs().length > 0}>
+            <DiffSummary
+              diffs={visibleDiffs()}
+              stateKey={`diff-summary\u0000${props.info.sessionID}\u0000${props.info.id}`}
+            />
+          </Show>
+        </div>
+      </Show>
+    </Show>
+  );
+}

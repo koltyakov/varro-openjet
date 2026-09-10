@@ -1,0 +1,382 @@
+import type { ExtensionMessage, WebviewMessage } from '../../shared/protocol';
+import { parseExtensionMessage } from '../../shared/extension-message';
+import { isString, type UnknownRecord, isObject } from './runtime-values';
+
+type MessageHandler = (msg: ExtensionMessage) => void;
+type SendResult = { sent: boolean; error?: unknown };
+export type SlowApiRequest = {
+  id: number;
+  method: string;
+  path: string;
+  startedAt: number;
+};
+export type OpenPathResult = 'opened' | 'unavailable';
+type SlowApiRequestHandler = (requests: readonly SlowApiRequest[]) => void;
+type ApiCallOptions = {
+  timeoutMs?: number;
+  signal?: AbortSignal;
+  retries?: number;
+  permissionAutomationLease?: number;
+  permissionAutomationSessionID?: string;
+  queuedMessageDispatch?: { itemId: string; lease: number };
+  interruptedRecovery?: true;
+};
+
+const handlers = new Set<MessageHandler>();
+const slowApiRequestHandlers = new Set<SlowApiRequestHandler>();
+const slowApiRequests = new Map<number, SlowApiRequest>();
+let disposed = false;
+let bridgeInitialized = false;
+const BRIDGE_CLEANUP_KEY = '__cleanupVarroBridge';
+type BridgeWindow = Window & {
+  [BRIDGE_CLEANUP_KEY]?: () => void;
+  __sendToExtension?: (message: WebviewMessage) => void;
+};
+// SAFETY: Browser globals may carry the two optional bridge callbacks declared above.
+const bridgeWindow = window as BridgeWindow;
+
+bridgeWindow[BRIDGE_CLEANUP_KEY]?.();
+
+const messageListener = (event: MessageEvent) => {
+  const msg = parseExtensionMessage(event.data);
+  if (!msg) return;
+  for (const handler of handlers) handler(msg);
+};
+
+export function cleanupBridge() {
+  if (!bridgeInitialized && disposed) return;
+  window.removeEventListener('message', messageListener);
+  bridgeInitialized = false;
+  handlers.clear();
+  for (const p of pending.values()) {
+    p.cancelHostRequest();
+    p.reject(new Error('Bridge cleaned up'));
+  }
+  pending.clear();
+  for (const request of pendingOpenPaths.values()) {
+    clearTimeout(request.timer);
+    request.reject(new Error('Bridge cleaned up'));
+  }
+  pendingOpenPaths.clear();
+  slowApiRequests.clear();
+  notifySlowApiRequestsChanged();
+  slowApiRequestHandlers.clear();
+  for (const retry of pendingRetries) {
+    clearTimeout(retry.timer);
+    pendingRetries.delete(retry);
+    retry.reject(new Error('Bridge cleaned up'));
+  }
+  disposed = true;
+  if (bridgeWindow[BRIDGE_CLEANUP_KEY] === cleanupBridge) {
+    delete bridgeWindow[BRIDGE_CLEANUP_KEY];
+  }
+}
+
+export function onMessage(handler: MessageHandler): () => void {
+  handlers.add(handler);
+  return () => handlers.delete(handler);
+}
+
+export function onSlowApiRequestsChange(handler: SlowApiRequestHandler): () => void {
+  slowApiRequestHandlers.add(handler);
+  handler([...slowApiRequests.values()]);
+  return () => slowApiRequestHandlers.delete(handler);
+}
+
+export function postMessage(msg: WebviewMessage): boolean {
+  return sendToExtension(msg).sent;
+}
+
+function sendToExtension(msg: WebviewMessage): SendResult {
+  if (disposed) return { sent: false };
+  const send = bridgeWindow.__sendToExtension;
+  if (!send) return { sent: false };
+  try {
+    send(msg);
+    return { sent: true };
+  } catch (error) {
+    return { sent: false, error };
+  }
+}
+
+let reqId = 0;
+let openPathRequestId = 0;
+const pendingOpenPaths = new Map<
+  number,
+  {
+    resolve(result: OpenPathResult): void;
+    reject(error: Error): void;
+    timer: ReturnType<typeof setTimeout>;
+  }
+>();
+const pending = new Map<
+  number,
+  {
+    resolve(v: UnknownRecord[string]): void;
+    reject(cause: unknown): void;
+    timer: ReturnType<typeof setTimeout>;
+    slowTimer: ReturnType<typeof setTimeout>;
+    cleanupAbort?: () => void;
+    cancelHostRequest(): void;
+  }
+>();
+type PendingRetry = {
+  timer: number;
+  reject(error: Error): void;
+};
+const pendingRetries = new Set<PendingRetry>();
+const API_CALL_TIMEOUT_MS = 35_000;
+const API_CALL_LONG_TIMEOUT_MS = 40_000;
+const API_CALL_MCP_AUTH_TIMEOUT_MS = 315_000;
+const API_CALL_RETRY_DELAY_MS = 150;
+export const SLOW_API_REQUEST_THRESHOLD_MS = 15_000;
+
+const handleBridgeMessage: MessageHandler = (msg) => {
+  if (msg.type === 'vscode/open-result') {
+    const request = pendingOpenPaths.get(msg.payload.requestId);
+    if (!request) return;
+    clearTimeout(request.timer);
+    pendingOpenPaths.delete(msg.payload.requestId);
+    request.resolve(msg.payload.status);
+    return;
+  }
+  if (msg.type === 'api/response') {
+    const p = pending.get(msg.payload.id);
+    if (!p) return;
+    if (msg.payload.error) p.reject(new Error(msg.payload.error));
+    else p.resolve(msg.payload.data);
+  }
+};
+
+export function initializeBridge() {
+  if (bridgeInitialized) return;
+  disposed = false;
+  bridgeInitialized = true;
+  handlers.add(handleBridgeMessage);
+  window.addEventListener('message', messageListener);
+  bridgeWindow[BRIDGE_CLEANUP_KEY] = cleanupBridge;
+}
+
+initializeBridge();
+
+export function openPathWithResult(payload: {
+  path: string;
+  line?: number;
+  kind?: 'auto' | 'file' | 'directory';
+}): Promise<OpenPathResult> {
+  const requestId = ++openPathRequestId;
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      pendingOpenPaths.delete(requestId);
+      reject(new Error('Timed out opening file'));
+    }, 10_000);
+    pendingOpenPaths.set(requestId, { resolve, reject, timer });
+    if (!postMessage({ type: 'vscode/open', payload: { ...payload, requestId } })) {
+      clearTimeout(timer);
+      pendingOpenPaths.delete(requestId);
+      reject(new Error('Extension bridge unavailable'));
+    }
+  });
+}
+
+export function apiCall<T = unknown>(
+  method: string,
+  path: string,
+  body?: UnknownRecord[string],
+  options?: ApiCallOptions
+): Promise<T> {
+  return sendApiCall(method, path, body, {
+    timeoutMs: options?.timeoutMs ?? defaultTimeoutForRequest(method, path),
+    signal: options?.signal,
+    retries: options?.retries ?? 1,
+    permissionAutomationLease: options?.permissionAutomationLease,
+    permissionAutomationSessionID: options?.permissionAutomationSessionID,
+    queuedMessageDispatch: options?.queuedMessageDispatch,
+    interruptedRecovery: options?.interruptedRecovery,
+  });
+}
+
+function sendApiCall<T>(
+  method: string,
+  path: string,
+  body: UnknownRecord[string],
+  options: {
+    timeoutMs: number;
+    signal?: AbortSignal;
+    retries: number;
+    permissionAutomationLease?: number;
+    permissionAutomationSessionID?: string;
+    queuedMessageDispatch?: { itemId: string; lease: number };
+    interruptedRecovery?: true;
+  }
+): Promise<T> {
+  if (disposed) return Promise.reject(new Error('Bridge cleaned up'));
+  const id = ++reqId;
+  const cancelKey = crypto.randomUUID();
+  const startedAt = Date.now();
+  return new Promise<T>((resolve, reject) => {
+    let settled = false;
+    let sent = false;
+    let cancelSent = false;
+    const cancelHostRequest = () => {
+      if (!sent || cancelSent) return;
+      cancelSent = true;
+      postMessage({ type: 'api/cancel', payload: { id, cancelKey } });
+    };
+    const finish = (callback: () => void) => {
+      if (settled) return;
+      settled = true;
+      const entry = pending.get(id);
+      if (entry) {
+        clearTimeout(entry.timer);
+        clearTimeout(entry.slowTimer);
+        entry.cleanupAbort?.();
+        pending.delete(id);
+      }
+      if (slowApiRequests.delete(id)) notifySlowApiRequestsChanged();
+      callback();
+    };
+
+    const timer = setTimeout(() => {
+      cancelHostRequest();
+      finish(() => reject(new Error(`API call timed out: ${method} ${path}`)));
+    }, options.timeoutMs);
+    const slowTimer = setTimeout(() => {
+      if (!pending.has(id)) return;
+      slowApiRequests.set(id, {
+        id,
+        method: method.toUpperCase(),
+        path: sanitizeDiagnosticPath(path),
+        startedAt,
+      });
+      notifySlowApiRequestsChanged();
+    }, SLOW_API_REQUEST_THRESHOLD_MS);
+
+    let cleanupAbort: (() => void) | undefined;
+    pending.set(id, {
+      // SAFETY: The surrounding shape or discriminator check establishes the T contract used below.
+      resolve: (value) => finish(() => resolve(value as T)),
+      reject: (error) => finish(() => reject(error)),
+      timer,
+      slowTimer,
+      cleanupAbort,
+      cancelHostRequest,
+    });
+
+    if (options.signal) {
+      const abort = () => {
+        cancelHostRequest();
+        finish(() => {
+          reject(
+            options.signal?.reason instanceof Error
+              ? options.signal.reason
+              : new Error('API call aborted')
+          );
+        });
+      };
+
+      if (options.signal.aborted) {
+        abort();
+        return;
+      }
+
+      options.signal.addEventListener('abort', abort, { once: true });
+      cleanupAbort = () => options.signal?.removeEventListener('abort', abort);
+      pending.get(id)!.cleanupAbort = cleanupAbort;
+    }
+
+    const payload: Extract<WebviewMessage, { type: 'api/request' }>['payload'] = {
+      id,
+      cancelKey,
+      method,
+      path,
+      body,
+    };
+    if (options.permissionAutomationLease !== undefined) {
+      payload.permissionAutomationLease = options.permissionAutomationLease;
+    }
+    if (options.permissionAutomationSessionID !== undefined) {
+      payload.permissionAutomationSessionID = options.permissionAutomationSessionID;
+    }
+    if (options.queuedMessageDispatch) {
+      payload.queuedMessageDispatch = options.queuedMessageDispatch;
+    }
+    if (options.interruptedRecovery) payload.interruptedRecovery = true;
+    const sendResult = sendToExtension({
+      type: 'api/request',
+      payload,
+    });
+    sent = sendResult.sent;
+    const sendError = sendResult.error;
+
+    if (sent) return;
+
+    finish(() => {
+      if (options.retries > 0 && !options.signal?.aborted) {
+        const retry: PendingRetry = {
+          timer: 0,
+          reject: (error: Error) => reject(error),
+        };
+        retry.timer = window.setTimeout(() => {
+          pendingRetries.delete(retry);
+          if (disposed) {
+            reject(new Error('Bridge cleaned up'));
+            return;
+          }
+          void sendApiCall<T>(method, path, body, {
+            ...options,
+            retries: options.retries - 1,
+          }).then(resolve, reject);
+        }, API_CALL_RETRY_DELAY_MS);
+        pendingRetries.add(retry);
+        return;
+      }
+      // sendError may cross the webview host realm boundary (e.g. a
+      // DataCloneError from structured clone), where instanceof Error fails;
+      // any thrown value is a send failure, not a missing transport.
+      reject(
+        sendError !== undefined
+          ? new Error(
+              `Extension transport failed: ${method} ${path}: ${describeSendError(sendError)}`
+            )
+          : new Error(`Extension transport unavailable: ${method} ${path}`)
+      );
+    });
+  });
+}
+
+function describeSendError<T>(value: T): string {
+  if (value && isObject(value) && 'message' in value) {
+    // SAFETY: The surrounding shape or discriminator check establishes the owner type contract used below.
+    const message = (value as { message: unknown }).message;
+    if (isString(message) && message) return message;
+  }
+  return String(value);
+}
+
+function sanitizeDiagnosticPath(path: string): string {
+  return parsePathname(path);
+}
+
+function parsePathname(path: string): string {
+  try {
+    return new URL(path, 'http://varro.local').pathname;
+  } catch {
+    return path.split(/[?#]/)[0] || '/';
+  }
+}
+
+function notifySlowApiRequestsChanged() {
+  const snapshot = [...slowApiRequests.values()];
+  for (const handler of slowApiRequestHandlers) handler(snapshot);
+}
+
+function defaultTimeoutForRequest(method: string, path: string) {
+  const pathname = parsePathname(path);
+  if (method.toUpperCase() === 'POST' && /^\/mcp\/[^/]+\/auth\/authenticate$/.test(pathname)) {
+    return API_CALL_MCP_AUTH_TIMEOUT_MS;
+  }
+  return /\/prompt_async$|\/summarize$/.test(pathname)
+    ? API_CALL_LONG_TIMEOUT_MS
+    : API_CALL_TIMEOUT_MS;
+}

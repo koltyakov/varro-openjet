@@ -1,0 +1,30 @@
+<svg width="20" height="20" viewBox="0 0 256 256" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!--
+    Tool window stripe icon, light theme. `varro_dark.svg` beside it is the dark
+    variant; IntelliJ's IconLoader picks between them by theme.
+
+    The Varro mark as three filled nodes joined by bars, in the platform's icon
+    grey. Filled rather than outlined: at 20px an outlined node is a ~4px ring
+    around a ~2px hole, which turns to mush, whereas a filled dot stays clean.
+
+    Each bar stops 16 units short of the node centres it joins — a real gap, as
+    in the brand mark, rather than running into the nodes. `butt` caps matter
+    here: `round` caps would extend each bar by half its stroke width and close
+    the gap again. 16 units is ~1px at 20px, so the gap survives on a HiDPI
+    display instead of being lost to rounding.
+
+    The brand's full-weight, orange form lives on META-INF/pluginIcon.svg.
+  -->
+  <g transform="translate(21.8 21.8) scale(0.83)">
+    <g stroke="#6C707E" stroke-width="24" stroke-linecap="butt">
+      <line x1="103.0" y1="67.5" x2="152.0" y2="87.5"/>
+      <line x1="61.2" y1="100.4" x2="69.8" y2="155.6"/>
+      <line x1="119.9" y1="174.9" x2="160.1" y2="142.1"/>
+    </g>
+    <g fill="#6C707E">
+      <circle cx="53" cy="47" r="38"/>
+      <circle cx="202" cy="108" r="38"/>
+      <circle cx="78" cy="209" r="38"/>
+    </g>
+  </g>
+</svg>

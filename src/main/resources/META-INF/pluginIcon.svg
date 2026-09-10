@@ -1,0 +1,27 @@
+<svg width="40" height="40" viewBox="0 0 256 256" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!--
+    Plugin icon for the Plugins list and the Marketplace listing.
+
+    The Varro mark in the brand colour #D34A1E, taken from upstream's
+    assets/icon.png. Unlike the tool window stripe icon, this one keeps the brand
+    colour and full weight: this is where the product is identified.
+
+    Each bar stops short of the nodes it joins, because those gaps are part of
+    the mark. `butt` caps are required for that — `round` caps extend each bar by
+    half its stroke width and close the gap.
+
+    `pluginIcon_dark.svg` beside it carries the same colour on purpose. Without an
+    explicit dark variant IntelliJ runs its SVG colour patcher over the icon on
+    dark themes, which shifts the orange away from the brand value.
+  -->
+  <g stroke="#D34A1E" stroke-width="44" stroke-linecap="butt">
+    <line x1="103.0" y1="67.5" x2="152.0" y2="87.5"/>
+    <line x1="61.2" y1="100.4" x2="69.8" y2="155.6"/>
+    <line x1="119.9" y1="174.9" x2="160.1" y2="142.1"/>
+  </g>
+  <g fill="#D34A1E">
+    <circle cx="53" cy="47" r="44"/>
+    <circle cx="202" cy="108" r="44"/>
+    <circle cx="78" cy="209" r="44"/>
+  </g>
+</svg>

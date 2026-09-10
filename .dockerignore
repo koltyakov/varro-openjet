@@ -1,0 +1,19 @@
+# Keep the build context small and the container build reproducible: anything
+# generated on the host is rebuilt inside the image.
+.git
+.gradle
+build
+out
+dist
+node_modules
+webview/node_modules
+webview/.upstream
+src/main/resources/webview
+
+# Reference checkouts of upstream Varro and the JetBrains sample plugin.
+tmp
+
+.idea
+*.iml
+local.properties
+.DS_Store

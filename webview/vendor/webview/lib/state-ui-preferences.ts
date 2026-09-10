@@ -1,0 +1,90 @@
+import { batch } from 'solid-js';
+import {
+  isLoading,
+  loadingStartedAt,
+  setComposerFocusKey,
+  setIsLoading,
+  setLoadingLastActivityAt,
+  setLoadingStartedAt,
+  setMessageListScrollRequestKey,
+  setMessageListScrollTargetMessageId,
+  setOpenAttentionSessionsKey,
+  setOpenCompletedSessionsKey,
+  setSessionSearchFocusKey,
+  setShowThinking,
+  showThinking,
+} from './app-state';
+import { STORAGE_KEYS, writeStored } from './state-storage';
+
+let loadingGeneration = 0;
+
+const beforeShowThinkingPreferenceChangeListeners = new Set<() => void>();
+
+export function onBeforeShowThinkingPreferenceChange(listener: () => void) {
+  beforeShowThinkingPreferenceChangeListeners.add(listener);
+  return () => beforeShowThinkingPreferenceChangeListeners.delete(listener);
+}
+
+export function toggleThinking() {
+  const next = !showThinking();
+  setShowThinkingPreference(next);
+}
+
+export function setShowThinkingPreference(next: boolean) {
+  if (next !== showThinking()) {
+    for (const listener of beforeShowThinkingPreferenceChangeListeners) listener();
+  }
+  setShowThinking(next);
+  writeStored(STORAGE_KEYS.showThinking, next);
+}
+
+// Async controls can retain this predicate to avoid clearing a later operation.
+export function startLoading(now = Date.now()): () => boolean {
+  const generation = ++loadingGeneration;
+  if (!isLoading()) {
+    setLoadingStartedAt(now);
+  } else if (loadingStartedAt() === null) {
+    setLoadingStartedAt(now);
+  }
+  setLoadingLastActivityAt(now);
+  setIsLoading(true);
+  return () => generation === loadingGeneration;
+}
+
+export function stopLoading() {
+  loadingGeneration += 1;
+  setIsLoading(false);
+  setLoadingStartedAt(null);
+  setLoadingLastActivityAt(null);
+}
+
+export function markLoadingActivity(now = Date.now()) {
+  if (!isLoading()) return;
+  if (loadingStartedAt() === null) {
+    setLoadingStartedAt(now);
+  }
+  setLoadingLastActivityAt(now);
+}
+
+export function requestComposerFocus() {
+  setComposerFocusKey((value) => value + 1);
+}
+
+export function requestOpenAttentionSessions() {
+  setOpenAttentionSessionsKey((value) => value + 1);
+}
+
+export function requestOpenCompletedSessions() {
+  setOpenCompletedSessionsKey((value) => value + 1);
+}
+
+export function requestSessionSearchFocus() {
+  setSessionSearchFocusKey((value) => value + 1);
+}
+
+export function requestMessageListScrollToBottom(targetMessageId?: string) {
+  batch(() => {
+    setMessageListScrollTargetMessageId(targetMessageId ?? null);
+    setMessageListScrollRequestKey((value) => value + 1);
+  });
+}

@@ -1,0 +1,76 @@
+# Containerized build and development for Varro OpenJet.
+#
+#   docker compose run --rm build     # produce dist/*.zip
+#   docker compose run --rm shell     # interactive shell for Gradle/npm work
+#
+# The named volumes matter: a cold IntelliJ Platform download is well over a
+# gigabyte, and keeping the Gradle and npm caches out of the image means a
+# source-only change rebuilds in seconds instead of re-downloading the platform.
+
+x-common: &common
+  build:
+    context: .
+    dockerfile: Dockerfile
+    args:
+      # Matching the host uid keeps bind-mounted output writable on Linux, where
+      # Docker does not remap ownership the way Docker Desktop does. `UID` is
+      # readonly in bash, so scripts/build.sh exports these names instead.
+      BUILDER_UID: ${VARRO_UID:-1000}
+      BUILDER_GID: ${VARRO_GID:-1000}
+  image: varro-openjet-build
+  volumes:
+    - gradle-cache:/home/builder/.gradle
+    - npm-cache:/home/builder/.npm
+  environment:
+    GRADLE_OPTS: -Dorg.gradle.daemon=false -Dorg.gradle.welcome=never
+    GRADLE_USER_HOME: /home/builder/.gradle
+
+services:
+  # One-shot build: emits the installable plugin zip into ./dist.
+  build:
+    <<: *common
+    volumes:
+      - gradle-cache:/home/builder/.gradle
+      - npm-cache:/home/builder/.npm
+      - ./dist:/out
+    command: >
+      bash -lc "./gradlew --no-daemon clean buildPlugin &&
+                mkdir -p /out && cp build/distributions/*.zip /out/ && ls -lh /out/"
+
+  # Incremental build against the live working tree, so edits on the host are
+  # picked up without rebuilding the image.
+  dev:
+    <<: *common
+    volumes:
+      - gradle-cache:/home/builder/.gradle
+      - npm-cache:/home/builder/.npm
+      - .:/workspace
+      - ./dist:/out
+    command: >
+      bash -lc "./gradlew --no-daemon buildPlugin &&
+                mkdir -p /out && cp build/distributions/*.zip /out/ && ls -lh /out/"
+
+  # Interactive shell for ad-hoc Gradle or npm commands.
+  shell:
+    <<: *common
+    volumes:
+      - gradle-cache:/home/builder/.gradle
+      - npm-cache:/home/builder/.npm
+      - .:/workspace
+      - ./dist:/out
+    command: bash
+    stdin_open: true
+    tty: true
+
+  # Plugin verifier and tests, useful before publishing.
+  verify:
+    <<: *common
+    volumes:
+      - gradle-cache:/home/builder/.gradle
+      - npm-cache:/home/builder/.npm
+      - .:/workspace
+    command: bash -lc "./gradlew --no-daemon test verifyPlugin"
+
+volumes:
+  gradle-cache:
+  npm-cache:
