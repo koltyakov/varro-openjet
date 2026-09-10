@@ -86,6 +86,9 @@ class WebviewHost(
         installAssetHandler()
         installLoadHandler()
         installThemeListeners()
+        ProjectFileDropTarget.install(browser.component, this) { message ->
+            dispatchMessage(message)
+        }
         browser.jbCefClient.addDragHandler({ cefBrowser, data, _ ->
             val paths = java.util.Vector<String>()
             data.getFilePaths(paths)
@@ -107,13 +110,18 @@ class WebviewHost(
                     // Preserve write order without blocking CEF's IO thread.
                     // The service dispatches API requests separately so long
                     // requests cannot hold up cancellation or draft persistence.
-                    messages.execute {
-                        runCatching { onMessage(envelope) }
-                            .onFailure { log.warn("Webview message handler failed", it) }
-                    }
+                    dispatchMessage(envelope)
                 }
             }
             null
+        }
+    }
+
+    private fun dispatchMessage(message: JsonObject) {
+        if (disposed.get()) return
+        messages.execute {
+            runCatching { onMessage(message) }
+                .onFailure { log.warn("Webview message handler failed", it) }
         }
     }
 
