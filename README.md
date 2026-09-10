@@ -23,7 +23,7 @@ npm install -g opencode-ai
 opencode auth login
 ```
 
-Build the plugin using the instructions below, then open Settings > Plugins > Install Plugin from Disk and select the ZIP. Restart the IDE and open the Varro tool window on the right.
+Download the plugin ZIP from [GitHub Releases](https://github.com/koltyakov/varro-openjet/releases), or build it using the instructions below. Open Settings > Plugins > Install Plugin from Disk and select the ZIP. Restart the IDE and open the Varro tool window on the right.
 
 Varro starts OpenCode at `127.0.0.1:4096` when needed. If a server is already listening, it connects to that server instead.
 
@@ -99,6 +99,21 @@ Install JDK 21 and the Node/npm versions listed in [`webview/package.json`](webv
 When needed, run the IntelliJ Plugin Verifier directly on a development machine with `./gradlew verifyPlugin`. Do not run it in Docker.
 
 The build uses `npm ci`. If you change webview dependencies, run `npm install` in `webview/` and commit the updated lockfile. Keep the Node/npm versions in `webview/package.json` and `Dockerfile` in sync.
+
+### CI and releases
+
+GitHub Actions runs `./gradlew --no-daemon --stacktrace check buildPlugin` for pull requests, pushes to `main`, and tags starting with `v`. This runs the Kotlin and webview host tests and builds the plugin ZIP. Successful builds save the ZIP as the `plugin-archive` workflow artifact for 14 days.
+
+To publish a release, push a version tag on the commit you want to ship:
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+Use tags such as `v0.1.0` for stable releases or `v0.2.0-rc.1` for prereleases. The workflow uses the tag without the `v` prefix as `pluginVersion`, overriding `gradle.properties` for that build. After tests and packaging pass, it creates or updates the GitHub release, generates release notes, and attaches `varro-openjet-<version>.zip`. Tags with a prerelease suffix produce GitHub prereleases.
+
+Release publishing uses the built-in `GITHUB_TOKEN`; no additional secrets are needed. The release job has `contents: write` permission. Branch and pull-request builds use the version in `gradle.properties`.
 
 ## Development
 
