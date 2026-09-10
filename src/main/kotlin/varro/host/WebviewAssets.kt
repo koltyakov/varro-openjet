@@ -35,6 +35,7 @@ object WebviewAssets {
     /** Synthetic origin. `.localhost` is guaranteed not to resolve on a real network. */
     const val ORIGIN: String = "http://varro.localhost"
     const val INDEX_URL: String = "$ORIGIN/index.html"
+    const val EMPTY_STATE_LOGO_URL: String = "$ORIGIN/varro-logo.svg"
 
     /** Classpath root the Vite build emits into. */
     private const val RESOURCE_ROOT = "/webview"
@@ -67,7 +68,12 @@ object WebviewAssets {
         // content, and `getResourceAsStream` would happily resolve `..` out of the
         // bundle and into the rest of the plugin jar.
         val normalized = normalize(path) ?: return null
-        val bytes = readResource("$RESOURCE_ROOT/$normalized") ?: return null
+        val resource = if (normalized == "varro-logo.svg") {
+            "/META-INF/pluginIcon.svg"
+        } else {
+            "$RESOURCE_ROOT/$normalized"
+        }
+        val bytes = readResource(resource) ?: return null
         return Resolved(bytes, mimeType(normalized))
     }
 

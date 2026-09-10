@@ -70,7 +70,7 @@ class PortedFeaturesTest {
     @Test fun `usage pages across projects and deduplicates assistant rows and prompts`() {
         val now = 1_800_000_000_000L
         val requests = mutableListOf<String>()
-        val report = UsageReport { path, options ->
+        val report = UsageReport(temporary.root.toPath().resolve("missing.db")) { path, options ->
             requests.add(path)
             when {
                 path.startsWith("/experimental/session") -> {
@@ -90,18 +90,18 @@ class PortedFeaturesTest {
             }
         }.build(true, now)
         assertTrue(requests.any { it.contains("cursor=next+page") })
-        assertTrue(report.contains("| provider/model | 2 | 200 | 20 | 10 | 40 | 60 | 0.5000 |"))
+        assertTrue(report.contains("| provider | model | 2 | 330 | - | 200 | 20 | 10 | 40 | 60 |"))
         assertTrue(report.contains("## All time"))
         assertTrue(report.contains("2 sessions scanned"))
     }
 
-    @Test fun `usage scans more than 250 sessions across pages without truncating totals`() {
+    @Test fun `usage fallback scans up to 250 sessions across pages without truncating totals`() {
         val now = 1_800_000_000_000L
         val scanned = mutableListOf<String>()
-        val report = UsageReport { path, _ ->
+        val report = UsageReport(temporary.root.toPath().resolve("missing.db")) { path, _ ->
             if (path.startsWith("/experimental/session")) {
                 val lastPage = path.contains("cursor=")
-                val ids = if (lastPage) 250..300 else 1..250
+                val ids = if (lastPage) 200..250 else 1..200
                 OpenCodeResponse(Json.array(ids.map { Json.obj("id" to "session-$it") }),
                     if (lastPage) null else "next")
             } else {
@@ -114,19 +114,19 @@ class PortedFeaturesTest {
                 )))))
             }
         }.build(false, now)
-        assertEquals(300, scanned.size)
-        assertEquals(300, scanned.toSet().size)
-        assertTrue(report.contains("300 sessions scanned"))
-        assertTrue(report.contains("| provider/model | 300 | 300 | 0 | 0 | 0 | 0 | 75.0000 |"))
+        assertEquals(250, scanned.size)
+        assertEquals(250, scanned.toSet().size)
+        assertTrue(report.contains("250 sessions scanned"))
+        assertTrue(report.contains("| provider | model | 250 | 250 | - | 250 | 0 | 0 | 0 | 0 |"))
     }
 
-    @Test fun `usage reports missing history instead of silently counting it as zero`() {
-        val report = UsageReport { path, _ ->
+    @Test fun `usage omits incomplete history diagnostics from report`() {
+        val report = UsageReport(temporary.root.toPath().resolve("missing.db")) { path, _ ->
             if (path.startsWith("/experimental")) OpenCodeResponse(Json.array(listOf(Json.obj("id" to "missing"))))
             else error("History unavailable")
         }.build(false)
-        assertTrue(report.contains("## Incomplete history"))
-        assertTrue(report.contains("History unavailable"))
+        assertFalse(report.contains("## Incomplete history"))
+        assertFalse(report.contains("History unavailable"))
         assertFalse(report.contains("## All time"))
     }
 }

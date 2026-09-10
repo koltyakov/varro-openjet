@@ -53,9 +53,9 @@ object Json {
 
     fun stringify(value: Any?): String = gson.toJson(toElement(value))
 
-    /** API data and quota events own their nullability; never drop fields from them. */
+    /** Context snapshots need explicit nulls to pass validation and clear stale selections. */
     fun stringifyMessage(message: JsonElement): String = when (message.asObjectOrNull().str("type")) {
-        "api/response", "provider-limit/updated" -> message.toString()
+        "api/response", "provider-limit/updated", "context/update" -> message.toString()
         else -> stringify(message)
     }
 

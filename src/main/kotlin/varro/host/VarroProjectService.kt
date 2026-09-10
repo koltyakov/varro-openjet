@@ -28,6 +28,7 @@ import varro.server.ServerEvents
 import varro.server.ServerStatus
 import varro.settings.VarroSettings
 import varro.store.VarroStore
+import varro.store.VarroModelStore
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
@@ -71,6 +72,7 @@ class VarroProjectService(private val project: Project) : Disposable {
 
     val settings: VarroSettings = VarroSettings.getInstance()
     val store: VarroStore = VarroStore.getInstance(project)
+    private val modelStore = VarroModelStore.getInstance()
     val editor: EditorIntegration = EditorIntegration(project)
     val terminal: TerminalService = TerminalService(project)
     private val attachments = AttachmentStore(
@@ -89,6 +91,22 @@ class VarroProjectService(private val project: Project) : Disposable {
     }
 
     init {
+        store.migrateBrowserSessionSelections()
+        val removeSelectionListener = store.addSelectionListener { selection ->
+            when (selection) {
+                VarroStore.SessionSelection.PERMISSION_MODE ->
+                    broadcast("permission-modes/sync", Json.obj("modes" to store.sessionPermissionModes))
+                VarroStore.SessionSelection.MODEL ->
+                    broadcast("session-models/sync", Json.obj("models" to store.sessionSelectedModels))
+            }
+        }
+        Disposer.register(this, Disposable { removeSelectionListener() })
+        ApplicationManager.getApplication().messageBus.connect(this)
+            .subscribe(VarroModelStore.TOPIC, VarroModelStore.Listener {
+                broadcast("model-preferences/sync", modelStore.modelPreferences)
+            })
+        if (modelStore.migrate(store.legacyModelPreferences)) broadcastModelPreferences()
+        store.legacyModelPreferences = JsonObject()
         store.editorRoutes.entrySet().forEach { (id, route) -> route.asObjectOrNull()?.let { routes[id] = it } }
         interruptedSessionIds.set(store.interruptedSessionIds)
         Disposer.register(this, server)
@@ -176,6 +194,10 @@ class VarroProjectService(private val project: Project) : Disposable {
 
     private fun broadcastEnvelope(message: JsonElement) = panels.forEach { it.post(message) }
 
+    private fun broadcastModelPreferences() {
+        ApplicationManager.getApplication().messageBus.syncPublisher(VarroModelStore.TOPIC).preferencesChanged()
+    }
+
     // --- Startup --------------------------------------------------------------
 
     /**
@@ -207,7 +229,7 @@ class VarroProjectService(private val project: Project) : Disposable {
             add("editorContext", context.context)
             add("terminalSelection", terminal.currentSelection())
             add("droppedFiles", JsonArray())
-            addProperty("emptyStateLogoUri", "")
+            addProperty("emptyStateLogoUri", WebviewAssets.EMPTY_STATE_LOGO_URL)
             addProperty("remoteExtensionHost", false)
             add("browserStorage", store.browserStorage())
 
@@ -235,7 +257,7 @@ class VarroProjectService(private val project: Project) : Disposable {
             add("sessionPermissionModes", store.sessionPermissionModes)
             add("sessionSelectedModels", store.sessionSelectedModels)
             add("sessionPlanState", store.sessionPlanState)
-            add("modelPreferences", store.modelPreferences)
+            add("modelPreferences", modelStore.modelPreferences)
             add("pinnedSessionIds", Json.array(store.pinnedSessionIds))
             add("queuedMessages", store.queuedMessages)
             add("recycleBinEntries", store.recycleBin)
@@ -345,7 +367,7 @@ class VarroProjectService(private val project: Project) : Disposable {
                         "session-plan-state/sync",
                         Json.obj("state" to store.sessionPlanState, "agents" to store.sessionPlanAgents),
                     )
-                    broadcast("model-preferences/sync", store.modelPreferences)
+                    broadcast("model-preferences/sync", modelStore.modelPreferences)
                     broadcast("queued-messages/sync", Json.obj("messages" to store.queuedMessages))
                     ensureServerStarted()
                 }
@@ -445,24 +467,20 @@ class VarroProjectService(private val project: Project) : Disposable {
                 )
 
                 // --- Persisted state --------------------------------------------
-                "permission-mode/update" -> updateRecord(
-                    store.sessionPermissionModes,
-                    payload.str("sessionId"),
-                    payload?.get("mode"),
-                ) { store.sessionPermissionModes = it }
-
-                "permission-modes/migrate" -> payload.obj("modes")?.let {
-                    store.sessionPermissionModes = it
+                "permission-mode/update" -> payload.str("sessionId")?.let {
+                    store.updateSessionPermissionMode(it, payload?.get("mode"))
                 }
 
-                "session-model/update" -> updateRecord(
-                    store.sessionSelectedModels,
-                    payload.str("sessionId"),
-                    payload?.get("model"),
-                ) { store.sessionSelectedModels = it }
+                "permission-modes/migrate" -> payload.obj("modes")?.let {
+                    store.migrateSessionPermissionModes(it)
+                }
+
+                "session-model/update" -> payload.str("sessionId")?.let {
+                    store.updateSessionModel(it, payload?.get("model"))
+                }
 
                 "session-models/migrate" -> payload.obj("models")?.let {
-                    store.sessionSelectedModels = it
+                    store.migrateSessionModels(it)
                 }
 
                 "session-plan-state/update" -> {
@@ -494,12 +512,12 @@ class VarroProjectService(private val project: Project) : Disposable {
                 }
 
                 "model-preferences/update" -> payload.obj("preferences")?.let {
-                    store.modelPreferences = it
-                    broadcast("model-preferences/sync", it)
+                    modelStore.modelPreferences = it
+                    broadcastModelPreferences()
                 }
                 "model-preferences/migrate" -> payload?.let {
-                    store.modelPreferences = it
-                    broadcast("model-preferences/sync", it)
+                    modelStore.migrate(it)
+                    broadcastModelPreferences()
                 }
 
                 "queued-messages/update" -> {
@@ -632,18 +650,6 @@ class VarroProjectService(private val project: Project) : Disposable {
         }
     }
 
-    /** Sets or removes one key of a persisted record, then writes it back. */
-    private inline fun updateRecord(
-        record: JsonObject,
-        key: String?,
-        value: JsonElement?,
-        write: (JsonObject) -> Unit,
-    ) {
-        if (key == null) return
-        if (value == null || value.isJsonNull) record.remove(key) else record.add(key, value)
-        write(record)
-    }
-
     private fun applyWebviewConfig(payload: JsonObject?) {
         payload.str("desktopSessionPaneSide")?.let { settings.chatDesktopSessionPaneSide = it }
         payload.str("defaultPermissionMode")?.let { settings.chatDefaultPermissionMode = it }
@@ -737,16 +743,17 @@ class VarroProjectService(private val project: Project) : Disposable {
             object : com.intellij.openapi.progress.Task.Backgroundable(project, "Building OpenCode usage report", true) {
                 override fun run(indicator: com.intellij.openapi.progress.ProgressIndicator) {
                     try {
-                        ensureServerStarted()
-                        val deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(30)
-                        while (lastStatus.get() !is ServerStatus.Running) {
-                            indicator.checkCanceled()
-                            val status = lastStatus.get()
-                            if (status is ServerStatus.Error) error(status.message)
-                            check(System.nanoTime() < deadline) { "OpenCode did not become available within 30 seconds" }
-                            Thread.sleep(100)
-                        }
-                        val report = UsageReport { path, options -> server.transport.request("GET", path, options = options) }
+                        val report = UsageReport(ensureServerStarted = {
+                            ensureServerStarted()
+                            val deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(30)
+                            while (lastStatus.get() !is ServerStatus.Running) {
+                                indicator.checkCanceled()
+                                val status = lastStatus.get()
+                                if (status is ServerStatus.Error) error(status.message)
+                                check(System.nanoTime() < deadline) { "OpenCode did not become available within 30 seconds" }
+                                Thread.sleep(100)
+                            }
+                        }) { path, options -> server.transport.request("GET", path, options = options) }
                             .build(includeAllTime, checkCancelled = indicator::checkCanceled)
                         editor.openText(report, "OpenCode Usage Report.md", "markdown")
                     } catch (cancelled: com.intellij.openapi.progress.ProcessCanceledException) {
@@ -768,7 +775,7 @@ class VarroProjectService(private val project: Project) : Disposable {
             """
             # Varro OpenJet ${plugin?.version.orEmpty()}
 
-            OpenCode workbench for JetBrains IDEs. Port of Varro by Andrew Koltyakov.
+            OpenCode workbench for JetBrains IDEs. Port of [Varro for VS Code](https://github.com/koltyakov/varro).
 
             - IDE: ${ide.fullApplicationName}, build ${ide.build}
             - Runtime: ${System.getProperty("java.runtime.version")}

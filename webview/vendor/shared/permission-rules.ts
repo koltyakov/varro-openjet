@@ -124,3 +124,37 @@ export function getSessionPermissionRulesForMode(
   if (mode === 'auto') return AUTO_APPROVE_PERMISSION_RULES;
   return [];
 }
+
+/** Infer only presets whose effective rules we can recognize without guessing custom policy. */
+export function inferSessionPermissionMode(
+  rules: readonly PermissionRule[] | undefined
+): PermissionMode | undefined {
+  if (!rules?.length) return undefined;
+
+  // Rules before the last universal rule cannot affect the resulting policy.
+  const catchAllIndex = rules.findLastIndex(
+    (rule) => rule.permission === '*' && rule.pattern === '*'
+  );
+  if (catchAllIndex < 0) return 'default';
+  const effective = rules.slice(catchAllIndex);
+  if (effective.every((rule) => rule.action === 'allow')) return 'full';
+
+  // Pattern-specific or unknown tool overrides are custom policy, not Auto.
+  if (
+    effective[0]?.action !== 'ask' ||
+    effective.slice(1).some(
+      (rule) =>
+        rule.pattern !== '*' ||
+        !KNOWN_PERMISSION_NAMES.some((name) => name === rule.permission)
+    )
+  ) {
+    return 'default';
+  }
+
+  const actions = new Map(effective.map((rule) => [rule.permission, rule.action]));
+  return KNOWN_PERMISSION_NAMES.every(
+    (name) => (actions.get(name) ?? 'ask') === (isAutoApprovedPermission(name) ? 'allow' : 'ask')
+  )
+    ? 'auto'
+    : 'default';
+}

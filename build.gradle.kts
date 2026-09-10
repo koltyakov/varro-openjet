@@ -32,6 +32,7 @@ dependencies {
     // Gson drives the whole webview protocol: Varro's transport is JSON
     // pass-through, so a mutable tree model beats generated data classes here.
     implementation("com.google.code.gson:gson:2.14.0")
+    implementation("org.xerial:sqlite-jdbc:3.51.2.0")
 
     intellijPlatform {
         create(

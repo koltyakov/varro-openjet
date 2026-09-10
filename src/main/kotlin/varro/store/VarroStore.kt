@@ -1,6 +1,7 @@
 package varro.store
 
 import com.google.gson.JsonArray
+import com.google.gson.JsonElement
 import com.google.gson.JsonObject
 import com.intellij.openapi.components.PersistentStateComponent
 import com.intellij.openapi.components.Service
@@ -12,13 +13,15 @@ import varro.protocol.Json
 import varro.protocol.asArrayOrNull
 import varro.protocol.asObjectOrNull
 import varro.protocol.strings
+import varro.protocol.str
+import java.util.concurrent.CopyOnWriteArrayList
 
 /**
  * Project-scoped persistence for the state upstream keeps in VS Code's workspace
  * Memento.
  *
  * Everything here is stored as a JSON string rather than a typed bean. The
- * shapes - model preferences, queued-message snapshots with their image and PDF
+ * shapes - queued-message snapshots with their image and PDF
  * attachments, plan state - are owned and versioned by the webview, and upstream
  * treats the host as a dumb durable store for them too. Modelling them in Kotlin
  * would add a second schema to keep in sync for no benefit, and would drop
@@ -38,13 +41,16 @@ class VarroStore : PersistentStateComponent<VarroStore.StoreState> {
         /** `Record<sessionId, ChatModelSelection>` */
         @JvmField var sessionSelectedModels: String = "{}"
 
+        /** Browser-only selections from older versions have been imported. */
+        @JvmField var sessionSelectionsMigrated: Boolean = false
+
         /** `Record<sessionId, number | null>` - plan-skip markers. */
         @JvmField var sessionPlanState: String = "{}"
 
         /** `Record<sessionId, string>` - agent per session, paired with plan state. */
         @JvmField var sessionPlanAgents: String = "{}"
 
-        /** Upstream's `ModelPreferences`: pins, hidden entries, display names, order. */
+        /** Legacy project preferences, retained only for migration to VarroModelStore. */
         @JvmField var modelPreferences: String = "{}"
 
         /** `string[]` of pinned root session ids, in display order. */
@@ -78,6 +84,9 @@ class VarroStore : PersistentStateComponent<VarroStore.StoreState> {
     }
 
     private var state = StoreState()
+    enum class SessionSelection { MODEL, PERMISSION_MODE }
+
+    private val selectionListeners = CopyOnWriteArrayList<(SessionSelection) -> Unit>()
 
     override fun getState(): StoreState = state
 
@@ -88,12 +97,65 @@ class VarroStore : PersistentStateComponent<VarroStore.StoreState> {
     // --- Object-valued entries ------------------------------------------------
 
     var sessionPermissionModes: JsonObject
-        get() = readObject(state.sessionPermissionModes)
-        set(value) { state.sessionPermissionModes = Json.stringify(value) }
+        @Synchronized get() = readObject(state.sessionPermissionModes)
+        @Synchronized set(value) {
+            state.sessionPermissionModes = Json.stringify(value)
+            selectionListeners.forEach { it(SessionSelection.PERMISSION_MODE) }
+        }
 
     var sessionSelectedModels: JsonObject
-        get() = readObject(state.sessionSelectedModels)
-        set(value) { state.sessionSelectedModels = Json.stringify(value) }
+        @Synchronized get() = readObject(state.sessionSelectedModels)
+        @Synchronized set(value) {
+            state.sessionSelectedModels = Json.stringify(value)
+            selectionListeners.forEach { it(SessionSelection.MODEL) }
+        }
+
+    fun addSelectionListener(listener: (SessionSelection) -> Unit): () -> Unit {
+        selectionListeners.add(listener)
+        return { selectionListeners.remove(listener) }
+    }
+
+    @Synchronized
+    fun updateSessionPermissionMode(sessionId: String, mode: JsonElement?) {
+        sessionPermissionModes = updateSelection(sessionPermissionModes, sessionId, mode)
+    }
+
+    @Synchronized
+    fun updateSessionModel(sessionId: String, model: JsonElement?) {
+        sessionSelectedModels = updateSelection(sessionSelectedModels, sessionId, model)
+    }
+
+    @Synchronized
+    fun migrateSessionPermissionModes(modes: JsonObject) {
+        sessionPermissionModes = mergeMissingSelections(sessionPermissionModes, modes)
+    }
+
+    @Synchronized
+    fun migrateSessionModels(models: JsonObject) {
+        sessionSelectedModels = mergeMissingSelections(sessionSelectedModels, models)
+    }
+
+    /** Import before boot snapshots can replace browser-only selections with an empty host map. */
+    @Synchronized
+    fun migrateBrowserSessionSelections() {
+        if (state.sessionSelectionsMigrated) return
+        val browser = browserStorage()
+        migrateSessionPermissionModes(readObject(browser.str("varro.sessionPermissionModes") ?: "{}"))
+        migrateSessionModels(readObject(browser.str("varro.sessionSelectedModels") ?: "{}"))
+        state.sessionSelectionsMigrated = true
+    }
+
+    private fun updateSelection(record: JsonObject, sessionId: String, value: JsonElement?): JsonObject {
+        if (value == null || value.isJsonNull) record.remove(sessionId) else record.add(sessionId, value)
+        return record
+    }
+
+    private fun mergeMissingSelections(current: JsonObject, legacy: JsonObject): JsonObject {
+        legacy.entrySet().forEach { (id, value) ->
+            if (!current.has(id) && !value.isJsonNull) current.add(id, value)
+        }
+        return current
+    }
 
     var sessionPlanState: JsonObject
         get() = readObject(state.sessionPlanState)
@@ -103,7 +165,7 @@ class VarroStore : PersistentStateComponent<VarroStore.StoreState> {
         get() = readObject(state.sessionPlanAgents)
         set(value) { state.sessionPlanAgents = Json.stringify(value) }
 
-    var modelPreferences: JsonObject
+    var legacyModelPreferences: JsonObject
         get() = readObject(state.modelPreferences)
         set(value) { state.modelPreferences = Json.stringify(value) }
 

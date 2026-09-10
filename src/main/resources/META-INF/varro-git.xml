@@ -4,7 +4,7 @@
     <actions>
         <action id="Varro.GenerateCommitMessage"
                 class="varro.actions.GenerateCommitMessageAction"
-                icon="/icons/varro.svg"
+                icon="AllIcons.Diff.MagicResolveToolbar"
                 text="Generate Commit Message with Varro"
                 description="Describe the staged changes, or the working tree when nothing is staged">
             <add-to-group group-id="Vcs.MessageActionGroup" anchor="last"/>

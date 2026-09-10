@@ -2,7 +2,7 @@ package varro.host
 
 import com.google.gson.JsonElement
 import com.google.gson.JsonObject
-import com.intellij.openapi.diagnostic.logger
+import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.project.guessProjectDir
 import com.intellij.util.EnvironmentUtil
@@ -15,7 +15,6 @@ import varro.host.quota.QuotaCredentials
 import varro.server.OpenCodeServer
 import varro.server.RequestOptions
 import varro.settings.VarroSettings
-import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.Paths
 
@@ -32,8 +31,6 @@ class OpenCodeHostServices(
     private val settings: VarroSettings,
     onProviderLimitUpdate: (JsonObject) -> Unit = {},
 ) : RestProxy.HostServices {
-
-    private val log = logger<OpenCodeHostServices>()
 
     private val providerQuotas = ProviderQuotaBackend(
         credentials = QuotaCredentials(Path.of(System.getProperty("user.home")), EnvironmentUtil.getEnvironmentMap()),
@@ -58,71 +55,22 @@ class OpenCodeHostServices(
 
     // --- OpenCode configuration -----------------------------------------------
 
-    /**
-     * Reads OpenCode's effective configuration.
-     *
-     * The server is the authority here, not the config file: OpenCode merges
-     * global, project and environment configuration, and the webview's model
-     * picker needs the merged result.
-     */
-    /**
-     * Varro-managed model routing, in the `OpenCodeModelRouting` shape the client
-     * validates. Every field is required, so an unread configuration still has to
-     * answer with a well-formed empty routing rather than `{}`.
-     */
-    override fun readOpenCodeConfig(): JsonObject {
-        val config = runCatching {
-            server.transport.request("GET", "/global/config", options = RequestOptions(unscoped = true))
-                .data.asObjectOrNull()
-        }.getOrElse { failure ->
-            log.warn("Failed to read the OpenCode configuration", failure)
-            null
-        }
+    private val modelRouting = ModelRoutingService(
+        settings = settings,
+        readGlobalConfig = { requestGlobalConfig("GET") },
+        patchGlobalConfig = { requestGlobalConfig("PATCH", it) },
+        onChanged = {
+            ApplicationManager.getApplication().messageBus.syncPublisher(VarroSettings.TOPIC).settingsChanged()
+        },
+    )
 
-        return Json.obj(
-            "smallModel" to modelRoute(config.str("small_model") ?: config.str("smallModel")),
-            "agentModels" to JsonObject(),
-            "commitMessageModel" to modelRoute(settings.commitMessageModel),
-            "autoApproveModel" to modelRoute(settings.chatAutoApproveModel),
-        )
-    }
+    private fun requestGlobalConfig(method: String, body: JsonObject? = null): JsonObject =
+        server.transport.request(method, "/global/config", body, RequestOptions(unscoped = true))
+            .data.asObjectOrNull() ?: error("OpenCode returned an invalid global configuration")
 
-    /** Parses `providerID/modelID` into an `OpenCodeModelRoute`, or null. */
-    private fun modelRoute(value: String?): JsonObject? {
-        val text = value?.trim().orEmpty()
-        if (text.isEmpty()) return null
-        val provider = text.substringBefore('/', "")
-        val model = text.substringAfter('/', "")
-        if (provider.isEmpty() || model.isEmpty()) return null
-        return Json.obj("providerID" to provider, "modelID" to model)
-    }
+    override fun readOpenCodeConfig(): JsonObject = modelRouting.read()
 
-    /**
-     * Persists Varro-managed model routing into the project's `opencode.json`.
-     *
-     * Only the routing block is touched. The file belongs to the user and may be
-     * checked into their repository, so unrelated keys and formatting are left
-     * exactly as found.
-     */
-    override fun updateModelRouting(body: JsonElement?): JsonObject {
-        val routing = body.asObjectOrNull() ?: return readOpenCodeConfig()
-        val configPath = projectConfigPath() ?: return readOpenCodeConfig()
-
-        return runCatching {
-            val existing = if (Files.exists(configPath)) {
-                Json.parseOrNull(Files.readString(configPath)).asObjectOrNull() ?: JsonObject()
-            } else {
-                JsonObject()
-            }
-            routing.entrySet().forEach { (key, value) -> existing.add(key, value) }
-            Files.createDirectories(configPath.parent)
-            Files.writeString(configPath, Json.gson.newBuilder().setPrettyPrinting().create().toJson(existing))
-            readOpenCodeConfig()
-        }.getOrElse { failure ->
-            log.warn("Failed to update OpenCode model routing", failure)
-            readOpenCodeConfig()
-        }
-    }
+    override fun updateModelRouting(body: JsonElement?): JsonObject = modelRouting.update(body)
 
     /**
      * `OpenCodePermissionConfig`. Rules stay OpenCode-owned in this port, so the

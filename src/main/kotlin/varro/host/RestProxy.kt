@@ -362,13 +362,12 @@ class RestProxy(
 
             "permission-mode" -> {
                 val mode = body.asObjectOrNull()?.get("mode")
-                val modes = store.sessionPermissionModes
-                if (mode == null || mode.isJsonNull) modes.remove(sessionId)
-                else modes.add(sessionId, mode)
-                store.sessionPermissionModes = modes
                 // The mode is Varro state, but the client types the reply as the
                 // Session so it can refresh the row it just changed.
-                fetchSession(sessionId, directory) ?: JsonNull.INSTANCE
+                val session = fetchSession(sessionId, directory).asObjectOrNull()
+                    ?: error("Could not load session $sessionId to save its permission mode")
+                store.updateSessionPermissionMode(sessionId, mode)
+                session
             }
 
             "rename-if-untitled" -> renameIfUntitled(sessionId, body, directory)

@@ -14,7 +14,7 @@
 FROM eclipse-temurin:26-jdk-jammy AS build
 
 ENV DEBIAN_FRONTEND=noninteractive \
-    GRADLE_OPTS="-Dorg.gradle.daemon=false -Dorg.gradle.welcome=never" \
+    GRADLE_OPTS="--enable-native-access=ALL-UNNAMED -Dorg.gradle.daemon=false -Dorg.gradle.welcome=never" \
     GRADLE_USER_HOME=/home/builder/.gradle \
     NPM_CONFIG_CACHE=/home/builder/.npm
 

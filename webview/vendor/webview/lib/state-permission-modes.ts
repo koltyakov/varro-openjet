@@ -1,6 +1,7 @@
 import { produce, reconcile } from 'solid-js/store';
 import type { PermissionMode } from '../../shared/protocol';
 import { isPermissionMode } from '../../shared/protocol';
+import { inferSessionPermissionMode } from '../../shared/permission-rules';
 import { postMessage } from './bridge';
 import {
   defaultPermissionMode,
@@ -39,10 +40,13 @@ export function getPermissionModeForSession(sessionId: string | null | undefined
     visited.add(currentSessionId);
     const sessionMode = state.sessionPermissionModes[currentSessionId];
     if (sessionMode) return sessionMode;
-    currentSessionId = state.sessions.find((session) => session.id === currentSessionId)?.parentID;
+    const session = state.sessions.find((session) => session.id === currentSessionId);
+    const inferredMode = inferSessionPermissionMode(session?.permission);
+    if (inferredMode) return inferredMode;
+    currentSessionId = session?.parentID;
   }
 
-  return 'default';
+  return draftPermissionMode();
 }
 
 export function isPermissionModeRecoveryPending(sessionId: string | null | undefined): boolean {

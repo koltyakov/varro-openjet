@@ -22,7 +22,7 @@ x-common: &common
     - gradle-cache:/home/builder/.gradle
     - npm-cache:/home/builder/.npm
   environment:
-    GRADLE_OPTS: -Dorg.gradle.daemon=false -Dorg.gradle.welcome=never
+    GRADLE_OPTS: --enable-native-access=ALL-UNNAMED -Dorg.gradle.daemon=false -Dorg.gradle.welcome=never
     GRADLE_USER_HOME: /home/builder/.gradle
 
 services:
