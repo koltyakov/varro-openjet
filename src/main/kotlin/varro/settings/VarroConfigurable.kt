@@ -110,7 +110,7 @@ class VarroConfigurable : BoundConfigurable("Varro") {
             row {
                 checkBox("Add Varro's read-only `Ask` agent at runtime")
                     .bindSelected(settings::chatEnableAskAgent)
-                    .comment("Varro does not write this agent to your OpenCode configuration.")
+                    .comment("Applies to servers started by Varro. Existing configured Ask agents are preserved; no user configuration is written.")
             }
             row {
                 checkBox("Let OpenCode compact sessions automatically when context fills")

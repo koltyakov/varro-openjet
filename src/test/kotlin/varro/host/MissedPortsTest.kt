@@ -202,7 +202,7 @@ class MissedPortsTest {
         }
     }
 
-    @Test fun `permission allow validates pending session before replying`() {
+    @Test fun `permission allow validates pending session and leaves the reply to the webview`() {
         val calls = mutableListOf<String>()
         val service = PermissionService(VarroStore()) { method, path, _, _ ->
             calls.add("$method $path")
@@ -215,7 +215,8 @@ class MissedPortsTest {
         assertThrows(IllegalStateException::class.java) { service.allow(Json.obj("sessionId" to "wrong", "permissionId" to "p"), false, null) }
         val rules = service.allow(Json.obj("sessionId" to "s", "permissionId" to "p"), false, null)
         assertEquals("npm test", rules[0].asJsonObject.str("pattern"))
-        assertEquals("POST /permission/p/reply", calls.last())
+        assertEquals("PATCH /session/s", calls.last())
+        assertFalse(calls.any { it.startsWith("POST") })
     }
 
     @Test fun `permission configuration respects scalar capabilities`() {

@@ -1,7 +1,10 @@
 package varro.host
 
+import com.google.gson.JsonArray
 import com.google.gson.JsonElement
 import com.google.gson.JsonObject
+import com.intellij.notification.NotificationGroupManager
+import com.intellij.notification.NotificationType
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.project.guessProjectDir
@@ -98,7 +101,8 @@ class OpenCodeHostServices(
         projectPermissions().read()
     }, saveProjectRules = { rules, _ ->
         projectPermissions().write(rules)
-        server.transport.request("PATCH", "/config", JsonObject(), RequestOptions(directory = project.basePath))
+        // Reloading config can dispose the instance that owns the pending request.
+        // The webview's next `always` reply applies the rule to the current runtime.
     }) { method, path, body, directory ->
         server.transport.request(method, path, body, RequestOptions(directory = directory)).data
     }
@@ -106,8 +110,16 @@ class OpenCodeHostServices(
     override fun permissionRules(sessionId: String, rules: JsonElement?, directory: String?) =
         permissions.sessionRules(sessionId, rules, directory)
 
-    @Synchronized override fun allowPermission(body: JsonObject, project: Boolean, directory: String?) =
-        permissions.allow(body, project, directory)
+    @Synchronized override fun allowPermission(body: JsonObject, project: Boolean, directory: String?): JsonArray =
+        try {
+            permissions.allow(body, project, directory)
+        } catch (failure: Exception) {
+            NotificationGroupManager.getInstance()
+                .getNotificationGroup(VarroProjectService.NOTIFICATION_GROUP)
+                .createNotification("Varro", "Could not save Always Allow: ${failure.message}", NotificationType.ERROR)
+                .notify(this.project)
+            throw failure
+        }
 
     private val projectPermissionConfig by lazy { ProjectPermissionConfig(
         Path.of(project.guessProjectDir()?.path ?: project.basePath ?: error("Project has no workspace directory")),

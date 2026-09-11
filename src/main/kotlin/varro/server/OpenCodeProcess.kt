@@ -32,6 +32,7 @@ class OpenCodeProcess(
     private val cli: OpenCodeCli,
     private val configuredPort: () -> Int,
     private val workspaceCwd: () -> String?,
+    private val askAgentEnabled: () -> Boolean = { false },
 ) {
     private val log = logger<OpenCodeProcess>()
 
@@ -41,6 +42,9 @@ class OpenCodeProcess(
     private val handler = AtomicReference<OSProcessHandler?>(null)
     private val managed = AtomicBoolean(false)
     private val capturedOutput = AtomicReference("")
+    private val askAgentConfig = AskAgentConfig(cli.serverEnvironment(), workspaceCwd)
+
+    fun updateAskAgent(): Boolean = isManaged && askAgentConfig.rewrite(askAgentEnabled())
 
     val port: Int get() = currentPort.get().takeIf { it > 0 } ?: configuredPort()
 
@@ -95,7 +99,7 @@ class OpenCodeProcess(
 
         val general = GeneralCommandLine(commandLine).apply {
             workspaceCwd()?.let { withWorkDirectory(it) }
-            withEnvironment(cli.serverEnvironment())
+            withEnvironment(cli.serverEnvironment(askAgentConfig.prepare(askAgentEnabled())))
             // The child must not inherit the IDE's own environment filtering;
             // OpenCode shells out to git, node and the user's tools.
             withParentEnvironmentType(GeneralCommandLine.ParentEnvironmentType.NONE)
@@ -103,7 +107,12 @@ class OpenCodeProcess(
         }
 
         capturedOutput.set("")
-        val processHandler = OSProcessHandler(general)
+        val processHandler = try {
+            OSProcessHandler(general)
+        } catch (failure: Exception) {
+            askAgentConfig.close()
+            throw failure
+        }
         processHandler.addProcessListener(object : ProcessListener {
             override fun onTextAvailable(event: ProcessEvent, outputType: Key<*>) {
                 val text = event.text ?: return
@@ -128,6 +137,14 @@ class OpenCodeProcess(
      * session state, then forced once the grace window elapses.
      */
     fun stop(gracePeriodMs: Long = GRACEFUL_SHUTDOWN_MS) {
+        try {
+            stopProcess(gracePeriodMs)
+        } finally {
+            askAgentConfig.close()
+        }
+    }
+
+    private fun stopProcess(gracePeriodMs: Long) {
         val processHandler = handler.getAndSet(null) ?: return
         managed.set(false)
         if (processHandler.isProcessTerminated) return

@@ -6,7 +6,7 @@ import com.google.gson.JsonObject
 import varro.protocol.*
 import varro.store.VarroStore
 
-/** Rules are applied to OpenCode before the host acknowledges a save. */
+/** Saves standing rules; the webview owns the subsequent pending-request reply. */
 class PermissionService(
     private val store: VarroStore,
     private val projectRules: ((String?) -> JsonArray)? = null,
@@ -33,32 +33,55 @@ class PermissionService(
         val sessionId = body.text("sessionId") ?: error("Missing session id")
         val permissionId = body.text("permissionId") ?: error("Missing permission id")
         val pending = request("GET", "/permission", null, directory).asArrayOrNull()
-            ?.mapNotNull { it.asObjectOrNull() }?.firstOrNull {
-                it.str("id") == permissionId && it.str("sessionID") == sessionId
+            ?.mapNotNull { it.asObjectOrNull()?.let { record -> record.obj("info") ?: record } }?.firstOrNull {
+                (it.text("id") ?: it.text("permissionID") ?: it.text("requestID")) == permissionId && it.str("sessionID") == sessionId
             } ?: error("Permission request is no longer pending")
         val name = pending.text("permission") ?: pending.text("type") ?: error("Missing permission name")
-        val patterns = pending.arr("always")?.takeIf { it.size() > 0 }
-            ?: pending.arr("patterns") ?: pending.arr("pattern")
-            ?: pending.text("pattern")?.let { Json.array(listOf(it)) }
-            ?: error("Permission request has no approval patterns")
-        require(patterns.size() > 0) { "Permission request has no approval patterns" }
+        val patterns = pending.arr("always")?.mapNotNull {
+            it.takeIf { value -> value.isJsonPrimitive && value.asJsonPrimitive.isString }
+                ?.asString?.trim()?.takeIf(String::isNotEmpty)
+        }?.distinct().orEmpty()
+        require(patterns.isNotEmpty()) { "Standing approval scope is unavailable for this request" }
         val additions = validateRules(Json.array(patterns.map { pattern ->
             Json.obj("permission" to name, "pattern" to pattern, "action" to "allow")
         }))
         if (project) {
             val rules = projectRules?.invoke(directory) ?: error("Project rule storage is unavailable")
-            additions.forEach(rules::add)
-            (saveProjectRules ?: error("Project rule storage is unavailable"))(rules, directory)
+            val effective = request("GET", "/config", null, directory).asObjectOrNull()
+                ?: error("Could not read effective OpenCode permissions")
+            val merged = mergeProjectAllow(rules, additions, effective.get("permission"))
+            (saveProjectRules ?: error("Project rule storage is unavailable"))(merged, directory)
+            return merged
         }
         val rules = sessionRules(sessionId, null, directory)
         additions.forEach(rules::add)
-        val saved = sessionRules(sessionId, rules, directory)
-        request("POST", "/permission/${java.net.URLEncoder.encode(permissionId, Charsets.UTF_8)}/reply",
-            Json.obj("reply" to "once"), directory)
-        return saved
+        return sessionRules(sessionId, rules, directory)
     }
 
     companion object {
+        /** Merge within each permission's config entry instead of appending a second group. */
+        private fun mergeProjectAllow(rules: JsonArray, additions: JsonArray, effective: JsonElement?): JsonArray {
+            val config = toConfig(rules)
+            // Turning an inherited scalar into a project object must preserve its default.
+            if (!config.has("*") && effective?.isJsonPrimitive == true) config.add("*", effective)
+            val added = toConfig(additions)
+            added.entrySet().forEach { (name, value) ->
+                if (value.isJsonPrimitive) config.add(name, value)
+                else {
+                    val current = config.get(name) ?: effective.asObjectOrNull()?.get(name)?.takeIf { it.isJsonPrimitive }
+                    val patterns = current.asObjectOrNull() ?: JsonObject().apply {
+                        if (current?.isJsonPrimitive == true) add("*", current)
+                    }
+                    value.asJsonObject.entrySet().forEach { (pattern, action) ->
+                        patterns.remove(pattern)
+                        patterns.add(pattern, action)
+                    }
+                    config.add(name, patterns)
+                }
+            }
+            return fromConfig(config)
+        }
+
         fun validateRules(value: JsonElement?): JsonArray {
             val rules = value.asArrayOrNull() ?: error("Rules must be an array")
             require(rules.size() <= 4096) { "Too many permission rules" }

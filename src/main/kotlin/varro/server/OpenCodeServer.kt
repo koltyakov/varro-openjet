@@ -51,6 +51,7 @@ class OpenCodeServer(
         cli = cli,
         configuredPort = { settings.normalizedPort() },
         workspaceCwd = workspaceCwd,
+        askAgentEnabled = { settings.chatEnableAskAgent },
     )
 
     private val status = AtomicReference<ServerStatus>(ServerStatus.Stopped)
@@ -96,6 +97,23 @@ class OpenCodeServer(
     fun workspaceDirectory(): String? = transport.workspaceDirectory()
 
     fun isManaged(): Boolean = process.isManaged
+
+    /** Serialize config changes with startup/restart, then refresh agents after OpenCode reloads. */
+    fun updateAskAgentEnabled(onUpdated: () -> Unit, onFailure: (String) -> Unit) {
+        if (scheduler.isShutdown) return
+        scheduler.execute {
+            if (phase.get() == Phase.DISPOSING) return@execute
+            try {
+                if (status.get() is ServerStatus.Running && process.updateAskAgent()) {
+                    transport.request("POST", "/global/dispose", options = RequestOptions(unscoped = true))
+                }
+                onUpdated()
+            } catch (failure: Exception) {
+                log.warn("Could not apply the Ask agent setting", failure)
+                onFailure("Could not apply the Ask agent setting. Restart the Varro server to retry: ${failure.message}")
+            }
+        }
+    }
 
     fun onStatus(listener: (ServerStatus) -> Unit): () -> Unit {
         statusListeners.add(listener)
@@ -413,7 +431,7 @@ class OpenCodeServer(
         transport.dispose()
         // Only a server this project spawned is stopped; an adopted one keeps
         // serving the other IDE windows that are still attached to it.
-        if (process.isManaged) process.stop()
+        process.stop()
         scheduler.shutdownNow()
         runCatching { scheduler.awaitTermination(2, TimeUnit.SECONDS) }
         statusListeners.clear()

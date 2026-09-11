@@ -160,7 +160,10 @@ class VarroProjectService(private val project: Project) : Disposable {
             .subscribe(VarroSettings.TOPIC, VarroSettings.Listener {
                 hostServices.clearProviderQuotaCache()
                 broadcastConfig()
-                broadcast("providers/refresh")
+                server.updateAskAgentEnabled(
+                    onUpdated = { broadcast("providers/refresh") },
+                    onFailure = { notify(it, NotificationType.ERROR) },
+                )
             })
     }
 
