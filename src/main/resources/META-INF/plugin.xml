@@ -43,6 +43,9 @@
     ]]></description>
 
     <change-notes><![CDATA[
+        <h3>0.1.2</h3>
+        <p>Refined chat activity and file-change display. Fixed auto-scroll, diff preview stability,
+            streaming inline code, and composer busy indicators. Restored native Command+Arrow navigation.</p>
         <h3>0.1.1</h3>
         <p>Fixed browser resource loading and file drag-and-drop on IntelliJ IDEA 2025.2, 2025.3 and 2026.1,
             and quota requests on 2025.2 with redirects still blocked. Removed internal API dependencies

@@ -880,9 +880,9 @@ export type ExtensionMessage =
     }
   | { type: 'command/new-session'; payload?: { prefill: string } }
   | { type: 'command/open-session'; payload: { sessionId: string; directory?: string } }
+  | { type: 'command/highlight-session' }
   | { type: 'command/focus-input' }
   | { type: 'command/search-sessions' }
-  | { type: 'command/open-running-sessions' }
   | { type: 'command/open-attention-sessions' }
   | { type: 'command/open-completed-sessions' }
   | { type: 'command/switch-session'; payload: { direction: 'previous' | 'next' } }
@@ -944,11 +944,6 @@ export type WebviewMessage =
         unread: boolean;
         markerAt?: number;
       };
-    }
-  | { type: 'session-unread-state/sync'; payload: { sessionIds: string[] } }
-  | {
-      type: 'session-unread-state/summary';
-      payload: { completedSessionIds: string[] };
     }
   | {
       type: 'model-preferences/update';

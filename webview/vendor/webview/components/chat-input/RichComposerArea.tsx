@@ -385,35 +385,6 @@ export function RichComposerArea(props: {
     return false;
   }
 
-  function moveToParagraphBoundary(event: KeyboardEvent): boolean {
-    if (
-      (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') ||
-      !event.metaKey ||
-      event.altKey ||
-      event.ctrlKey ||
-      event.shiftKey ||
-      event.isComposing
-    ) {
-      return false;
-    }
-
-    const selection = getSelectionOffsets();
-    if (!selection) return false;
-
-    event.preventDefault();
-    const offset = event.key === 'ArrowLeft' ? selection.start : selection.end;
-    const nextLineBreak = props.value.indexOf('\n', offset);
-    const boundary = event.key === 'ArrowLeft'
-      ? offset === 0
-        ? 0
-        : props.value.lastIndexOf('\n', offset - 1) + 1
-      : nextLineBreak === -1
-        ? props.value.length
-        : nextLineBreak;
-    setCursorOffset(boundary);
-    return true;
-  }
-
   function getSessionReferenceAtSelection(): HTMLElement | null {
     const range = getSelectionRange();
     if (!range || !range.collapsed) return null;
@@ -985,7 +956,6 @@ export function RichComposerArea(props: {
           }
         }}
         onKeyDown={(e) => {
-          if (moveToParagraphBoundary(e)) return;
           if (moveAcrossAtomicReference(e)) return;
           const removedTrailingLineBreak =
             e.key === 'Backspace' &&

@@ -435,6 +435,7 @@ export function ToolCall(props: {
   renderPermissionPrompt?: boolean;
   lightweight?: boolean;
   compactFileChanges?: boolean;
+  diffPreviewStateKey?: string;
 }) {
   const tool = () => props.part;
   const expansionKey = () => getToolCallExpansionKey(tool());
@@ -600,7 +601,7 @@ export function ToolCall(props: {
           changes={fileChanges()}
           animatePending={isApplyPatchTool(tool().tool)}
           waitingForPermission={isWaitingForPermission()}
-          previewStateKey={expansionKey()}
+          previewStateKey={props.diffPreviewStateKey ?? expansionKey()}
           expanded={expanded()}
           toggleExpand={toggleExpand}
           compact={!!props.compactFileChanges}
@@ -1075,7 +1076,9 @@ function FileChangeCard(props: {
                   path={change()!.fromPath || change()!.path}
                   class="file-edit-file-icon"
                 />
-                {formatFileChangeDisplayName(change()!.fromPath || change()!.path)}
+                <span class="file-edit-path-text">
+                  {formatFileChangeDisplayName(change()!.fromPath || change()!.path)}
+                </span>
               </a>
               <span class="file-edit-move-arrow">→</span>
               <a
@@ -1087,7 +1090,9 @@ function FileChangeCard(props: {
                   path={change()!.toPath || change()!.path}
                   class="file-edit-file-icon"
                 />
-                {formatFileChangeDisplayName(change()!.toPath || change()!.path)}
+                <span class="file-edit-path-text">
+                  {formatFileChangeDisplayName(change()!.toPath || change()!.path)}
+                </span>
               </a>
             </span>
           }
@@ -1101,13 +1106,15 @@ function FileChangeCard(props: {
                 onClick={(event) => openFileChangePath(change()!.path)(event)}
               >
                 <FileTypeIcon path={change()!.path} class="file-edit-file-icon" />
-                {formatFileChangeDisplayName(change()!.path)}
+                <span class="file-edit-path-text">
+                  {formatFileChangeDisplayName(change()!.path)}
+                </span>
               </a>
             }
           >
             <span class="file-edit-path-label is-removed">
               <FileTypeIcon path={change()!.path} class="file-edit-file-icon" />
-              <span class="file-edit-removed-path">
+              <span class="file-edit-path-text file-edit-removed-path">
                 {formatFileChangeDisplayName(change()!.path)}
               </span>
             </span>
@@ -1142,7 +1149,7 @@ function FileChangeCard(props: {
                         onClick={openFileChangePath(item.toPath || item.path)}
                       >
                         <FileTypeIcon path={item.toPath || item.path} class="file-edit-file-icon" />
-                        {displayName()}
+                        <span class="file-edit-path-text">{displayName()}</span>
                       </a>
                     );
                   }}
@@ -1619,12 +1626,14 @@ function GenericToolCall(props: {
           </Show>
           <Show when={searchResultCount()}>
             {(result) => {
+              const unit = () =>
+                result().count === 1 && !result().truncated ? 'result' : 'results';
               const label = () =>
-                `${result().count}${result().truncated ? ' or more' : ''} search ${result().count === 1 && !result().truncated ? 'result' : 'results'}`;
+                `${result().count}${result().truncated ? ' or more' : ''} search ${unit()}`;
               return (
                 <span class="tool-invocation-search-count" title={label()} aria-label={label()}>
                   {result().count}
-                  {result().truncated ? '+' : ''}
+                  {result().truncated ? '+' : ''} {unit()}
                 </span>
               );
             }}
