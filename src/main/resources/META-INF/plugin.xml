@@ -43,6 +43,10 @@
     ]]></description>
 
     <change-notes><![CDATA[
+        <h3>0.1.3</h3>
+        <p>Smoothed streaming text, tool activity transitions and auto-scroll. Reduced scroll jumps when
+            activity, to-do lists and file-change cards collapse. Kept more sessions visible in the session list
+            and fixed formatting for editor and terminal selections containing Markdown code fences.</p>
         <h3>0.1.2</h3>
         <p>Refined chat activity and file-change display. Fixed auto-scroll, diff preview stability,
             streaming inline code, and composer busy indicators. Restored native Command+Arrow navigation.</p>
