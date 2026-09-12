@@ -341,6 +341,35 @@ function forwardHostShortcuts() {
   );
 }
 
+/** Supply macOS line navigation when JCEF omits the native editing command. */
+function installMacLineNavigation() {
+  if (!navigator.platform.startsWith('Mac')) return;
+
+  document.addEventListener('keydown', (event) => {
+    if (
+      event.defaultPrevented ||
+      !event.metaKey ||
+      event.ctrlKey ||
+      event.altKey ||
+      event.isComposing ||
+      (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight')
+    ) return;
+
+    const target = event.target;
+    if (!(target instanceof HTMLElement) || !target.isContentEditable) return;
+
+    const selection = window.getSelection();
+    if (!selection?.rangeCount || typeof selection.modify !== 'function') return;
+
+    selection.modify(
+      event.shiftKey ? 'extend' : 'move',
+      event.key === 'ArrowLeft' ? 'left' : 'right',
+      'lineboundary',
+    );
+    event.preventDefault();
+  });
+}
+
 installSendChannel();
 installViewStateChannel();
 installProjectStorage(hostWindow);
@@ -348,6 +377,7 @@ installReceiveChannel();
 guardNavigation();
 installInternalDragBridge();
 forwardHostShortcuts();
+installMacLineNavigation();
 
 hostWindow.__initialTheme = hostWindow.__initialWebviewState?.theme;
 
