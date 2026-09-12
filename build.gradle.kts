@@ -122,6 +122,7 @@ val buildWebview = tasks.register<Exec>("buildWebview") {
     inputs.dir(webviewDir.dir("src"))
     inputs.dir(webviewDir.dir("vendor"))
     inputs.files(
+        layout.projectDirectory.file("gradle.properties"),
         webviewDir.file("package.json"),
         webviewDir.file("vite.config.mts"),
         webviewDir.file("tsconfig.json"),

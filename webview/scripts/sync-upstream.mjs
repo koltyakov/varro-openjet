@@ -129,6 +129,18 @@ for (const entry of config.copy) {
   console.log(`  ${entry.from} -> ${entry.to}`);
 }
 
+// The JetBrains version comes from Gradle rather than the npm package.
+const toolbarPath = join(webviewRoot, 'vendor/webview/components/chat-input/ChatInputToolbar.tsx');
+const toolbarSource = readFileSync(toolbarPath, 'utf8');
+const packageImport = "import packageJson from '../../../../package.json';";
+if (!toolbarSource.includes(packageImport)) {
+  throw new Error('Upstream toolbar metadata import changed; update the JetBrains adaptation.');
+}
+writeFileSync(toolbarPath, toolbarSource.replace(
+  packageImport,
+  "import packageJson from '../../../../src/plugin-metadata';",
+));
+
 writeFileSync(
   join(webviewRoot, 'vendor', 'UPSTREAM.json'),
   `${JSON.stringify({ ...config, revision }, null, 2)}\n`,

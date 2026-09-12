@@ -1,5 +1,5 @@
 import { Show, createSignal, onCleanup } from 'solid-js';
-import packageJson from '../../../../package.json';
+import packageJson from '../../../../src/plugin-metadata';
 import type { Agent } from '../../types';
 import type { ContextBreakdownSegment } from '../../../shared/context-breakdown';
 import type {

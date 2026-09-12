@@ -1,11 +1,15 @@
 import tailwindcss from '@tailwindcss/vite';
 import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import solid from 'vite-plugin-solid';
 import { defineConfig, type Plugin } from 'vite';
 
 const projectRoot = dirname(fileURLToPath(import.meta.url));
+const gradleProperties = readFileSync(resolve(projectRoot, '../gradle.properties'), 'utf8');
+const pluginVersion = gradleProperties.match(/^pluginVersion\s*=\s*(\S+)\s*$/m)?.[1];
+if (!pluginVersion) throw new Error('Missing pluginVersion in gradle.properties');
 
 /**
  * Mirrors upstream Varro's asset-version plugin. The Kotlin host appends this
@@ -32,6 +36,7 @@ const assetVersionPlugin: Plugin = {
 
 export default defineConfig({
   base: './',
+  define: { __VARRO_PLUGIN_VERSION__: JSON.stringify(pluginVersion) },
   plugins: [solid(), tailwindcss(), assetVersionPlugin],
   build: {
     // Emitted straight into the plugin's resources; `processResources` then

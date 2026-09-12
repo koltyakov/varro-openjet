@@ -44,11 +44,9 @@
 
     <change-notes><![CDATA[
         <h3>0.1.4</h3>
-        <p>Added a read-only Ask agent with live setting updates and support for user-defined Ask agents.
-            Saved access mode, agent, model and reasoning selections in OpenCode sessions and synced them across open views.
-            Fixed saved permission approvals to preserve inherited defaults and report save failures.
-            Smoothed auto-scroll and reduced scroll jumps when resizing chat or expanding and collapsing activity and diffs.
-            Stabilized streaming Markdown layout and fixed spacing for messages with file attachments.</p>
+        <p>Added a read-only Ask agent and shell and patch timers. Saved and synced session selections across views.
+            Fixed permission saving, draft selections and session forking. Improved auto-scroll, streaming Markdown
+            and attachment spacing. Refined light-theme styling, compaction visibility and the toolbar version label.</p>
         <h3>0.1.3</h3>
         <p>Smoothed streaming text, tool activity transitions and auto-scroll. Reduced scroll jumps when
             activity, to-do lists and file-change cards collapse. Kept more sessions visible in the session list
