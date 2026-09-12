@@ -114,6 +114,8 @@ class OpenCodeTransport(
     /** Directory each observed session belongs to, learned from the event stream. */
     private val observedSessionDirectories = ConcurrentHashMap<String, String>()
 
+    var onSessionObserved: (com.google.gson.JsonObject) -> Unit = {}
+
     private class StreamHandle(val generation: Int) {
         @Volatile var cancelled: Boolean = false
         @Volatile var body: InputStream? = null
@@ -200,6 +202,18 @@ class OpenCodeTransport(
             response.headers().firstValue("x-next-cursor").orElse(null)?.trim()?.takeIf { it.isNotEmpty() }
         } else {
             null
+        }
+        val pathname = path.substringBefore('?')
+        if (pathname == "/session" || SESSION_BY_ID_ROUTE.matches(pathname) ||
+            (normalizedMethod == "POST" && pathname.matches(Regex("/session/[^/]+/fork")))) {
+            val sessions = if (data?.isJsonArray == true) data.asJsonArray.toList() else listOfNotNull(data)
+            sessions.forEach { value -> value.asObjectOrNull()?.let { session ->
+                val id = session.str("id")
+                if (id != null) {
+                    session.str("directory")?.let { observedSessionDirectories[id] = it }
+                    onSessionObserved(session)
+                }
+            } }
         }
         return OpenCodeResponse(data, cursor)
     }

@@ -116,6 +116,28 @@ The synthetic origin gives dynamic `import()` a resolvable base URL. `webview.ve
 
 Legacy browser session selections migrate into the project store before boot snapshots are built. Legacy project model preferences migrate into the application store only if shared preferences have not been established.
 
+`SessionSelections` persists access mode, agent, model and reasoning under OpenCode's `metadata.varro` object. Writes set `schemaVersion: 1` and merge `permissionMode`, `agent` and `model`, preserving workspace scope and unrelated metadata at both levels. The stored model uses `provider`, `model` and an optional reasoning `variant`. The bridge and local stores still use `providerID` and `modelID`. Replacing a model without a variant clears the previous reasoning selection.
+
+```json
+{
+  "metadata": {
+    "varro": {
+      "schemaVersion": 1,
+      "workspaceScope": "folder",
+      "permissionMode": "auto",
+      "agent": "build",
+      "model": {
+        "provider": "openai",
+        "model": "your-model-id",
+        "variant": "high"
+      }
+    }
+  }
+}
+```
+
+Session reads and events restore valid nested metadata into the local stores and broadcast changes to open views without patching the session or changing its timestamp. Missing or invalid fields retain local and history-based fallbacks. The old top-level selection fields are not read or migrated, matching upstream. Writes share locks across views and publish confirmed selections only after OpenCode accepts the update. Access-mode updates save rules and metadata together; preconfigured sessions save metadata without appending rules again.
+
 `QueuedDispatches` journals admission before sending and reconciles dispatches with OpenCode history after reconnecting. It does not automatically retry ambiguous sends. `RalphRunner` journals orchestration state and reattaches when the server becomes available. `SessionTrash` records a session tree before archiving it; restore unarchives it, while permanent deletion removes it from OpenCode. Recycle-bin retention is 7 days, with expiry processed when the bin is listed.
 
 ## Model and permission controls

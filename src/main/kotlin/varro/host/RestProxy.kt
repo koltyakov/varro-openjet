@@ -50,6 +50,9 @@ class RestProxy(
     private val postResponse: (JsonObject) -> Unit,
     private val admitQueuedDispatch: (JsonObject) -> Boolean = { true },
     private val completeQueuedDispatch: (JsonObject, Boolean, Boolean) -> Unit = { _, _, _ -> },
+    private val selections: SessionSelections = SessionSelections(store, request = { method, path, body, directory ->
+        server.transport.request(method, path, body, RequestOptions(directory = directory)).data
+    }),
 ) {
     private val log = logger<RestProxy>()
 
@@ -388,13 +391,7 @@ class RestProxy(
             }
 
             "permission-mode" -> {
-                val mode = body.asObjectOrNull()?.get("mode")
-                // The mode is Varro state, but the client types the reply as the
-                // Session so it can refresh the row it just changed.
-                val session = fetchSession(sessionId, directory).asObjectOrNull()
-                    ?: error("Could not load session $sessionId to save its permission mode")
-                store.updateSessionPermissionMode(sessionId, mode)
-                session
+                selections.updateMode(sessionId, body.asObjectOrNull() ?: error("Missing permission mode"), directory)
             }
 
             "rename-if-untitled" -> renameIfUntitled(sessionId, body, directory)

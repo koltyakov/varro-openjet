@@ -87,6 +87,16 @@ class VarroProjectService(private val project: Project) : Disposable {
 
     val context: ContextProvider = ContextProvider(project)
 
+    private val selections = SessionSelections(store,
+        publishAgent = { id, agent -> broadcast("session-plan-state/update", Json.obj("sessionId" to id, "agent" to agent)) },
+        request = { method, path, body, directory ->
+            server.transport.request(method, path, body, varro.server.RequestOptions(directory = directory)).data
+        },
+    )
+
+    private fun selectionDirectory(sessionId: String): String? =
+        server.transport.observedSessionDirectories()[sessionId] ?: project.basePath
+
     private val hostServices = OpenCodeHostServices(project, server, editor, settings) { update ->
         broadcast("provider-limit/updated", update)
     }
@@ -105,10 +115,13 @@ class VarroProjectService(private val project: Project) : Disposable {
             require(java.nio.file.Files.size(target) <= 2 * 1024 * 1024) { "Plan document is too large" }
             java.nio.file.Files.readString(target)
         },
-        onChildCreated = { child, mode -> store.updateSessionPermissionMode(child, Json.toElement(mode)) },
+        onChildCreated = { child, mode ->
+            selections.updateMode(child, Json.obj("mode" to mode, "preconfigured" to true), selectionDirectory(child))
+        },
     )
 
     init {
+        server.transport.onSessionObserved = selections::observe
         store.migrateBrowserSessionSelections()
         server.hasHostWork = { ralph.isActive() || queue.hasPending() || queue.messages().size() > 0 }
         store.queuedMessages = queue.messages()
@@ -203,6 +216,7 @@ class VarroProjectService(private val project: Project) : Disposable {
                     NotificationType.WARNING,
                 )
             },
+            selections = selections,
         )
         panels.add(host)
         Disposer.register(host) {
@@ -380,6 +394,9 @@ class VarroProjectService(private val project: Project) : Disposable {
             parsed.sequenceStart?.let { addProperty("sequenceStart", it) }
             parsed.properties?.let { add("properties", it) }
         }
+        if (parsed.type in setOf("session.created", "session.updated")) {
+            (parsed.properties.obj("info") ?: parsed.properties)?.let(selections::observe)
+        }
         val sessionId = parsed.properties.str("sessionID")
         if (sessionId != null && parsed.type == "permission.asked") {
             val model = ralph.permissionModel(sessionId)
@@ -546,7 +563,9 @@ class VarroProjectService(private val project: Project) : Disposable {
 
                 // --- Persisted state --------------------------------------------
                 "permission-mode/update" -> payload.str("sessionId")?.let {
-                    store.updateSessionPermissionMode(it, payload?.get("mode"))
+                    val mode = payload?.get("mode")
+                    if (mode == null || mode.isJsonNull) store.updateSessionPermissionMode(it, null)
+                    else selections.updateMode(it, Json.obj("mode" to mode, "preconfigured" to true), selectionDirectory(it))
                 }
 
                 "permission-modes/migrate" -> payload.obj("modes")?.let {
@@ -554,7 +573,7 @@ class VarroProjectService(private val project: Project) : Disposable {
                 }
 
                 "session-model/update" -> payload.str("sessionId")?.let {
-                    store.updateSessionModel(it, payload?.get("model"))
+                    selections.updateModel(it, payload?.get("model"), selectionDirectory(it))
                 }
 
                 "session-models/migrate" -> payload.obj("models")?.let {
@@ -569,9 +588,7 @@ class VarroProjectService(private val project: Project) : Disposable {
                         store.sessionPlanState = state
                     }
                     payload.text("agent")?.let { agent ->
-                        val agents = store.sessionPlanAgents
-                        agents.addProperty(sessionId, agent)
-                        store.sessionPlanAgents = agents
+                        selections.updateAgent(sessionId, agent, selectionDirectory(sessionId))
                     }
                 }
 

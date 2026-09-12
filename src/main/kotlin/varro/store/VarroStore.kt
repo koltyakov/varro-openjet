@@ -166,8 +166,13 @@ class VarroStore : PersistentStateComponent<VarroStore.StoreState> {
         set(value) { state.sessionPlanState = Json.stringify(value) }
 
     var sessionPlanAgents: JsonObject
-        get() = readObject(state.sessionPlanAgents)
-        set(value) { state.sessionPlanAgents = Json.stringify(value) }
+        @Synchronized get() = readObject(state.sessionPlanAgents)
+        @Synchronized set(value) { state.sessionPlanAgents = Json.stringify(value) }
+
+    @Synchronized
+    fun updateSessionAgent(sessionId: String, agent: String) {
+        sessionPlanAgents = sessionPlanAgents.apply { addProperty(sessionId, agent) }
+    }
 
     var legacyModelPreferences: JsonObject
         get() = readObject(state.modelPreferences)
