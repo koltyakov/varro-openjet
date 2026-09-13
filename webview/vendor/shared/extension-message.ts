@@ -1,4 +1,8 @@
-import { isDatabaseContext, isDatabaseTableReference } from './database-context';
+import {
+  isDatabaseAttachment,
+  isDatabaseContext,
+  isDatabaseTableReference,
+} from './database-context';
 import {
   isPermissionMode,
   isSafePersistedSessionId,
@@ -860,6 +864,11 @@ function isDroppedFile<T>(value: T): value is T & DroppedFile {
   ) {
     return false;
   }
+  if (
+    record.database !== undefined &&
+    (record.type !== 'file' || !isDatabaseAttachment(record.database))
+  )
+    return false;
   if (record.lineRanges === undefined) return true;
   return Array.isArray(record.lineRanges) && record.lineRanges.every(isLineRange);
 }

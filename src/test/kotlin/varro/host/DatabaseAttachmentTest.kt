@@ -20,5 +20,19 @@ class DatabaseAttachmentTest {
         assertEquals("create table users (id INT primary key)", stored["ddl"].asString)
         assertEquals("file", file["type"].asString)
         assertEquals("main.users-context.json", file["relativePath"].asString)
+        assertEquals("main.users", file.getAsJsonObject("database")["name"].asString)
+        assertEquals("table", file.getAsJsonObject("database")["scope"].asString)
+        assertEquals(0, file.getAsJsonObject("database")["rowCount"].asInt)
+    }
+
+    @Test fun `selected rows retain table display metadata on stored attachments`() {
+        val store = AttachmentStore(temporary.root.toPath()) { null }
+        val snapshot = Json.obj("name" to "users", "dataSource" to "Demo SQLite", "scope" to "selected-rows",
+            "rows" to listOf(listOf("1"), listOf("2")), "selectedRowCount" to 2)
+        val content = AttachmentStore.databaseContent(snapshot)
+        val file = store.store(content)
+        content.getAsJsonObject("database").addProperty("name", "changed")
+        assertEquals("users", file.getAsJsonObject("database")["name"].asString)
+        assertEquals(2, file.getAsJsonObject("database")["rowCount"].asInt)
     }
 }

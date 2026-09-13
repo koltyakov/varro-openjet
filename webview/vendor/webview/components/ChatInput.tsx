@@ -1,4 +1,8 @@
-import { cloneDatabaseContext, databaseContextDetail } from '../../shared/database-context';
+import {
+  cloneDatabaseContext,
+  databaseContextDetail,
+  databaseAttachmentDetail,
+} from '../../shared/database-context';
 import {
   Show,
   Suspense,
@@ -1224,15 +1228,19 @@ export function ChatInput(props: { newSession?: boolean; onBeforeSend?: () => vo
     }
 
     for (const file of composerFiles()) {
-      const label = getLeafPathName(file.relativePath || file.path);
+      const label = file.database?.name ?? getLeafPathName(file.relativePath || file.path);
       const marker = `@${file.relativePath || file.path}`;
       const directoryMarker = marker.endsWith('/') ? marker : `${marker}/`;
       const hasDirectorySlash = file.type === 'directory' && text.includes(directoryMarker);
       if (text.includes(marker)) {
-        const lineRange = formatContextLineRanges(file.lineRanges);
-        const title = lineRange
-          ? `${file.relativePath || file.path} ${lineRange}`
-          : file.relativePath || file.path;
+        const lineRange = file.database
+          ? databaseAttachmentDetail(file.database)
+          : formatContextLineRanges(file.lineRanges);
+        const title = file.database
+          ? `${file.database.name} · ${file.database.dataSource ?? ''}`
+          : lineRange
+            ? `${file.relativePath || file.path} ${lineRange}`
+            : file.relativePath || file.path;
         chips.push({
           id: `file:${file.path}`,
           type: 'mention-file',
@@ -1240,7 +1248,7 @@ export function ChatInput(props: { newSession?: boolean; onBeforeSend?: () => vo
           path: file.relativePath || file.path,
           title,
           detail: lineRange || undefined,
-          icon: file.type === 'directory' ? 'folder' : 'file',
+          icon: file.database ? 'table' : file.type === 'directory' ? 'folder' : 'file',
           textMarker: hasDirectorySlash ? directoryMarker : marker,
         });
       }

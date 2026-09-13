@@ -82,6 +82,21 @@ export interface DroppedFile {
   type: 'file' | 'directory';
   lineRanges?: ContextLineRange[];
   attachmentSequence?: number;
+  database?: DatabaseAttachment;
+}
+
+/** Display metadata for a durable database snapshot attachment. */
+export interface DatabaseAttachment extends Pick<
+  DatabaseContext,
+  | 'name'
+  | 'dataSource'
+  | 'scope'
+  | 'selectedRowCount'
+  | 'truncated'
+  | 'pendingChanges'
+  | 'cellEditing'
+> {
+  rowCount: number;
 }
 
 export interface DatabaseTableReference {
@@ -789,6 +804,7 @@ export type InitialWebviewState = {
   permissionModeRecoverySessionIds?: string[];
   sessionSelectedModels?: Record<string, ChatModelSelection>;
   sessionPlanState?: Record<string, number | null>;
+  sessionReadState?: Record<string, number>;
   sessionModelMigrationPending?: boolean;
   modelPreferences?: ModelPreferences;
   modelPreferencesMigrationPending?: boolean;
@@ -935,6 +951,7 @@ export type WebviewMessage =
       };
     }
   | { type: 'session/seen'; payload: { sessionId: string } }
+  | { type: 'session-read-state/update'; payload: { sessionId: string; seenAt: number } }
   | { type: 'webview/focus'; payload: { focused: boolean } }
   | { type: 'permission/reveal'; payload: { permissionId: string } }
   | { type: 'providers/watch'; payload: { active: boolean } }

@@ -4,6 +4,8 @@ import com.google.gson.JsonObject
 import varro.protocol.Json
 import varro.protocol.long
 import varro.protocol.str
+import varro.protocol.bool
+import varro.protocol.int
 import varro.server.WorkspacePaths
 import java.net.URI
 import java.nio.file.Files
@@ -39,7 +41,9 @@ class AttachmentStore(private val root: Path, private val workspace: () -> Strin
         Files.createDirectories(directory)
         val target = directory.resolve(name)
         Files.write(target, bytes)
-        return describe(target.toString()) ?: error("Could not store attachment")
+        return (describe(target.toString()) ?: error("Could not store attachment")).apply {
+            payload.get("database")?.takeIf { it.isJsonObject }?.let { add("database", it.deepCopy()) }
+        }
     }
 
     companion object {
@@ -51,6 +55,16 @@ class AttachmentStore(private val root: Path, private val workspace: () -> Strin
                 "name" to "${snapshot.str("name") ?: "database"}-context.json",
                 "size" to bytes.size,
                 "content" to Base64.getEncoder().encodeToString(bytes),
+                "database" to Json.obj(
+                    "name" to (snapshot.str("name") ?: "database"),
+                    "dataSource" to snapshot.str("dataSource"),
+                    "scope" to (snapshot.str("scope") ?: "table"),
+                    "rowCount" to (snapshot.getAsJsonArray("rows")?.size() ?: 0),
+                    "selectedRowCount" to (snapshot.int("selectedRowCount") ?: 0),
+                    "truncated" to (snapshot.bool("truncated") ?: false),
+                    "pendingChanges" to (snapshot.bool("pendingChanges") ?: false),
+                    "cellEditing" to (snapshot.bool("cellEditing") ?: false),
+                ),
             )
         }
     }
