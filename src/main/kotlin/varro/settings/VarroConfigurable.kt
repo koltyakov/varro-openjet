@@ -22,8 +22,31 @@ import javax.swing.JComponent
 class VarroConfigurable : BoundConfigurable("Varro") {
 
     private val settings = VarroSettings.getInstance()
+    private val shared = OpenJetSharedSettings.getInstance()
 
     override fun createPanel(): DialogPanel = panel {
+        group("Shared OpenJet settings") {
+            row {
+                comment("Model lists and core settings are shared across JetBrains IDEs. Appearance stays local. VS Code settings are separate.")
+            }
+            row {
+                comment(shared.path)
+            }
+            row {
+                button("Use this IDE's settings to initialize sharing") {
+                    try {
+                        shared.initializeFromThisIde()
+                        reset()
+                        com.intellij.openapi.ui.Messages.showInfoMessage(
+                            "Shared settings are active. Other JetBrains IDEs running OpenJet will pick them up automatically.",
+                            "OpenJet settings",
+                        )
+                    } catch (error: Exception) {
+                        com.intellij.openapi.ui.Messages.showErrorDialog(error.message ?: "Unable to save shared settings", "OpenJet settings")
+                    }
+                }.comment("Run this in the IDE whose saved model preferences you want to keep. An existing shared file is never replaced.")
+            }
+        }
         group("OpenCode Server") {
             row("Port:") {
                 intTextField(1..65_535)

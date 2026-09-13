@@ -47,7 +47,7 @@ Run the same command to update, then restart the IDE. The script targets IDEs wi
 
 Chat in the tool window or open a session in an editor tab. Editor tabs support IntelliJ's usual split and move controls. Drafts and session routes are saved per view.
 
-Model preferences are shared across projects in the same IDE. Each session's selected model and permission mode are project-owned and sync between the tool window and editor tabs. Project UI preferences survive browser reloads and IDE restarts.
+Model preferences are shared across projects in the same IDE and can sync across JetBrains IDEs through OpenJet's shared settings file. Each session's selected model and permission mode are project-owned and sync between the tool window and editor tabs. Project UI preferences survive browser reloads and IDE restarts.
 
 To add context, drop files or directories into the composer, or choose **Add to Varro Context** from the editor or Project view. The current-document chip toggles automatic context and remembers your choice per project. Switching to a chat tab keeps the last source editor as context, including unsaved edits.
 
@@ -63,12 +63,28 @@ Settings are under **Settings > Tools > Varro**. You can configure server startu
 
 The Agents settings control the runtime-only read-only `Ask` agent, automatic compaction, reserved context tokens, and fallback titles for untitled sessions. Ask and automatic compaction are enabled by default; fallback titles are disabled.
 
+### Sharing settings across JetBrains IDEs
+
+In the IDE whose saved preferences you want to keep, open **Settings > Tools > Varro > Shared OpenJet settings** and click **Use this IDE's settings to initialize sharing**. Apply any pending settings edits first. This copies that IDE's model list and core settings into an OpenJet-only file:
+
+| OS | Location |
+| --- | --- |
+| macOS | `~/Library/Application Support/OpenJet/settings.json` |
+| Linux | `$XDG_CONFIG_HOME/openjet/settings.json`, or `~/.config/openjet/settings.json` |
+| Windows | `%APPDATA%\OpenJet\settings.json` |
+
+Other JetBrains IDEs under the same OS user adopt the shared file when Varro opens. Running instances check for changes every second. Existing shared settings always take precedence during migration. Until you initialize sharing, preferences stay in each IDE.
+
+Shared settings include model visibility, pins, ordering, names, server options, default permission mode, commit-message and auto-approve models, and agent/compaction preferences. Fonts, rendering, chat appearance, and session selections stay local. VS Code's Varro storage and OpenCode's configuration are separate.
+
+Writes merge changed fields under a cross-process file lock and replace the JSON atomically. Concurrent changes to the same preference use the last write. Invalid or unsupported files remain untouched; synchronization resumes after they are repaired.
+
 ### Sessions and model controls
 
 - Queue messages while a session is running. The host persists queued dispatches and reconciles them with message history after reconnecting. It does not automatically retry a send whose outcome is uncertain.
 - Deleted session trees go to the recycle bin for 7 days. Restore them there, or permanently delete them by emptying the bin. Expired entries are removed when the bin is read.
 - Ralph runs support start, pause, resume, stop, and model changes. The host journals their state and reattaches after reconnecting to OpenCode.
-- The Models menu can assign OpenCode's small model and agent models in global OpenCode configuration. Commit-message and auto-approve model assignments are saved in IDE settings.
+- The Models menu can assign OpenCode's small model and agent models in global OpenCode configuration. Commit-message and auto-approve model assignments use OpenJet's shared settings once sharing is initialized.
 - Permission controls can save rules for a session or the project. Project rules update the project's `opencode.jsonc` if present, otherwise `opencode.json`.
 
 ### Provider limits and usage

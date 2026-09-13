@@ -10,7 +10,7 @@ import com.intellij.util.messages.Topic
 import varro.protocol.Json
 import varro.protocol.asObjectOrNull
 
-/** Model preferences shared by every project in this IDE. */
+/** IDE-local model cache, synchronized across products by OpenJetSharedSettings once initialized. */
 @Service(Service.Level.APP)
 @State(name = "VarroOpenJetModelStore", storages = [Storage("varro-openjet.xml")])
 class VarroModelStore : PersistentStateComponent<VarroModelStore.StoreState> {

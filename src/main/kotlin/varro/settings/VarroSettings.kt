@@ -10,7 +10,11 @@ import com.intellij.util.messages.Topic
 import com.intellij.util.xmlb.XmlSerializerUtil
 
 /**
- * Application-level settings, the JetBrains counterpart of Varro's `varro.*`
+ * Application-level settings cache, the JetBrains counterpart of Varro's `varro.*`
+ * configuration. OpenJetSharedSettings synchronizes an explicit set of core fields
+ * across IDEs; appearance fields remain local.
+ *
+ * The JetBrains settings UI uses this component for Varro's
  * VS Code configuration. Keys keep their upstream names so the webview's
  * settings deep links (`vscode/open-settings` with a `varro.chat.…` query)
  * still resolve to something meaningful.

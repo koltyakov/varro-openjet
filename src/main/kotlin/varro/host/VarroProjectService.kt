@@ -140,6 +140,7 @@ class VarroProjectService(private val project: Project) : Disposable {
             })
         if (modelStore.migrate(store.legacyModelPreferences)) broadcastModelPreferences()
         store.legacyModelPreferences = JsonObject()
+        varro.settings.OpenJetSharedSettings.getInstance()
         store.editorRoutes.entrySet().forEach { (id, route) -> route.asObjectOrNull()?.let { routes[id] = it } }
         interruptedSessionIds.set(store.interruptedSessionIds)
         Disposer.register(this, server)
