@@ -806,6 +806,35 @@ class VarroProjectService(private val project: Project) : Disposable {
             ?.post("command/switch-session", Json.obj("direction" to direction))
     }
 
+    /** Saves the grid selection before changing focus or doing background I/O. */
+    fun addDatabaseContext(snapshot: JsonObject) {
+        // Store a durable, independent snapshot. Existing attachment handling preserves
+        // it across table switches, queued sends, draft restoration and server restarts.
+        val target = focusedHost
+        val bytes = Json.gson.toJson(snapshot).toByteArray(Charsets.UTF_8)
+        ApplicationManager.getApplication().executeOnPooledThread {
+            try {
+                val file = attachments.store(Json.obj(
+                    "name" to "${snapshot.str("name") ?: "database"}-context.json",
+                    "size" to bytes.size,
+                    "content" to java.util.Base64.getEncoder().encodeToString(bytes),
+                ))
+                ApplicationManager.getApplication().invokeLater({
+                    if (target != null && target.surface == WebviewHost.Surface.EDITOR) {
+                        target.post("files/dropped", Json.array(listOf(file)))
+                        target.post("command/focus-input")
+                        target.requestFocus()
+                    } else {
+                        sidebarCommand("files/dropped", Json.array(listOf(file)))
+                        sidebarCommand("command/focus-input")
+                    }
+                }, project.disposed)
+            } catch (failure: Exception) {
+                notify("Could not attach database context: ${failure.message}", NotificationType.ERROR)
+            }
+        }
+    }
+
     /** Adds the current editor selection (or file) to the composer's context. */
     fun addToContext(files: List<com.intellij.openapi.vfs.VirtualFile> = emptyList()) {
         context.refresh()

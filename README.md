@@ -63,6 +63,24 @@ Settings are under **Settings > Tools > Varro**. You can configure server startu
 
 The Agents settings control the runtime-only read-only `Ask` agent, automatic compaction, reserved context tokens, and fallback titles for untitled sessions. Ask and automatic compaction are enabled by default; fallback titles are disabled.
 
+### Database context in DataGrip
+
+Open a table or query-result grid to use it as automatic context. The composer shows the table name and selected-row count. Click the chip to disable this context. Moving focus to chat preserves the last grid; returning to a text editor restores file context.
+
+Database DDL tabs also provide context, including the complete editor buffer rather than just the selected text. The chip shows `DDL`, and the snapshot preserves unsaved definition edits. Table grids include the corresponding DDL when its document is already loaded in the IDE. Definitions are capped at 40,000 characters, with truncation reported in the chip.
+
+With no selected rows, context contains the grid's visible column names and types. Selecting rows includes their loaded values in visible-column order, plus the filter, page start, datasource and dialect when available. Pending edits are marked. Text still being edited inside a cell is not captured until the grid accepts the edit.
+
+Choose **Add to Varro Context** in the grid's context menu, or use `Ctrl+Shift+K` / `Cmd+Shift+K`, to save an independent JSON attachment. These snapshots remain attached when you switch tables and can be opened from the composer for inspection.
+
+Each snapshot is limited to 200 rows, 64 visible columns, 4,000 characters per cell and 80,000 serialized row characters. The chip reports truncation. Capture reads loaded data without fetching other pages or large binary objects. SQL numbers are represented as strings to preserve precision, and SQL null remains JSON null.
+
+Database support loads only when Database Tools is installed. To include a local DataGrip installation in compatibility verification:
+
+```bash
+./gradlew verifyPlugin -PdatagripVerificationPath="/Applications/DataGrip.app/Contents"
+```
+
 ### Sharing settings across JetBrains IDEs
 
 In the IDE whose saved preferences you want to keep, open **Settings > Tools > Varro > Shared OpenJet settings** and click **Use this IDE's settings to initialize sharing**. Apply any pending settings edits first. This copies that IDE's model list and core settings into an OpenJet-only file:

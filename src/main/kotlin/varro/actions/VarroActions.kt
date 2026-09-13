@@ -7,6 +7,7 @@ import com.intellij.openapi.actionSystem.CommonDataKeys
 import com.intellij.openapi.project.DumbAware
 import com.intellij.openapi.project.Project
 import varro.host.VarroProjectService
+import varro.host.DatabaseContextSource
 
 /**
  * IDE commands around the chat surface.
@@ -75,18 +76,23 @@ class RestartServerAction : VarroAction() {
 /**
  * `varro.chat.addToContext` / `varro.chat.addSelectionToContext`.
  *
- * The editor selection is already tracked continuously by the context provider,
- * so this refreshes the snapshot and brings the composer forward rather than
- * pushing a separate attachment.
+ * Attaches files and selections, or a detached database snapshot, before
+ * focusing the composer.
  */
 class AddToContextAction : VarroAction() {
-    override fun perform(project: Project, service: VarroProjectService, event: AnActionEvent) =
-        service.addToContext(event.getData(CommonDataKeys.VIRTUAL_FILE_ARRAY)?.toList().orEmpty())
+    override fun perform(project: Project, service: VarroProjectService, event: AnActionEvent) {
+        val database = project.getService(DatabaseContextSource::class.java)?.capture(event.dataContext)
+        if (database != null) service.addDatabaseContext(database)
+        else service.addToContext(event.getData(CommonDataKeys.VIRTUAL_FILE_ARRAY)?.toList().orEmpty())
+    }
+
+    override fun getActionUpdateThread() = ActionUpdateThread.EDT
 
     override fun update(event: AnActionEvent) {
         // Offered wherever there is a file to talk about, with or without a selection.
         event.presentation.isEnabled =
-            event.project != null && event.getData(CommonDataKeys.VIRTUAL_FILE) != null
+            event.project != null && (event.getData(CommonDataKeys.VIRTUAL_FILE) != null ||
+                event.project?.getService(DatabaseContextSource::class.java)?.isAvailable(event.dataContext) == true)
     }
 }
 

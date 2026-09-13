@@ -43,6 +43,10 @@
     ]]></description>
 
     <change-notes><![CDATA[
+        <h3>0.1.5</h3>
+        <p>Added database context in DataGrip and IDEs with Database Tools, including table schemas,
+            selected rows and JSON snapshot attachments. Added opt-in sharing of model lists and core
+            settings across JetBrains IDEs. Fixed macOS line navigation in editable chat content.</p>
         <h3>0.1.4</h3>
         <p>Added a read-only Ask agent and shell and patch timers. Saved and synced session selections across views.
             Fixed permission saving, draft selections and session forking. Improved auto-scroll, streaming Markdown
@@ -71,6 +75,9 @@
 
     <!-- The terminal backs `terminal/run` and terminal-selection context. -->
     <depends optional="true" config-file="varro-terminal.xml">org.jetbrains.plugins.terminal</depends>
+    <depends optional="true" config-file="varro-database.xml">com.intellij.database</depends>
+    <!-- Grid classes moved out of the platform into this plugin in 262. -->
+    <depends optional="true" config-file="varro-grid.xml">intellij.grid.core.plugin</depends>
 
     <!-- JCEF is a separate platform module on 2026.2+; older IDEs provide it from
          the platform without exposing the module, so this stays optional and the

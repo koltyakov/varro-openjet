@@ -1,0 +1,11 @@
+<idea-plugin>
+    <extensions defaultExtensionNs="com.intellij">
+        <projectService serviceInterface="varro.host.DatabaseContextSource"
+                        serviceImplementation="varro.database.DatabaseContextProvider"/>
+    </extensions>
+    <actions>
+        <reference ref="Varro.AddToContext">
+            <add-to-group group-id="Console.TableResult.PopupGroup" anchor="first"/>
+        </reference>
+    </actions>
+</idea-plugin>

@@ -68,6 +68,7 @@ class ContextProvider(private val project: Project) : Disposable {
         listeners.forEach { runCatching { it(snapshot) } }
 
     init {
+        project.getService(DatabaseContextSource::class.java)?.addListener(::scheduleRefresh)
         val connection = project.messageBus.connect(this)
         connection.subscribe(
             FileEditorManagerListener.FILE_EDITOR_MANAGER,
@@ -139,7 +140,8 @@ class ContextProvider(private val project: Project) : Disposable {
         val roots = workspaceFolders()
         val workspacePath = project.guessProjectDir()?.path ?: project.basePath
 
-        val editor = selectedTextEditor()
+        val database = project.getService(DatabaseContextSource::class.java)?.snapshot()
+        val editor = if (database == null) selectedTextEditor() else null
         val file = editor?.let { FileDocumentManager.getInstance().getFile(it.document) }
 
         val context = JsonObject().apply {
@@ -150,6 +152,7 @@ class ContextProvider(private val project: Project) : Disposable {
             add("activeFile", activeFile(file, workspacePath))
             add("selection", selection(editor))
             add("editorText", editorText(editor, file, workspacePath))
+            add("databaseContext", database)
         }
 
         val diagnostics = diagnostics(file)
