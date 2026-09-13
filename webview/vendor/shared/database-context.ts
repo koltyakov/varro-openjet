@@ -1,8 +1,20 @@
-import type { DatabaseContext } from './protocol';
+import type { DatabaseContext, DatabaseTableReference } from './protocol';
 import { asRecord, isString, isBoolean, isNumber } from './type-utils';
 
 function isBoundedText<T>(value: T, max: number): boolean {
   return isString(value) && value.length <= max;
+}
+
+export function isDatabaseTableReference(value: unknown): value is DatabaseTableReference {
+  const record = asRecord(value);
+  return (
+    !!record &&
+    isString(record.id) &&
+    record.id.length > 0 &&
+    record.id.length <= 128 &&
+    isBoundedText(record.name, 1_000) &&
+    isBoundedText(record.dataSource, 1_000)
+  );
 }
 
 export function isDatabaseContext(value: unknown): value is DatabaseContext {

@@ -506,8 +506,21 @@ class VarroProjectService(private val project: Project) : Disposable {
                             "requestId" to requestId,
                             "query" to query,
                             "files" to editor.searchFiles(query, limit),
+                            "tables" to (project.getService(DatabaseContextSource::class.java)?.searchTables(query, limit) ?: JsonArray()),
                         ),
                     )
+                }
+
+                "database/attach" -> {
+                    val requestId = payload.str("requestId") ?: return
+                    try {
+                        val snapshot = payload.str("id")?.let { project.getService(DatabaseContextSource::class.java)?.captureTable(it) }
+                            ?: error("This table is no longer available. Search for it again.")
+                        val file = attachments.store(AttachmentStore.databaseContent(snapshot))
+                        host?.post("database/attached", Json.obj("requestId" to requestId, "file" to file))
+                    } catch (failure: Exception) {
+                        host?.post("database/attached", Json.obj("requestId" to requestId, "error" to (failure.message ?: "Could not attach table")))
+                    }
                 }
 
                 "file/read" -> payload.str("path")?.let { editor.readWorkspaceFile(it) }
@@ -811,14 +824,10 @@ class VarroProjectService(private val project: Project) : Disposable {
         // Store a durable, independent snapshot. Existing attachment handling preserves
         // it across table switches, queued sends, draft restoration and server restarts.
         val target = focusedHost
-        val bytes = Json.gson.toJson(snapshot).toByteArray(Charsets.UTF_8)
+        val content = AttachmentStore.databaseContent(snapshot)
         ApplicationManager.getApplication().executeOnPooledThread {
             try {
-                val file = attachments.store(Json.obj(
-                    "name" to "${snapshot.str("name") ?: "database"}-context.json",
-                    "size" to bytes.size,
-                    "content" to java.util.Base64.getEncoder().encodeToString(bytes),
-                ))
+                val file = attachments.store(content)
                 ApplicationManager.getApplication().invokeLater({
                     if (target != null && target.surface == WebviewHost.Surface.EDITOR) {
                         target.post("files/dropped", Json.array(listOf(file)))

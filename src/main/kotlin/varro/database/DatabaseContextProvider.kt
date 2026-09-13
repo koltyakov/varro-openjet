@@ -34,6 +34,7 @@ import java.beans.PropertyChangeListener
 
 /** Reads loaded database grids and DDL documents. Never loads pages or executes SQL. */
 class DatabaseContextProvider(private val project: Project) : DatabaseContextSource, Disposable {
+    private val tables = DatabaseTables(project)
     private val listeners = mutableListOf<() -> Unit>()
     private var active: WeakReference<DataGrid>? = null
     private var activeDdlEditor: WeakReference<Editor>? = null
@@ -83,6 +84,11 @@ class DatabaseContextProvider(private val project: Project) : DatabaseContextSou
     }
 
     override fun addListener(listener: () -> Unit) { listeners.add(listener) }
+
+    override fun canDrop(attached: Any?) = tables.canDrop(attached)
+    override fun captureDrop(attached: Any?) = tables.captureDrop(attached)
+    override fun searchTables(query: String, limit: Int) = tables.search(query, limit)
+    override fun captureTable(id: String) = tables.capture(id)
 
     private fun activate(grid: DataGrid?) {
         if (grid != null) activeDdlEditor = null

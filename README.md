@@ -73,6 +73,8 @@ With no selected rows, context contains the grid's visible column names and type
 
 Choose **Add to Varro Context** in the grid's context menu, or use `Ctrl+Shift+K` / `Cmd+Shift+K`, to save an independent JSON attachment. These snapshots remain attached when you switch tables and can be opened from the composer for inspection.
 
+You can also drag tables from Database Explorer into the composer, including multiple tables at once, or type `@` followed by a table, schema, or datasource name. Table search results show the datasource and a table icon alongside file results. Selecting a table creates an attachment from its introspected column metadata and already-loaded DDL, even if its data grid is not open. Explorer drops and `@` selections attach schema snapshots; use the grid action above to attach selected row values. A drop can include up to 20 tables.
+
 Each snapshot is limited to 200 rows, 64 visible columns, 4,000 characters per cell and 80,000 serialized row characters. The chip reports truncation. Capture reads loaded data without fetching other pages or large binary objects. SQL numbers are represented as strings to preserve precision, and SQL null remains JSON null.
 
 Database support loads only when Database Tools is installed. To include a local DataGrip installation in compatibility verification:

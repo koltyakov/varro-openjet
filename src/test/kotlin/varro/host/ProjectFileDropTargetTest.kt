@@ -12,6 +12,13 @@ import java.awt.datatransfer.Transferable
 import java.awt.datatransfer.UnsupportedFlavorException
 
 class ProjectFileDropTargetTest {
+    @Test fun `database drops use content attachments instead of nonexistent virtual file paths`() {
+        val drag = FileFlavorProvider { listOf(File("/not-a-real-table")) }
+        val snapshot = Json.obj("name" to "main.users", "ddl" to "create table users (id INT primary key)")
+        val expected = Json.message("files/drop-content", Json.obj("files" to listOf(AttachmentStore.databaseContent(snapshot))))
+        assertEquals(expected, ProjectFileDropTarget.message(drag) { expected })
+    }
+
     @Test fun `project tree files and folders use the existing drop protocol`() {
         val drag = FileFlavorProvider {
             listOf(File("/project/Dockerfile"), File("/project/source files"), File("/project/Dockerfile"))

@@ -86,7 +86,14 @@ class WebviewHost(
         installAssetHandler()
         installLoadHandler()
         installThemeListeners()
-        ProjectFileDropTarget.install(browser.component, this) { message ->
+        ProjectFileDropTarget.install(browser.component, this,
+            canDropDatabase = { project.getService(DatabaseContextSource::class.java)?.canDrop(it) == true },
+            databaseDrop = { attached ->
+                project.getService(DatabaseContextSource::class.java)?.captureDrop(attached)?.takeIf { it.isNotEmpty() }?.let { snapshots ->
+                    Json.message("files/drop-content", Json.obj("files" to snapshots.map(AttachmentStore::databaseContent)))
+                }
+            },
+        ) { message ->
             dispatchMessage(message)
         }
         browser.jbCefClient.addDragHandler({ cefBrowser, data, _ ->

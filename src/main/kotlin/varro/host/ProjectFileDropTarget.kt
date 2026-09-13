@@ -9,17 +9,23 @@ import javax.swing.JComponent
 
 /** Project-view drags carry IDE objects that Chromium cannot decode as files. */
 internal object ProjectFileDropTarget {
-    fun install(component: JComponent, parent: Disposable, onDrop: (JsonObject) -> Unit) {
+    fun install(
+        component: JComponent,
+        parent: Disposable,
+        canDropDatabase: (Any?) -> Boolean = { false },
+        databaseDrop: (Any?) -> JsonObject? = { null },
+        onDrop: (JsonObject) -> Unit,
+    ) {
         DnDSupport.createBuilder(component)
             .disableAsSource()
             .enableAsNativeTarget()
             .setDisposableParent(parent)
             .setTargetChecker { event ->
-                event.isDropPossible = paths(event.attachedObject).isNotEmpty()
+                event.isDropPossible = canDropDatabase(event.attachedObject) || paths(event.attachedObject).isNotEmpty()
                 false
             }
             .setDropHandler { event ->
-                message(event.attachedObject)?.let(onDrop)
+                message(event.attachedObject, databaseDrop)?.let(onDrop)
             }
             .install()
     }
@@ -30,7 +36,8 @@ internal object ProjectFileDropTarget {
             .filter { it.isNotBlank() }
             .distinct()
 
-    internal fun message(attached: Any?): JsonObject? {
+    internal fun message(attached: Any?, databaseDrop: (Any?) -> JsonObject? = { null }): JsonObject? {
+        databaseDrop(attached)?.let { return it }
         val paths = paths(attached)
         return paths.takeIf { it.isNotEmpty() }?.let {
             Json.message("files/drop", Json.obj("paths" to it))

@@ -270,7 +270,7 @@ class EditorIntegration(private val project: Project) {
     private fun recentFiles(): List<VirtualFile> =
         com.intellij.openapi.fileEditor.impl.EditorHistoryManager.getInstance(project)
             .fileList
-            .filter { it.isValid && !it.isDirectory }
+            .filter { it.isValid && !it.isDirectory && it.isInLocalFileSystem }
 
     private fun matches(file: VirtualFile, query: String, root: String?): Boolean {
         val relative = WorkspacePaths.relativeWithin(file.path, root) ?: file.name

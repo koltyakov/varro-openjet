@@ -84,6 +84,12 @@ export interface DroppedFile {
   attachmentSequence?: number;
 }
 
+export interface DatabaseTableReference {
+  id: string;
+  name: string;
+  dataSource: string;
+}
+
 export interface TerminalSelection {
   text: string;
   terminalName: string;
@@ -839,7 +845,16 @@ export type ExtensionMessage =
   | { type: 'files/removed'; payload: { path: string } }
   | {
       type: 'files/search-results';
-      payload: { requestId: number; query: string; files: DroppedFile[] };
+      payload: {
+        requestId: number;
+        query: string;
+        files: DroppedFile[];
+        tables?: DatabaseTableReference[];
+      };
+    }
+  | {
+      type: 'database/attached';
+      payload: { requestId: string; file: DroppedFile } | { requestId: string; error: string };
     }
   | {
       type: 'config/update';
@@ -1022,6 +1037,7 @@ export type WebviewMessage =
     }
   | { type: 'files/pick' }
   | { type: 'files/search'; payload: { requestId: number; query: string; limit?: number } }
+  | { type: 'database/attach'; payload: { requestId: string; id: string } }
   | { type: 'file/read'; payload: { path: string } }
   | {
       type: 'vscode/open';

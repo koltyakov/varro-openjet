@@ -42,5 +42,16 @@ class AttachmentStore(private val root: Path, private val workspace: () -> Strin
         return describe(target.toString()) ?: error("Could not store attachment")
     }
 
-    companion object { private const val MAX_BYTES = 20L * 1024 * 1024 }
+    companion object {
+        private const val MAX_BYTES = 20L * 1024 * 1024
+
+        fun databaseContent(snapshot: JsonObject): JsonObject {
+            val bytes = Json.gson.toJson(snapshot).toByteArray(Charsets.UTF_8)
+            return Json.obj(
+                "name" to "${snapshot.str("name") ?: "database"}-context.json",
+                "size" to bytes.size,
+                "content" to Base64.getEncoder().encodeToString(bytes),
+            )
+        }
+    }
 }

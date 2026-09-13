@@ -166,6 +166,7 @@ import { getSessionHistoryPrompts } from '../lib/message-window';
 import {
   detachDiscardableActiveBlankSession,
   getDiscardableActiveBlankSessionId,
+  getNewChatDraftGeneration,
 } from '../lib/new-chat-draft';
 import { collapseExpandedDiffOverlays, hasExpandedDiffOverlay } from '../lib/diff-overlay-state';
 import { TodoList } from './TodoList';
@@ -196,6 +197,7 @@ import {
 import type {
   ChatModelSelection,
   DroppedFile,
+  DatabaseTableReference,
   ExtensionMessage,
   InitialWebviewState,
   SessionTokenBreakdown,
@@ -940,6 +942,31 @@ export function ChatInput(props: { newSession?: boolean; onBeforeSend?: () => vo
   const pendingPasteTransactions: PasteTransaction[] = [];
   const pasteTransactionsByEvent = new Map<ClipboardEvent, PasteTransaction>();
   const pendingImageStores = new Set<string>();
+  const pendingTableAttachments = new Map<
+    string,
+    {
+      sessionId: string | null;
+      scope: string;
+      generation: number;
+      timer: ReturnType<typeof setTimeout>;
+    }
+  >();
+  const [pendingTableCount, setPendingTableCount] = createSignal(0);
+  const clearPendingTableAttachments = () => {
+    for (const request of pendingTableAttachments.values()) clearTimeout(request.timer);
+    pendingTableAttachments.clear();
+    setPendingTableCount(0);
+  };
+  createEffect(() => {
+    const sessionId = composerSessionId();
+    const scope = getFileSearchScopeKey();
+    for (const request of pendingTableAttachments.values()) {
+      if (request.sessionId !== sessionId || request.scope !== scope) {
+        clearPendingTableAttachments();
+        break;
+      }
+    }
+  });
   const pastedImageDecodeQueues = Array.from({ length: PASTED_IMAGE_DECODE_CONCURRENCY }, () =>
     Promise.resolve()
   );
@@ -959,10 +986,12 @@ export function ChatInput(props: { newSession?: boolean; onBeforeSend?: () => vo
     pendingPasteTransactions.length = 0;
     pasteTransactionsByEvent.clear();
     pendingImageStores.clear();
+    clearPendingTableAttachments();
     pendingPasteImageBytes = 0;
   });
   const [completionIndex, setCompletionIndex] = createSignal(0);
   const [fileSearchResults, setFileSearchResults] = createSignal<DroppedFile[]>([]);
+  const [tableSearchResults, setTableSearchResults] = createSignal<DatabaseTableReference[]>([]);
   const [sessionSearchResults, setSessionSearchResults] = createSignal<Session[]>([]);
   const [sessionReferences, setSessionReferences] = createSignal<Record<string, Session>>({});
   const [showFileSearchHint, setShowFileSearchHint] = createSignal(false);
@@ -1399,6 +1428,7 @@ export function ChatInput(props: { newSession?: boolean; onBeforeSend?: () => vo
     createMentionCompletionSource({
       agents: mentionAgents(),
       files: fileSearchResults(),
+      tables: tableSearchResults(),
     })
   );
 
@@ -1518,6 +1548,7 @@ export function ChatInput(props: { newSession?: boolean; onBeforeSend?: () => vo
       latestFileSearchRequestId += 1;
       latestFileSearchQuery = '';
       setFileSearchResults([]);
+      setTableSearchResults([]);
     }
     if (completion?.type !== 'mention') {
       if (fileSearchTimer) {
@@ -1527,6 +1558,7 @@ export function ChatInput(props: { newSession?: boolean; onBeforeSend?: () => vo
       latestFileSearchQuery = '';
       setFileSearchResults([]);
       setShowFileSearchHint(false);
+      setTableSearchResults([]);
       return;
     }
 
@@ -1541,6 +1573,7 @@ export function ChatInput(props: { newSession?: boolean; onBeforeSend?: () => vo
       }
       latestFileSearchQuery = '';
       setFileSearchResults([]);
+      setTableSearchResults([]);
       return;
     }
 
@@ -1938,6 +1971,7 @@ export function ChatInput(props: { newSession?: boolean; onBeforeSend?: () => vo
     }
 
     if (completionSelection.file) addContextFile(completionSelection.file);
+    if (completionSelection.table) requestTableAttachment(completionSelection.table);
     if (completionSelection.session) rememberSessionReference(completionSelection.session);
     if (
       completion?.type !== 'mention' &&
@@ -1961,6 +1995,22 @@ export function ChatInput(props: { newSession?: boolean; onBeforeSend?: () => vo
     queueMicrotask(() => richEditorRef?.focus());
   }
 
+  function requestTableAttachment(table: DatabaseTableReference) {
+    const requestId = createAttachmentID();
+    pendingTableAttachments.set(requestId, {
+      sessionId: composerSessionId(),
+      scope: getFileSearchScopeKey(),
+      generation: getNewChatDraftGeneration(),
+      timer: setTimeout(() => {
+        if (!pendingTableAttachments.delete(requestId)) return;
+        setPendingTableCount(pendingTableAttachments.size);
+        showSessionActionFeedback('Table attachment timed out. Try selecting it again.', 'warning');
+      }, 30_000),
+    });
+    setPendingTableCount(pendingTableAttachments.size);
+    postMessage({ type: 'database/attach', payload: { requestId, id: table.id } });
+  }
+
   function applyCompletionValue(
     completion: Extract<
       ReturnType<typeof getActiveCompletion>,
@@ -1977,6 +2027,7 @@ export function ChatInput(props: { newSession?: boolean; onBeforeSend?: () => vo
       setCaretPosition(nextCursor);
       setCompletionIndex(0);
       setFileSearchResults([]);
+      setTableSearchResults([]);
       setSessionSearchResults([]);
     });
     latestFileSearchQuery = '';
@@ -2082,6 +2133,10 @@ export function ChatInput(props: { newSession?: boolean; onBeforeSend?: () => vo
     const text = inputText();
     if (isAbortSlashCommand(text)) {
       requestAbortSession();
+      return;
+    }
+    if (pendingTableCount() > 0) {
+      showSessionActionFeedback('Preparing table attachments', 'warning');
       return;
     }
     const sendSessionId = composerSessionId();
@@ -3411,10 +3466,27 @@ export function ChatInput(props: { newSession?: boolean; onBeforeSend?: () => vo
         }
         return;
       }
+      if (msg.type === 'database/attached') {
+        const request = pendingTableAttachments.get(msg.payload.requestId);
+        if (!request) return;
+        clearTimeout(request.timer);
+        pendingTableAttachments.delete(msg.payload.requestId);
+        setPendingTableCount(pendingTableAttachments.size);
+        if (
+          request.sessionId !== composerSessionId() ||
+          request.scope !== getFileSearchScopeKey() ||
+          request.generation !== getNewChatDraftGeneration()
+        )
+          return;
+        if ('file' in msg.payload) addContextFile(msg.payload.file);
+        else showSessionActionFeedback(msg.payload.error, 'warning');
+        return;
+      }
       if (msg.type !== 'files/search-results') return;
       if (msg.payload.requestId !== latestFileSearchRequestId) return;
       if (msg.payload.query !== latestFileSearchQuery) return;
       setFileSearchResults(msg.payload.files);
+      setTableSearchResults(msg.payload.tables ?? []);
     });
 
     const handleWindowClick = (e: MouseEvent) => {
@@ -3762,6 +3834,7 @@ export function ChatInput(props: { newSession?: boolean; onBeforeSend?: () => vo
       (!state.workspaceCatalogReloadPending &&
         !pendingWorkspacePath() &&
         !hasPendingPdfFallback() &&
+        pendingTableCount() === 0 &&
         !hasPendingDelegatedImages() &&
         (!hasPendingApproval() || !composerEditingMessage()) &&
         (getSendableInputText().trim().length > 0 ||
@@ -3788,7 +3861,8 @@ export function ChatInput(props: { newSession?: boolean; onBeforeSend?: () => vo
     }
     const pendingWorkspace = pendingWorkspacePath();
     if (pendingWorkspace) return `Waiting for the workspace to switch to ${pendingWorkspace}`;
-    if (hasPendingPdfFallback() || hasPendingDelegatedImages()) return 'Preparing attachments';
+    if (hasPendingPdfFallback() || hasPendingDelegatedImages() || pendingTableCount() > 0)
+      return 'Preparing attachments';
     return null;
   };
   const reportBlockedSend = () => {
@@ -4636,6 +4710,7 @@ export function ChatInput(props: { newSession?: boolean; onBeforeSend?: () => vo
               }
 
               if (completionSelection.file) addContextFile(completionSelection.file);
+              if (completionSelection.table) requestTableAttachment(completionSelection.table);
               if (completionSelection.session)
                 rememberSessionReference(completionSelection.session);
               if (
