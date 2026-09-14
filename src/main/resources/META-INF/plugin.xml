@@ -108,6 +108,11 @@
     </extensions>
 
     <actions>
+        <action id="Varro.AddProblemsToContext" class="varro.actions.AddProblemsToContextAction"
+                text="Add to Varro Context" icon="/icons/varro.svg"
+                description="Attach the selected problem details to the Varro composer">
+            <add-to-group group-id="ProblemsView.ToolWindow.TreePopup" anchor="first"/>
+        </action>
         <group id="Varro.ActionGroup" text="Varro" popup="true">
             <add-to-group group-id="ToolsMenu" anchor="last"/>
 

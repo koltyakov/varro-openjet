@@ -2,8 +2,7 @@ package varro.host
 
 import com.google.gson.JsonArray
 import com.google.gson.JsonObject
-import com.intellij.analysis.problemsView.toolWindow.ProblemsView
-import com.intellij.codeInsight.daemon.impl.DaemonCodeAnalyzerEx
+import com.intellij.codeInsight.daemon.DaemonCodeAnalyzer
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.editor.Editor
@@ -21,10 +20,7 @@ import com.intellij.openapi.fileEditor.TextEditor
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.project.guessProjectDir
 import com.intellij.openapi.roots.ProjectRootManager
-import com.intellij.openapi.util.Disposer
 import com.intellij.openapi.vfs.VirtualFile
-import com.intellij.psi.PsiDocumentManager
-import com.intellij.lang.annotation.HighlightSeverity
 import varro.protocol.Json
 import varro.server.WorkspacePaths
 import java.util.concurrent.CopyOnWriteArrayList
@@ -70,6 +66,9 @@ class ContextProvider(private val project: Project) : Disposable {
     init {
         project.getService(DatabaseContextSource::class.java)?.addListener(::scheduleRefresh)
         val connection = project.messageBus.connect(this)
+        connection.subscribe(DaemonCodeAnalyzer.DAEMON_EVENT_TOPIC, object : DaemonCodeAnalyzer.DaemonListener {
+            override fun daemonFinished() = scheduleRefresh()
+        })
         connection.subscribe(
             FileEditorManagerListener.FILE_EDITOR_MANAGER,
             object : FileEditorManagerListener {
@@ -155,9 +154,10 @@ class ContextProvider(private val project: Project) : Disposable {
             add("databaseContext", database)
         }
 
-        val diagnostics = diagnostics(file)
-        context.add("diagnostics", diagnostics.entries)
-        context.addProperty("diagnosticsTotal", diagnostics.total)
+        val diagnostics = WorkspaceProblems.highlights(project, file, editor)
+        context.add("diagnostics", Json.array(WorkspaceProblems.ranked(diagnostics, (editor?.caretModel?.logicalPosition?.line ?: 0) + 1)))
+        context.addProperty("diagnosticsTotal", diagnostics.size)
+        context.add("diagnosticCounts", WorkspaceProblems.counts(diagnostics))
         context
     }
 
@@ -255,68 +255,12 @@ class ContextProvider(private val project: Project) : Disposable {
 
     private data class TextSlice(val kind: String, val text: String, val startLine: Int, val endLine: Int)
 
-    private data class Diagnostics(val entries: JsonArray, val total: Int)
-
-    /**
-     * Diagnostics for the active file, capped so a file with thousands of
-     * warnings cannot dominate the prompt. `total` still reports the real count
-     * so the composer can say how many were left out.
-     */
-    private fun diagnostics(file: VirtualFile?): Diagnostics {
-        val entries = JsonArray()
-        if (file == null) return Diagnostics(entries, 0)
-
-        val document = FileDocumentManager.getInstance().getDocument(file) ?: return Diagnostics(entries, 0)
-        val psiFile = PsiDocumentManager.getInstance(project).getPsiFile(document)
-            ?: return Diagnostics(entries, 0)
-
-        var total = 0
-        runCatching {
-            DaemonCodeAnalyzerEx.processHighlights(
-                document,
-                project,
-                HighlightSeverity.INFORMATION,
-                0,
-                document.textLength,
-            ) { info ->
-                val severity = when {
-                    info.severity >= HighlightSeverity.ERROR -> "error"
-                    info.severity >= HighlightSeverity.WARNING -> "warning"
-                    else -> "info"
-                }
-                val description = info.description
-                if (!description.isNullOrBlank()) {
-                    total += 1
-                    if (entries.size() < MAX_DIAGNOSTICS) {
-                        entries.add(
-                            Json.obj(
-                                "path" to file.path,
-                                "severity" to severity,
-                                "message" to description,
-                                "line" to document.getLineNumber(info.startOffset) + 1,
-                            ),
-                        )
-                    }
-                }
-                true
-            }
-        }.onFailure {
-            // Highlighting may not have run yet for a freshly opened file; an empty
-            // diagnostics list is correct in that case, not an error.
-            return Diagnostics(entries, entries.size())
-        }
-        // Referenced so the analyzer keeps the file alive for the call above.
-        psiFile.virtualFile
-        return Diagnostics(entries, total)
-    }
-
     private fun languageId(file: VirtualFile): String =
         file.fileType.name.lowercase().ifBlank { file.extension ?: "plaintext" }
 
     override fun dispose() = Unit
 
     companion object {
-        private const val MAX_DIAGNOSTICS = 50
         private const val MAX_EDITOR_TEXT = 100_000
     }
 }

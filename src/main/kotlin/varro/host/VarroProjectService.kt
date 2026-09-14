@@ -316,6 +316,7 @@ class VarroProjectService(private val project: Project) : Disposable {
 
             // Configuration mirrored from settings.
             addProperty("showFileDiffs", settings.chatShowFileDiffs)
+            addProperty("enableProblemsContext", settings.chatEnableProblemsContext)
             addProperty("expandThinking", settings.chatExpandThinking)
             addProperty("showChangedFiles", settings.chatShowChangedFiles)
             addProperty("showTurnTimer", settings.chatShowTurnTimer)
@@ -352,6 +353,7 @@ class VarroProjectService(private val project: Project) : Disposable {
             "config/update",
             Json.obj(
                 "showFileDiffs" to settings.chatShowFileDiffs,
+                "enableProblemsContext" to settings.chatEnableProblemsContext,
                 "expandThinking" to settings.chatExpandThinking,
                 "showChangedFiles" to settings.chatShowChangedFiles,
                 "showTurnTimer" to settings.chatShowTurnTimer,
@@ -817,6 +819,20 @@ class VarroProjectService(private val project: Project) : Disposable {
     fun switchSession(direction: String) {
         (focusedHost ?: panels.firstOrNull { it.surface == WebviewHost.Surface.SIDEBAR })
             ?.post("command/switch-session", Json.obj("direction" to direction))
+    }
+
+    fun addProblems(diagnostics: JsonArray) {
+        if (!settings.chatEnableProblemsContext || diagnostics.isEmpty) return
+        val target = focusedHost
+        val payload = Json.obj("diagnostics" to diagnostics.deepCopy())
+        if (target != null && target.surface == WebviewHost.Surface.EDITOR) {
+            target.post("command/attach-problems", payload)
+            target.post("command/focus-input")
+            target.requestFocus()
+        } else {
+            sidebarCommand("command/attach-problems", payload)
+            sidebarCommand("command/focus-input")
+        }
     }
 
     /** Saves the grid selection before changing focus or doing background I/O. */

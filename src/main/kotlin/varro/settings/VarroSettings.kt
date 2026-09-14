@@ -46,6 +46,8 @@ class VarroSettings : PersistentStateComponent<VarroSettings> {
     var chatExpandThinking: Boolean = false
     var chatShowChangedFiles: Boolean = false
     var chatShowTurnTimer: Boolean = true
+    /** Mirrors `varro.chat.enableProblemsContext`; applies to automatic and explicit problem context. */
+    var chatEnableProblemsContext: Boolean = true
 
     /** `left` or `right`; which side the sessions pane takes on wide layouts. */
     var chatDesktopSessionPaneSide: String = "right"

@@ -71,6 +71,10 @@ class VarroConfigurable : BoundConfigurable("Varro") {
         }
 
         group("Chat") {
+            row {
+                checkBox("Include IDE problems in chat context")
+                    .bindSelected(settings::chatEnableProblemsContext)
+            }
             row("Default permission mode:") {
                 comboBox(listOf("default", "auto", "full"))
                     .bindItem(settings::chatDefaultPermissionMode.toNullableProperty())

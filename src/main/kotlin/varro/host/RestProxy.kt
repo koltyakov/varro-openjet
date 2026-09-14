@@ -228,6 +228,8 @@ class RestProxy(
         fun q(key: String): String? = query[key]?.firstOrNull()?.takeIf { it.isNotBlank() }
 
         return when {
+            pathname == ApiRoutes.Endpoints.WORKSPACE_PROBLEMS -> WorkspaceProblems.snapshot(project)
+
             pathname == ApiRoutes.Endpoints.PROVIDER_LIMIT ->
                 services.providerLimit(q("providerID")!!, q("modelID"))
 

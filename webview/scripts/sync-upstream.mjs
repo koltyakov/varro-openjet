@@ -52,6 +52,7 @@ function describeRevision(source) {
   try {
     return {
       commit: run('git', ['rev-parse', 'HEAD'], source),
+      localChanges: run('git', ['status', '--porcelain', '--', 'src/webview', 'src/shared'], source).length > 0,
       describedAt: new Date().toISOString(),
     };
   } catch {
@@ -140,6 +141,14 @@ writeFileSync(toolbarPath, toolbarSource.replace(
   packageImport,
   "import packageJson from '../../../../src/plugin-metadata';",
 ));
+
+// Keep old VS Code transcripts readable while identifying this host's diagnostics.
+const problemsPath = join(webviewRoot, 'vendor/webview/lib/editor-problems.ts');
+if (existsSync(problemsPath)) {
+  writeFileSync(problemsPath, readFileSync(problemsPath, 'utf8')
+    .replaceAll('\\[VS Code problems for', '\\[(?:JetBrains|VS Code) problems for')
+    .replace('`[VS Code problems for', '`[JetBrains problems for'));
+}
 
 writeFileSync(
   join(webviewRoot, 'vendor', 'UPSTREAM.json'),
