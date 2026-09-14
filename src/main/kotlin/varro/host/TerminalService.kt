@@ -61,9 +61,11 @@ class TerminalService(private val project: Project) {
             val workingDirectory = project.guessProjectDir()?.path ?: project.basePath
             val opened = runCatching {
                 val manager = org.jetbrains.plugins.terminal.TerminalToolWindowManager.getInstance(project)
-                // `createShellWidget` is deprecated but is the only overload present
-                // across the 252-262 range this plugin supports; its replacement
-                // landed later than the floor.
+                // Keep the public legacy API for 252 support. The equivalent
+                // createNewSession(String, String, List, boolean, boolean) overload
+                // exists in 252-262 but is @ApiStatus.Internal. The documented
+                // reworked-terminal API starts in 253, so it cannot replace this
+                // call across our supported range. The verifier reports deprecation.
                 @Suppress("DEPRECATION")
                 val widget = manager.createShellWidget(workingDirectory, title, true, true)
                 widget.sendCommandToExecute(command)

@@ -76,7 +76,9 @@
     <!-- The terminal backs `terminal/run` and terminal-selection context. -->
     <depends optional="true" config-file="varro-terminal.xml">org.jetbrains.plugins.terminal</depends>
     <depends optional="true" config-file="varro-database.xml">com.intellij.database</depends>
-    <!-- Grid classes moved out of the platform into this plugin in 262. -->
+    <!-- Grid classes moved out of the platform into this plugin in 262.
+         The database dependency does not expose them to Varro's classloader.
+         Keep this explicit dependency; older IDEs report it as unresolved but optional. -->
     <depends optional="true" config-file="varro-grid.xml">intellij.grid.core.plugin</depends>
 
     <!-- JCEF is a separate platform module on 2026.2+; older IDEs provide it from
