@@ -65,19 +65,16 @@ The Agents settings control the runtime-only read-only `Ask` agent, automatic co
 
 ### Database context in DataGrip
 
-Open a table or query-result grid to use it as automatic context. The composer shows the table name and selected-row count. Click the chip to disable this context. Moving focus to chat preserves the last grid; returning to a text editor restores file context.
+Open a table or query-result grid for automatic context. Varro includes visible column metadata and any selected rows. The composer chip shows the table and row count; click it to disable context. Switching to chat keeps the last grid, while returning to an editor restores file context.
 
-Database DDL tabs also provide context, including the complete editor buffer rather than just the selected text. The chip shows `DDL`, and the snapshot preserves unsaved definition edits. Table grids include the corresponding DDL when its document is already loaded in the IDE. Definitions are capped at 40,000 characters, with truncation reported in the chip.
+DDL tabs provide the full editor buffer, including unsaved edits. Table grids also include DDL when already loaded in the IDE.
 
-With no selected rows, context contains the grid's visible column names and types. Selecting rows includes their loaded values in visible-column order, plus the filter, page start, datasource and dialect when available. Pending edits are marked. Text still being edited inside a cell is not captured until the grid accepts the edit.
+- Use **Add to Varro Context** in a grid or `Ctrl+Shift+K` / `Cmd+Shift+K` to attach a JSON snapshot with selected row values. Snapshots stay attached when you switch tables and open from the composer for inspection.
+- Drag tables from Database Explorer or type `@` to search by table, schema, or datasource. These attach column metadata and already-loaded DDL without opening a grid. Drops support up to 20 tables.
 
-Choose **Add to Varro Context** in the grid's context menu, or use `Ctrl+Shift+K` / `Cmd+Shift+K`, to save an independent JSON attachment. These snapshots remain attached when you switch tables and can be opened from the composer for inspection.
+Capture uses loaded data only. Accept active cell edits before capturing. Limits are 200 rows, 64 columns, 4,000 characters per cell, 80,000 serialized row characters, and 40,000 DDL characters. The chip reports truncation.
 
-You can also drag tables from Database Explorer into the composer, including multiple tables at once, or type `@` followed by a table, schema, or datasource name. Table search results show the datasource and a table icon alongside file results. Selecting a table creates an attachment from its introspected column metadata and already-loaded DDL, even if its data grid is not open. Explorer drops and `@` selections attach schema snapshots; use the grid action above to attach selected row values. A drop can include up to 20 tables.
-
-Each snapshot is limited to 200 rows, 64 visible columns, 4,000 characters per cell and 80,000 serialized row characters. The chip reports truncation. Capture reads loaded data without fetching other pages or large binary objects. SQL numbers are represented as strings to preserve precision, and SQL null remains JSON null.
-
-Database support loads only when Database Tools is installed. To include a local DataGrip installation in compatibility verification:
+Requires Database Tools. To verify compatibility with a local DataGrip installation:
 
 ```bash
 ./gradlew verifyPlugin -PdatagripVerificationPath="/Applications/DataGrip.app/Contents"
