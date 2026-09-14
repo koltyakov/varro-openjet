@@ -23,6 +23,7 @@
  * stays byte-identical to upstream.
  */
 
+import './host-theme.css';
 import { installProjectStorage } from './project-storage';
 import { installViewStateChannel } from './view-state';
 

@@ -7,6 +7,7 @@
   "scripts": {
     "sync": "node scripts/sync-upstream.mjs",
     "build": "vite build",
+    "benchmark": "node scripts/scroll-benchmark.mjs",
     "test:host": "vitest run --config vitest.host.config.mts",
     "watch": "vite build --watch",
     "typecheck": "tsc --noEmit"

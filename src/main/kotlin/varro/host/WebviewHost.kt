@@ -57,10 +57,7 @@ class WebviewHost(
 
     private val log = logger<WebviewHost>()
 
-    private val browser: JBCefBrowser = JBCefBrowser.createBuilder()
-        .setOffScreenRendering(false)
-        .setEnableOpenDevToolsMenuItem(true)
-        .build()
+    private val browser: JBCefBrowser = JcefBrowserFactory.create()
 
     private val jsQuery: JBCefJSQuery = JBCefJSQuery.create(browser as com.intellij.ui.jcef.JBCefBrowserBase)
 

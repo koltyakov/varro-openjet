@@ -86,6 +86,8 @@ Use `./gradlew runIde` and exercise the flow you changed. For bridge or persiste
 
 Use **Open Varro Developer Tools** from Find Action to inspect browser errors. The [troubleshooting guide](docs/troubleshooting.md#logs-and-bug-reports) explains how to collect host logs.
 
+For large-transcript rendering measurements inside the IDE, use the [JCEF scrolling benchmark](docs/scrolling-benchmark.md). It supports manual scrolling, automatic bottom-follow, and native-input trace capture against synthetic fixtures.
+
 `npm run watch` from `webview/` rebuilds browser assets as files change. It does not reload the sandbox or copy assets into an already-running plugin. Relaunch through Gradle to package the current resources.
 
 ## Refresh upstream sources

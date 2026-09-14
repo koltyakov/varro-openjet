@@ -43,6 +43,14 @@
     ]]></description>
 
     <change-notes><![CDATA[
+        <h3>0.1.6</h3>
+        <p>Added workspace errors and warnings as chat context, with individual problem references,
+            a Problems-view action and settings to disable inclusion. Problem attachments persist across
+            drafts, queued messages and message edits. Added table attachments from Database Explorer
+            drag-and-drop and @ mentions, and preserved database snapshot details in stored attachments.
+            Reduced redundant editor-context refreshes and saved-view updates. Improved streaming Markdown
+            performance and set a 60 FPS default for off-screen browser rendering, with IDE frame-rate
+            overrides respected. Added an in-IDE scrolling benchmark.</p>
         <h3>0.1.5</h3>
         <p>Added database context in DataGrip and IDEs with Database Tools, including table schemas,
             selected rows and JSON snapshot attachments. Added opt-in sharing of model lists and core
@@ -104,6 +112,9 @@
             instance="varro.settings.VarroConfigurable"/>
 
         <notificationGroup id="Varro Notifications" displayType="BALLOON"/>
+        <postStartupActivity implementation="varro.actions.ScrollingBenchmarkStartup"/>
+        <toolWindow id="Varro Benchmark" anchor="right" canCloseContents="true"
+                    factoryClass="varro.toolwindow.ScrollingBenchmarkToolWindowFactory"/>
         <statusBarWidgetFactory implementation="varro.toolwindow.VarroStatusWidgetFactory" id="VarroStatus"/>
         <fileEditorProvider implementation="varro.host.VarroChatEditorProvider"/>
         <virtualFileSystem key="varro-chat" implementationClass="varro.host.VarroChatFileSystem" physical="false"/>
@@ -177,6 +188,10 @@
                     icon="AllIcons.Xml.Browsers.Chromium"
                     text="Open Varro Developer Tools"
                     description="Open the embedded browser's developer tools"/>
+            <action id="Varro.ScrollingBenchmark"
+                    class="varro.actions.ScrollingBenchmarkAction"
+                    text="Open Varro Scrolling Benchmark"
+                    description="Measure a local synthetic transcript in IntelliJ's embedded browser"/>
         </group>
 
         <action id="Varro.AddToContext"

@@ -190,6 +190,18 @@ tasks.test {
     dependsOn(testWebviewHost)
 }
 
+tasks.named<org.jetbrains.intellij.platform.gradle.tasks.RunIdeTask>("runIde") {
+    providers.gradleProperty("scrollBenchmarkUrl").orNull?.let {
+        systemProperty("varro.scrollBenchmark.url", it)
+    }
+    providers.gradleProperty("scrollBenchmarkDebugPort").orNull?.let {
+        systemProperty("ide.browser.jcef.debug.port", it)
+    }
+    providers.gradleProperty("scrollBenchmarkFrameRate").orNull?.let {
+        systemProperty("varro.scrollBenchmark.frameRate", it)
+    }
+}
+
 tasks.clean {
     delete(webviewOutputDir)
 }

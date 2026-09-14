@@ -18,8 +18,8 @@
     "**/*.test-support.ts"
   ],
   "revision": {
-    "commit": "0e450b8960f07795547e42555e584c0a8378d6f3",
+    "commit": "fbda2916b2d944f46319ada6b8494d7898c8b0dc",
     "localChanges": false,
-    "describedAt": "2026-09-14T13:40:19.946Z"
+    "describedAt": "2026-09-14T17:58:38.323Z"
   }
 }

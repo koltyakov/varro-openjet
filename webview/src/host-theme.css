@@ -1,0 +1,4 @@
+/* IntelliJ's muted icon color is too faint for the small context usage arc. */
+.chat-context-usage:not(.warning):not(.error) .progress-arc {
+  stroke: var(--color-vscode-accent);
+}
