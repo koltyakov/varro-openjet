@@ -21,6 +21,7 @@ import com.intellij.openapi.project.Project
 import com.intellij.openapi.project.guessProjectDir
 import com.intellij.openapi.roots.ProjectRootManager
 import com.intellij.openapi.vfs.VirtualFile
+import com.intellij.util.Alarm
 import varro.protocol.Json
 import varro.server.WorkspacePaths
 import java.util.concurrent.CopyOnWriteArrayList
@@ -42,6 +43,7 @@ class ContextProvider(private val project: Project) : Disposable {
 
     private val current = AtomicReference(JsonObject())
     private val refreshRequested = AtomicBoolean(false)
+    private val refreshAlarm = Alarm(Alarm.ThreadToUse.SWING_THREAD, this)
     private var lastTextEditor: java.lang.ref.WeakReference<Editor>? = null
 
     /**
@@ -83,13 +85,17 @@ class ContextProvider(private val project: Project) : Disposable {
         val multicaster = com.intellij.openapi.editor.EditorFactory.getInstance().eventMulticaster
         multicaster.addSelectionListener(
             object : SelectionListener {
-                override fun selectionChanged(event: SelectionEvent) = scheduleRefresh()
+                override fun selectionChanged(event: SelectionEvent) {
+                    if (event.editor.project == project) scheduleRefresh()
+                }
             },
             this,
         )
         multicaster.addCaretListener(
             object : CaretListener {
-                override fun caretPositionChanged(event: CaretEvent) = scheduleRefresh()
+                override fun caretPositionChanged(event: CaretEvent) {
+                    if (event.editor.project == project) scheduleRefresh()
+                }
             },
             this,
         )
@@ -110,23 +116,23 @@ class ContextProvider(private val project: Project) : Disposable {
     }
 
     /**
-     * Coalesces bursts of editor events into one snapshot. The flag is the
-     * de-duplication: a refresh already queued absorbs everything that arrives
-     * before it runs.
+     * Coalesces editor events across EDT turns. A fixed window bounds the work
+     * while still updating context during continuous typing or caret movement.
      */
     fun scheduleRefresh() {
         if (!refreshRequested.compareAndSet(false, true)) return
-        ApplicationManager.getApplication().invokeLater({
+        if (project.isDisposed) return
+        refreshAlarm.addRequest({
             refreshRequested.set(false)
-            refresh()
-        }, project.disposed)
+            if (!project.isDisposed) refresh()
+        }, 75)
     }
 
     /** Recomputes the snapshot and notifies when it actually changed. */
     fun refresh() {
         val next = runCatching { buildContext() }.getOrElse { JsonObject() }
         val previous = current.getAndSet(next)
-        if (previous.toString() == next.toString()) return
+        if (previous == next) return
         notifyListeners(next)
     }
 

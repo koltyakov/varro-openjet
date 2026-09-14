@@ -24,6 +24,7 @@
  */
 
 import { installProjectStorage } from './project-storage';
+import { installViewStateChannel } from './view-state';
 
 type HostWindow = Window & {
   __varroHostSend?: (json: string) => void;
@@ -52,36 +53,6 @@ function installSendChannel() {
     const send = hostWindow.__varroHostSend;
     if (!send) throw new Error('Varro JetBrains host channel is unavailable');
     send(JSON.stringify(message));
-  };
-}
-
-/**
- * `vscode.getState()/setState()` are synchronous, but every JCEF -> JVM call is
- * asynchronous. The host therefore inlines the last persisted snapshot into the
- * page, we serve reads from that snapshot, and writes are mirrored back to the
- * host so they survive an IDE restart. Upstream only uses this store as the
- * fallback behind `localStorage` (see `lib/browser-persistence.ts`), so a
- * one-frame write delay is not observable.
- */
-function installViewStateChannel() {
-  let state: Record<string, unknown> = { ...(hostWindow.__varroInitialViewState ?? {}) };
-
-  hostWindow.__vscodeWebviewState = {
-    getState() {
-      return state;
-    },
-    setState(next) {
-      state = next && typeof next === 'object' ? next : {};
-      try {
-        hostWindow.__sendToExtension?.({
-          type: 'host/view-state',
-          payload: { state },
-        });
-      } catch {
-        // A rejected mirror only costs cross-restart durability; the in-memory
-        // snapshot above still satisfies this session's reads.
-      }
-    },
   };
 }
 
@@ -371,7 +342,7 @@ function installMacLineNavigation() {
 }
 
 installSendChannel();
-installViewStateChannel();
+installViewStateChannel(hostWindow);
 installProjectStorage(hostWindow);
 installReceiveChannel();
 guardNavigation();
