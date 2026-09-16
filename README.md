@@ -49,6 +49,8 @@ Chat in the tool window or open a session in an editor tab. Choose **Open in Win
 
 Model preferences are shared across projects in the same IDE and can sync across JetBrains IDEs through OpenJet's shared settings file. Each session's selected model and permission mode are project-owned and sync between the tool window and editor tabs. Project UI preferences survive browser reloads and IDE restarts.
 
+Wide editor and window chats have a light/dark toggle in the upper-right gutter. It switches that chat to Varro's opposite light or dark palette and follows subsequent IDE theme changes. Each open chat keeps its own toggle; new chats restore the last saved preference. Click again to return to the IDE palette. The control hides when the gutter is too narrow.
+
 To add context, drop files or directories into the composer, or choose **Add to Varro Context** from the editor or Project view. The current-document chip toggles automatic context and remembers your choice per project. Switching to a chat tab keeps the last source editor as context, including unsaved edits.
 
 | Action | Shortcut |

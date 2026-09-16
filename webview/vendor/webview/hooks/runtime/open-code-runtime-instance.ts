@@ -1,3 +1,4 @@
+import { syncWindowChatTheme } from '../../lib/window-chat-theme';
 import { batch, createSignal, onCleanup, onMount } from 'solid-js';
 import { reconcile } from 'solid-js/store';
 import type {
@@ -1257,7 +1258,12 @@ export function createOpenCodeRuntime(): OpenCodeRuntime {
     hideAutomaticallyHandledRestoredPermissions();
 
     onMount(() => {
-      applyTheme(uiStore.theme());
+      const initialTheme = syncWindowChatTheme({
+        theme: initialWebviewState.theme ?? uiStore.theme(),
+        windowChatTheme: initialWebviewState.windowChatTheme,
+      });
+      uiStore.setTheme(initialTheme);
+      applyTheme(initialTheme);
       const webviewContext = readWebviewInstanceContext();
       if (webviewContext?.surface === 'editor') {
         writeStored(STORAGE_KEYS.editorViewId, webviewContext.viewId);

@@ -14,6 +14,7 @@ import com.intellij.openapi.util.Disposer
 import com.intellij.ui.jcef.JBCefBrowser
 import com.intellij.ui.jcef.JBCefJSQuery
 import varro.protocol.Json
+import varro.settings.VarroSettings
 import org.cef.browser.CefBrowser
 import org.cef.browser.CefFrame
 import org.cef.handler.CefLifeSpanHandlerAdapter
@@ -71,6 +72,7 @@ class WebviewHost(
 
     private val ready = AtomicBoolean(false)
     private val disposed = AtomicBoolean(false)
+    private val windowChatThemeReversed = AtomicBoolean(VarroSettings.getInstance().windowChatThemeReversed)
     private val messages = java.util.concurrent.Executors.newSingleThreadExecutor { task ->
         Thread(task, "Varro messages $viewId").apply { isDaemon = true }
     }
@@ -252,7 +254,13 @@ class WebviewHost(
         return runCatching {
             WebviewHtml.render(
                 theme = ThemeBridge.current(),
-                initialState = initialStateProvider(),
+                initialState = initialStateProvider().apply {
+                    if (surface == Surface.EDITOR) {
+                        add("windowChatTheme", ThemeBridge.windowChatTheme(
+                            ThemeBridge.current().kind, windowChatThemeReversed.get(),
+                        ))
+                    }
+                },
                 viewState = viewStateProvider(),
                 hostSendSnippet = hostSendSnippet(),
                 assetVersion = WebviewAssets.assetVersion,
@@ -310,7 +318,17 @@ class WebviewHost(
         val cefBrowser = browser.cefBrowser
         runCatching { cefBrowser.executeJavaScript(script, cefBrowser.url ?: WebviewAssets.INDEX_URL, 0) }
             .onFailure { log.warn("Failed to apply the Varro webview theme", it) }
-        post("theme/update", Json.obj("theme" to theme.kind.id))
+        post("theme/update", Json.obj("theme" to theme.kind.id).apply {
+            if (surface == Surface.EDITOR) {
+                add("windowChatTheme", ThemeBridge.windowChatTheme(theme.kind, windowChatThemeReversed.get()))
+            }
+        })
+    }
+
+    fun setWindowChatThemeReversed(reversed: Boolean) {
+        if (surface != Surface.EDITOR) return
+        windowChatThemeReversed.set(reversed)
+        VarroSettings.getInstance().windowChatThemeReversed = reversed
     }
 
     // --- Focus and devtools ---------------------------------------------------

@@ -7,6 +7,24 @@ import java.util.Locale
 
 class ThemeBridgeTest {
     @Test
+    fun `window themes reverse relative to the current IDE kind and preserve contrast mode`() {
+        val pairs = mapOf(
+            WebviewThemeKind.DARK to WebviewThemeKind.LIGHT,
+            WebviewThemeKind.LIGHT to WebviewThemeKind.DARK,
+            WebviewThemeKind.HIGH_CONTRAST to WebviewThemeKind.HIGH_CONTRAST_LIGHT,
+            WebviewThemeKind.HIGH_CONTRAST_LIGHT to WebviewThemeKind.HIGH_CONTRAST,
+        )
+        for ((source, counterpart) in pairs) {
+            for (reversed in listOf(false, true)) {
+                val payload = ThemeBridge.windowChatTheme(source, reversed)
+                assertEquals(reversed, payload.get("reversed").asBoolean)
+                assertEquals(counterpart.id, payload.getAsJsonObject("counterpart").get("kind").asString)
+                assertEquals(0, payload.getAsJsonObject("counterpart").getAsJsonObject("colors").size())
+            }
+        }
+    }
+
+    @Test
     fun `dark focus borders do not hide selected text on dark surfaces`() {
         val accent = Color(0x589DF6)
         assertEquals(accent, ThemeBridge.readableAccent(

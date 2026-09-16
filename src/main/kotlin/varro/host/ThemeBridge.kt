@@ -50,6 +50,25 @@ data class WebviewTheme(
  */
 object ThemeBridge {
 
+    /** The webview supplies Varro's default palette for the opposite theme kind. */
+    internal fun windowChatTheme(kind: WebviewThemeKind, reversed: Boolean): com.google.gson.JsonObject {
+        val counterpart = when (kind) {
+            WebviewThemeKind.LIGHT -> WebviewThemeKind.DARK
+            WebviewThemeKind.DARK -> WebviewThemeKind.LIGHT
+            WebviewThemeKind.HIGH_CONTRAST -> WebviewThemeKind.HIGH_CONTRAST_LIGHT
+            WebviewThemeKind.HIGH_CONTRAST_LIGHT -> WebviewThemeKind.HIGH_CONTRAST
+        }
+        return varro.protocol.Json.obj(
+            "source" to "IDE theme",
+            "reversed" to reversed,
+            "counterpart" to varro.protocol.Json.obj(
+                "name" to "Varro ${counterpart.id}",
+                "kind" to counterpart.id,
+                "colors" to com.google.gson.JsonObject(),
+            ),
+        )
+    }
+
     fun current(): WebviewTheme {
         val dark = isDark()
         val highContrast = isHighContrast()

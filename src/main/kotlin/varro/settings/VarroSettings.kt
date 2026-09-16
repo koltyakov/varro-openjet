@@ -46,6 +46,8 @@ class VarroSettings : PersistentStateComponent<VarroSettings> {
     var chatExpandThinking: Boolean = false
     var chatShowChangedFiles: Boolean = false
     var chatShowTurnTimer: Boolean = true
+    /** Restored by new editor/window chats; each open chat keeps its own toggle. */
+    var windowChatThemeReversed: Boolean = false
     /** Mirrors `varro.chat.enableProblemsContext`; applies to automatic and explicit problem context. */
     var chatEnableProblemsContext: Boolean = true
 

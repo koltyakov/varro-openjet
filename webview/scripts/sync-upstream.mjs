@@ -160,6 +160,25 @@ writeFileSync(toolbarPath, toolbarSource.replace(
   "import packageJson from '../../../../src/plugin-metadata';",
 ));
 
+// JCEF restores the window theme from its boot snapshot, before any host update.
+const runtimePath = join(webviewRoot, 'vendor/webview/hooks/runtime/open-code-runtime-instance.ts');
+const runtimeSource = readFileSync(runtimePath, 'utf8');
+if (!runtimeSource.includes('const initialTheme = syncWindowChatTheme(')) {
+  const initialTheme = '      applyTheme(uiStore.theme());';
+  if (!runtimeSource.includes(initialTheme)) {
+    throw new Error('Upstream initial theme application changed; update the JetBrains adaptation.');
+  }
+  writeFileSync(runtimePath,
+    "import { syncWindowChatTheme } from '../../lib/window-chat-theme';\n" +
+    runtimeSource.replace(initialTheme,
+      '      const initialTheme = syncWindowChatTheme({\n' +
+      '        theme: initialWebviewState.theme ?? uiStore.theme(),\n' +
+      '        windowChatTheme: initialWebviewState.windowChatTheme,\n' +
+      '      });\n' +
+      '      uiStore.setTheme(initialTheme);\n' +
+      '      applyTheme(initialTheme);'));
+}
+
 // Keep old VS Code transcripts readable while identifying this host's diagnostics.
 const problemsPath = join(webviewRoot, 'vendor/webview/lib/editor-problems.ts');
 if (existsSync(problemsPath)) {

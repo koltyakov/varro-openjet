@@ -43,6 +43,11 @@
     ]]></description>
 
     <change-notes><![CDATA[
+        <h3>0.1.7</h3>
+        <p>Added detached IDE windows for new and existing chats. Added a light/dark toggle in wide
+            editor and window chats, with per-chat state and a saved preference for new chats.
+            Fixed stale browser regions during window resizing. Smoothed bottom following as messages
+            grow and corrected message-row alignment before painting.</p>
         <h3>0.1.6</h3>
         <p>Added workspace errors and warnings as chat context, with individual problem references,
             a Problems-view action and settings to disable inclusion. Problem attachments persist across

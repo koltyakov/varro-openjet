@@ -476,6 +476,13 @@ class VarroProjectService(private val project: Project) : Disposable {
                 }
                 "api/cancel" -> payload?.let { proxies[host]?.cancelRequest(it) }
 
+                "window-chat-theme/set-reversed" -> {
+                    val reversed = payload?.get("reversed")?.takeIf {
+                        it.isJsonPrimitive && it.asJsonPrimitive.isBoolean
+                    }?.asBoolean ?: return
+                    host?.setWindowChatThemeReversed(reversed)
+                }
+
                 "context/request" -> context.replay()
 
                 // --- Files ------------------------------------------------------
