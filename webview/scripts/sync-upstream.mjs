@@ -52,7 +52,7 @@ function describeRevision(source) {
   try {
     return {
       commit: run('git', ['rev-parse', 'HEAD'], source),
-      localChanges: run('git', ['status', '--porcelain', '--', 'src/webview', 'src/shared'], source).length > 0,
+      localChanges: run('git', ['status', '--porcelain', '--', 'src/webview', 'src/shared', 'package.json'], source).length > 0,
       describedAt: new Date().toISOString(),
     };
   } catch {
@@ -102,6 +102,24 @@ function isExcluded(path) {
 
 const { source } = resolveSource();
 const revision = describeRevision(source);
+const packagePath = join(webviewRoot, 'package.json');
+const localPackage = JSON.parse(readFileSync(packagePath, 'utf8'));
+const upstreamPackage = JSON.parse(readFileSync(join(source, 'package.json'), 'utf8'));
+let updatedDependencies = 0;
+
+// Keep the webview's package selection, but use upstream's version specifiers.
+for (const section of ['dependencies', 'devDependencies']) {
+  for (const [name, currentVersion] of Object.entries(localPackage[section] ?? {})) {
+    const upstreamVersion = upstreamPackage[section]?.[name]
+      ?? upstreamPackage.dependencies?.[name]
+      ?? upstreamPackage.devDependencies?.[name];
+    if (upstreamVersion === undefined || upstreamVersion === currentVersion) continue;
+    localPackage[section][name] = upstreamVersion;
+    updatedDependencies += 1;
+    console.log(`  ${name}: ${currentVersion} -> ${upstreamVersion}`);
+  }
+}
+
 let copied = 0;
 let skipped = 0;
 
@@ -148,6 +166,11 @@ if (existsSync(problemsPath)) {
   writeFileSync(problemsPath, readFileSync(problemsPath, 'utf8')
     .replaceAll('\\[VS Code problems for', '\\[(?:JetBrains|VS Code) problems for')
     .replace('`[VS Code problems for', '`[JetBrains problems for'));
+}
+
+if (updatedDependencies > 0) {
+  writeFileSync(packagePath, `${JSON.stringify(localPackage, null, 2)}\n`, 'utf8');
+  console.log(`Updated ${updatedDependencies} dependency versions. Run npm install in webview/ to refresh package-lock.json.`);
 }
 
 writeFileSync(

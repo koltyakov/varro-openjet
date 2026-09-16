@@ -987,6 +987,7 @@ export type WebviewMessage =
   | {
       type: 'session/open-in-editor';
       payload: {
+        inWindow?: boolean;
         sessionId: string;
         directory?: string;
         rootSessionId?: string;
@@ -997,6 +998,7 @@ export type WebviewMessage =
   | { type: 'session/open-in-sidebar'; payload: { sessionId: string; directory?: string } }
   | { type: 'session/open-in-opencode'; payload: { sessionId: string; directory?: string } }
   | { type: 'chat/new-editor' }
+  | { type: 'chat/new-window' }
   | { type: 'editor/route-changed'; payload: { route: WebviewRoute } }
   | {
       type: 'session-model/update';
@@ -1114,7 +1116,7 @@ export type WebviewMessage =
       type: 'config/update';
       payload: WebviewConfigUpdatePayload;
     }
-  | { type: 'ready'; payload?: { documentId: number } }
+  | { type: 'ready'; payload?: { documentId: number; instanceId?: string } }
   | {
       type: 'api/request';
       payload: {

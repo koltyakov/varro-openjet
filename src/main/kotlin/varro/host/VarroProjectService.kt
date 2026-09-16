@@ -694,13 +694,14 @@ class VarroProjectService(private val project: Project) : Disposable {
                         terminal.runTrusted("opencode --session $sessionId", "OpenCode")
                     }
 
-                "session/open-in-editor" -> payload?.let { openEditor(it) }
+                "session/open-in-editor" -> payload?.let { openEditor(it, inWindow = it.bool("inWindow") == true) }
                 "session/open-in-sidebar" ->
                     payload.str("sessionId")?.let { sessionId ->
                         sidebarCommand("command/open-session", Json.obj("sessionId" to sessionId, "directory" to payload.str("directory")))
                     }
 
                 "chat/new-editor" -> openEditor()
+                "chat/new-window" -> openEditor(inWindow = true)
                 "editor/route-changed" -> payload.obj("route")?.let { route ->
                     host?.let { rememberRoute(it.viewId, route) }
                     broadcastEditorTabs()
@@ -988,7 +989,8 @@ class VarroProjectService(private val project: Project) : Disposable {
         }
     }
 
-    fun openEditor(payload: JsonObject? = null) = ApplicationManager.getApplication().invokeLater {
+    fun openEditor(payload: JsonObject? = null, inWindow: Boolean = false) = ApplicationManager.getApplication().invokeLater {
+        if (project.isDisposed) return@invokeLater
         if (!JcefSupport.isAvailable()) {
             notify("The editor view requires an IDE runtime with JCEF.", NotificationType.WARNING)
             return@invokeLater
@@ -998,7 +1000,10 @@ class VarroProjectService(private val project: Project) : Disposable {
         val existing = manager.openFiles.filterIsInstance<VarroChatFile>().firstOrNull {
             sessionId != null && routes[it.viewId].str("sessionId") == sessionId
         }
-        val route = payload?.deepCopy()?.apply { addProperty("type", "session") } ?: Json.obj("type" to "new-session")
+        val route = payload?.deepCopy()?.apply {
+            remove("inWindow")
+            addProperty("type", "session")
+        } ?: Json.obj("type" to "new-session")
         val rememberedId = sessionId?.let { id -> routes.entries.firstOrNull {
             it.key != "sidebar" && it.value.str("sessionId") == id
         }?.key }
@@ -1007,7 +1012,23 @@ class VarroProjectService(private val project: Project) : Disposable {
         val file = existing ?: com.intellij.openapi.vfs.VirtualFileManager.getInstance()
             .getFileSystem(VarroChatFileSystem.PROTOCOL).findFileByPath("/${project.locationHash}/$viewId")
             ?: return@invokeLater
-        manager.openFile(file, true)
+        if (inWindow) {
+            val windowManager = manager as? com.intellij.openapi.fileEditor.impl.FileEditorManagerImpl
+            if (windowManager == null) {
+                notify("This IDE does not support detached chat editors.", NotificationType.WARNING)
+                return@invokeLater
+            }
+            // Move main-window tabs instead of creating two browsers with the same
+            // view ID. Leave detached tabs open so reuseOpen can focus their window.
+            windowManager.mainSplitters.getWindows().filter { it.isFileOpen(file) }.forEach {
+                windowManager.closeFile(file, it)
+            }
+            // Available on every supported IDE branch, including 252. The newer
+            // FileEditorOpenRequest API is not available on that oldest branch.
+            windowManager.openFileInNewWindow(file, true)
+        } else {
+            manager.openFile(file, true, true)
+        }
     }
 
     private fun editorSessionIds(): List<String> = panels.filter { it.surface == WebviewHost.Surface.EDITOR }

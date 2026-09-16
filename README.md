@@ -45,7 +45,7 @@ Run the same command to update, then restart the IDE. The script targets IDEs wi
 
 ## Using Varro
 
-Chat in the tool window or open a session in an editor tab. Editor tabs support IntelliJ's usual split and move controls. Drafts and session routes are saved per view.
+Chat in the tool window or open a session in an editor tab. Choose **Open in Window** from a session's menu to move it into a detached IDE window. The new-chat menu also offers **New Chat Window**. Opening the same session in a window again focuses its existing window. Editor tabs support IntelliJ's usual split and move controls. Drafts and session routes are saved per view.
 
 Model preferences are shared across projects in the same IDE and can sync across JetBrains IDEs through OpenJet's shared settings file. Each session's selected model and permission mode are project-owned and sync between the tool window and editor tabs. Project UI preferences survive browser reloads and IDE restarts.
 
@@ -57,7 +57,7 @@ To add context, drop files or directories into the composer, or choose **Add to 
 | Add to Varro Context | `Ctrl+Shift+K` / `Cmd+Shift+K` |
 | Hide the tool window | `Shift+Escape` |
 
-Other actions are under Tools > Varro and in Find Action. The tool-window options menu includes new editor chats, the file-diff toggle, settings, usage reports, and About. Commit-message generation is available in the commit toolbar.
+Other actions are under Tools > Varro and in Find Action, including **New Varro Chat Window**. The tool-window options menu includes the file-diff toggle, settings, usage reports, and About. Commit-message generation is available in the commit toolbar.
 
 Settings are under **Settings > Tools > Varro**. You can configure server startup and updates, the default permission mode, chat layout, fonts, and models for commit messages and permission review. The initial permission mode is `auto`; `default` follows OpenCode's rules, and `full` allows a session to act without confirmation. A font size of `0` follows the IDE's font settings.
 
@@ -179,6 +179,8 @@ VARRO_SOURCE=/path/to/varro npm run sync    # use a local Varro checkout
 ```
 
 [`webview/upstream.json`](webview/upstream.json) selects the repository and ref, currently `main`, and the files to copy. Sync replaces the vendored directories and records the resolved commit in `webview/vendor/UPSTREAM.json`. Normal builds use the committed vendor snapshot without fetching upstream. Review vendor changes before committing a sync.
+
+Sync also copies upstream version specifiers for packages already listed in `webview/package.json`, including dev dependencies. Packages absent from upstream keep their current versions. If sync updates dependency versions, run `npm install` in `webview/` and commit the updated manifest and lockfile with the vendor changes.
 
 Run `npm run test:host` from `webview/` to test project storage, editor context, session permission modes, and the quota event contract. `npm run typecheck` checks TypeScript, and `npm run watch` rebuilds browser assets as you edit. The Kotlin host tests run with `./gradlew test` from the repository root, which also runs the webview host tests unless `skipWebview` is set.
 

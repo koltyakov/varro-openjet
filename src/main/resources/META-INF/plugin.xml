@@ -146,6 +146,9 @@
 
             <action id="Varro.NewEditor" class="varro.actions.NewEditorAction"
                     text="New Varro Chat in Editor" icon="AllIcons.Actions.MoveToWindow"/>
+            <action id="Varro.NewWindow" class="varro.actions.NewWindowAction"
+                    text="New Varro Chat Window" icon="AllIcons.Actions.MoveToWindow"
+                    description="Start a new Varro chat in a detached IDE window"/>
             <action id="Varro.ToggleFileDiffs" class="varro.actions.ToggleFileDiffsAction"
                     text="Show File Diffs" description="Show line-by-line changes in chat"/>
             <action id="Varro.Settings" class="varro.actions.OpenSettingsAction"

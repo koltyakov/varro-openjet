@@ -95,8 +95,10 @@ Automatic runs retain ResizeObserver errors in their results. Do not discard the
 
 ### Rendering mode caveat
 
-The benchmark and `WebviewHost` use `JcefBrowserFactory`. IntelliJ's out-of-process JCEF can override
-the `setOffScreenRendering(false)` request and use off-screen rendering. The tested 2026.2 runtime logged:
+The benchmark and `WebviewHost` use `JcefBrowserFactory`, which explicitly requests off-screen
+rendering so the browser participates in Swing painting alongside IDE popups and tooltips.
+Earlier builds requested windowed rendering. IntelliJ's out-of-process JCEF overrode that request;
+the tested 2026.2 runtime logged:
 
 ```text
 Trying to create windowed browser when remote-mode is enabled. Settings isOffScreenRendering=false will be ignored.
@@ -164,3 +166,78 @@ Verification completed:
 - Varro `npm run typecheck` and `npm run typecheck:suggestions`: passed with zero suggestion diagnostics.
 
 The test IDE and fixture server were stopped after the packaged-build smoke run.
+
+## ResizeObserver follow-up
+
+The next real-IDE sweep reproduced ResizeObserver errors in all ten streaming runs across five
+fixtures. Observer instrumentation identified two writes during resize delivery:
+
+- `prepareMeasuredEntrance` changed the height of its own observed animated element.
+- `MessageList` applied whole-pixel row corrections in a microtask. Microtasks still run within
+  resize delivery, so these writes invalidated the observed row and its shallower track.
+
+Both updates now coalesce into animation-frame callbacks and cancel pending work on cleanup.
+The entrance callback reads the latest content height when it runs. Errors remain part of benchmark
+validity checks. The fixes live in the sibling Varro sources and the matching OpenJet vendored files.
+The benchmark manifest now also hashes `lib/measured-entrance.ts`.
+
+### Real IntelliJ verification
+
+The final sweep ran in IntelliJ IDEA 2026.2.2, JCEF Chromium 144, native `RemoteBrowser`, plugin 0.1.6,
+IDE PID 67223, with a requested native OSR rate of 60 fps. The browser viewport was 456 x 850;
+the transcript was 443 x 687, or 443 x 649 for mixed-small. All measurements used tracing.
+
+All 15 fixture/mode combinations passed validity and performance checks, with zero page errors,
+zero long tasks, and p95 frame intervals of 16.7 to 16.8 ms. Every automatic run settled at the
+bottom without a backward step. Native wheel input remained effective in both manual modes.
+
+| Fixture | Manual max interval | Automatic max interval | Manual-streaming max interval |
+| --- | ---: | ---: | ---: |
+| Mixed small | 16.8 ms | 16.8 ms | 16.8 ms |
+| Large | 16.8 ms | 33.4 ms | 50.0 ms |
+| Huge content | 16.8 ms | 16.8 ms | 16.8 ms |
+| Tool cards | 16.8 ms | 33.3 ms | 33.4 ms |
+| Extreme single response | 16.8 ms | 33.3 ms | 33.3 ms |
+
+Five additional mixed-small manual-streaming runs all passed with a maximum interval of 16.8 ms.
+That makes 20 final runs with no observer errors. These runs exclude startup and model/server latency.
+
+Evidence under `build/scroll-benchmark/`, each CDP directory containing `result.json` and `trace.json`:
+
+| Fixture | Manual | Automatic | Manual-streaming |
+| --- | --- | --- | --- |
+| Mixed small | `cdp-IBwivJ` | `cdp-XKNK2d` | `cdp-IMzuHn` |
+| Large | `cdp-0U6Zq7` | `cdp-A56lNu` | `cdp-obwsEv` |
+| Huge content | `cdp-o0k2cw` | `cdp-E3LVFn` | `cdp-6ywVbn` |
+| Tool cards | `cdp-JYvpoT` | `cdp-VXhAzK` | `cdp-5xiyft` |
+| Extreme single response | `cdp-34Z3aw` | `cdp-NdeYKp` | `cdp-Xzrxw9` |
+
+The extreme-response directories also contain screenshots. Repeat runs are `cdp-CnIZp0`,
+`cdp-cTjRdk`, `cdp-oxZ1nO`, `cdp-D4J3RV`, and `cdp-awog6U`.
+The final fixture manifest and server-side results are in `run-Ut6NAA/`.
+
+### Original 116.6 ms frame gap
+
+The original `cdp-9t9mtk/trace.json` records a 130.5 ms wall-clock gap between animation callbacks
+corresponding to the 116.6 ms animation-timestamp interval. During that interval, renderer tasks
+were below 1 ms. The GPU process recorded an overlapping 162.910 ms task in
+`gpu/command_buffer/service/scheduler.cc`, `TryScheduleSequence`, and a 161.545 ms Dawn worker task.
+Their thread CPU times were only 1.908 ms and 1.670 ms respectively.
+
+This points to a native graphics wait rather than a long webview JavaScript/layout task. The trace
+does not establish the cause of the GPU wait, and the observer fix is not proof of a GPU fix.
+The gap did not recur in the final matrix or the five targeted repeats.
+
+### Regression checks
+
+- Varro `npm run lint` and `npm run fmt`: passed.
+- Varro `npm run test -- src/webview/lib/measured-entrance.test.ts src/webview/components/MessageList.scroll.test.ts src/webview/components/MessageList.virtualization.test.ts src/webview/components/MessageList.rendering.test.ts`:
+  236 tests passed, including frame coalescing and cleanup cancellation.
+- Varro `scroll-resize-observer`, `performance`, and `scroll-streaming-markdown` E2E suites:
+  26 tests passed. The two new browser regressions collect actual window errors while streaming
+  and require forward-only bottom-follow in both small and virtualized transcripts.
+- Varro `npm run typecheck` and `npm run typecheck:suggestions`: passed with zero suggestion diagnostics.
+- OpenJet `npm run typecheck`: passed.
+
+The default E2E port 4174 was occupied. The verification used an isolated server on 4177 through
+`varro/tmp/resize-observer.playwright.config.ts`.

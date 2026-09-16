@@ -38,7 +38,7 @@ const metadata = {
   harnessLocalChanges: execFileSync('git', ['status', '--porcelain', '--', 'e2e/harness'], { cwd: source, encoding: 'utf8' }).trim(),
   vendored: JSON.parse(await readFile(resolve(webview, 'vendor/UPSTREAM.json'), 'utf8')).revision,
   sourceHashes: Object.fromEntries(await Promise.all([
-    'components/MarkdownRenderer.tsx', 'components/MessagePart.tsx', 'components/MessageList.tsx', 'styles/messages.css', 'styles/tool-calls.css',
+    'components/MarkdownRenderer.tsx', 'components/MessagePart.tsx', 'components/MessageList.tsx', 'lib/measured-entrance.ts', 'styles/messages.css', 'styles/tool-calls.css',
   ].map(async (file) => [file, createHash('sha256').update(await readFile(resolve(webview, 'vendor/webview', file))).digest('hex')]))),
   host: 'Synthetic E2E host; vendored OpenJet UI; no OpenCode server connection',
 };

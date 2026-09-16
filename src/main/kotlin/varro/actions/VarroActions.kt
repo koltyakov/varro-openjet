@@ -120,6 +120,12 @@ class NewEditorAction : VarroAction() {
     override fun perform(project: Project, service: VarroProjectService, event: AnActionEvent) { service.openEditor() }
 }
 
+class NewWindowAction : VarroAction() {
+    override fun perform(project: Project, service: VarroProjectService, event: AnActionEvent) {
+        service.openEditor(inWindow = true)
+    }
+}
+
 class ToggleFileDiffsAction : com.intellij.openapi.actionSystem.ToggleAction(), DumbAware {
     override fun isSelected(event: AnActionEvent) = varro.settings.VarroSettings.getInstance().chatShowFileDiffs
     override fun setSelected(event: AnActionEvent, state: Boolean) {
