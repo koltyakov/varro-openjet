@@ -43,6 +43,12 @@
     ]]></description>
 
     <change-notes><![CDATA[
+        <h3>0.2.0</h3>
+        <p>Removed the upper IDE build limit, with support starting at 2025.2. Detached chat window
+            commands now appear only on IDEs with the required APIs, available in 2026.1 and newer.
+            Added API pricing and provider quota details to the model picker, using cached models.dev
+            rates with OpenCode pricing as a fallback. Permission prompts now identify subagent requests.
+            Older message summaries show relative dates.</p>
         <h3>0.1.7</h3>
         <p>Added detached IDE windows for new and existing chats. Added a light/dark toggle in wide
             editor and window chats, with per-chat state and a saved preference for new chats.

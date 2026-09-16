@@ -303,6 +303,7 @@ class VarroProjectService(private val project: Project) : Disposable {
             add("droppedFiles", JsonArray())
             addProperty("emptyStateLogoUri", WebviewAssets.EMPTY_STATE_LOGO_URL)
             addProperty("remoteExtensionHost", false)
+            addProperty("supportsDetachedEditors", ChatEditorCompatibility.supportsDetachedEditors())
             add("browserStorage", store.browserStorage())
 
             add(

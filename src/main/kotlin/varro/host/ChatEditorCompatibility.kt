@@ -37,6 +37,8 @@ internal object ChatEditorCompatibility {
         }
     }
 
+    fun supportsDetachedEditors(): Boolean = detachedOpener != null
+
     /** Returns false when this IDE only supports opening a regular editor tab. */
     fun openDetached(manager: FileEditorManager, file: VirtualFile): Boolean {
         val opener = detachedOpener ?: return false

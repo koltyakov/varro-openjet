@@ -160,6 +160,26 @@ writeFileSync(toolbarPath, toolbarSource.replace(
   "import packageJson from '../../../../src/plugin-metadata';",
 ));
 
+// Older IDEs cannot open detached editors through a supported API.
+for (const [component, label] of [
+  ['ChatHeader', 'New Chat Window'],
+  ['SessionActionsMenu', 'Open in Window'],
+]) {
+  const path = join(webviewRoot, `vendor/webview/components/chat/${component}.tsx`);
+  const source = readFileSync(path, 'utf8');
+  let matches = 0;
+  const adapted = source.replace(/<button\b[\s\S]*?<\/button>/g, (button) => {
+    if (!new RegExp(`>\\s*${label}\\s*</button>`).test(button)) return button;
+    matches += 1;
+    return `<Show when={supportsDetachedEditors()}>${button}</Show>`;
+  });
+  if (matches !== 1) {
+    throw new Error(`Upstream ${component} window menu changed; update the JetBrains adaptation.`);
+  }
+  writeFileSync(path,
+    "import { supportsDetachedEditors } from '../../../../src/host-capabilities';\n" + adapted);
+}
+
 // JCEF restores the window theme from its boot snapshot, before any host update.
 const runtimePath = join(webviewRoot, 'vendor/webview/hooks/runtime/open-code-runtime-instance.ts');
 const runtimeSource = readFileSync(runtimePath, 'utf8');
