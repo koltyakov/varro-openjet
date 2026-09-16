@@ -45,7 +45,7 @@ Run the same command to update, then restart the IDE. The script targets IDEs wi
 
 ## Using Varro
 
-Chat in the tool window or open a session in an editor tab. Choose **Open in Window** from a session's menu to move it into a detached IDE window. The new-chat menu also offers **New Chat Window**. Opening the same session in a window again focuses its existing window. Editor tabs support IntelliJ's usual split and move controls. Drafts and session routes are saved per view.
+Chat in the tool window or open a session in an editor tab. On IntelliJ 2026.1+, choose **Open in Window** from a session's menu to move it into a detached IDE window. The new-chat menu also offers **New Chat Window**. Opening the same session in a window again focuses its existing window. On 2025.2 and 2025.3, these commands open an editor tab; drag the tab out of the IDE window to detach it manually. Editor tabs support IntelliJ's usual split and move controls. Drafts and session routes are saved per view.
 
 Model preferences are shared across projects in the same IDE and can sync across JetBrains IDEs through OpenJet's shared settings file. Each session's selected model and permission mode are project-owned and sync between the tool window and editor tabs. Project UI preferences survive browser reloads and IDE restarts.
 

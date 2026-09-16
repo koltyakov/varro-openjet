@@ -1019,22 +1019,12 @@ class VarroProjectService(private val project: Project) : Disposable {
         val file = existing ?: com.intellij.openapi.vfs.VirtualFileManager.getInstance()
             .getFileSystem(VarroChatFileSystem.PROTOCOL).findFileByPath("/${project.locationHash}/$viewId")
             ?: return@invokeLater
-        if (inWindow) {
-            val windowManager = manager as? com.intellij.openapi.fileEditor.impl.FileEditorManagerImpl
-            if (windowManager == null) {
-                notify("This IDE does not support detached chat editors.", NotificationType.WARNING)
-                return@invokeLater
-            }
-            // Move main-window tabs instead of creating two browsers with the same
-            // view ID. Leave detached tabs open so reuseOpen can focus their window.
-            windowManager.mainSplitters.getWindows().filter { it.isFileOpen(file) }.forEach {
-                windowManager.closeFile(file, it)
-            }
-            // Available on every supported IDE branch, including 252. The newer
-            // FileEditorOpenRequest API is not available on that oldest branch.
-            windowManager.openFileInNewWindow(file, true)
-        } else {
+        if (!inWindow || !ChatEditorCompatibility.openDetached(manager, file)) {
             manager.openFile(file, true, true)
+            if (inWindow) notify(
+                "Chat opened in an editor tab. On this IDE version, drag the tab out of the IDE window to detach it.",
+                NotificationType.INFORMATION,
+            )
         }
     }
 
