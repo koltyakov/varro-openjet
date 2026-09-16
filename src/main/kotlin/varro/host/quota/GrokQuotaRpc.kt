@@ -28,7 +28,8 @@ internal class GrokQuotaRpc(private val http: QuotaHttp, private val token: Stri
         payloads.forEach { scan(it, emptyList()) }
         val reset = resets.firstOrNull { it.first == "1.5.1" }?.second ?: resets.minOfOrNull { it.second } ?: return null
         val percent = percents.sortedWith(compareBy({ it.first }, { it.second })).firstOrNull()?.third ?: 0.0
-        return window("credits", if (reset - now <= 8 * 86_400_000L) "Weekly Credits" else "Credits", null, null, reset, percent, "credits")
+        val days = (reset - now).toDouble() / 86_400_000
+        return window("credits", if (days in 20.0..45.0) "Monthly Credits" else "Weekly Credits", null, null, reset, percent, "credits")
     }
 
     fun resets(now: Long): JsonObject? {

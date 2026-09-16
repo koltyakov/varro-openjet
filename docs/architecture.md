@@ -159,6 +159,8 @@ Session reads and events restore valid nested metadata into the local stores and
 Two request kinds share the channel:
 
 - Paths under `/varro` are the host's namespace. Handlers use IDE state, stores, local history and OpenCode requests as needed.
+
+`GET /varro/model-pricing` requires `providerID` and `modelID`. `ModelPricingCatalog` fetches public API rates from models.dev through the IDE HTTP client and caches the catalog for one hour. The model picker uses these rates when available and falls back to OpenCode's model costs if the catalog request fails. These are per-token API prices, not subscription charges.
 - Everything else is forwarded to OpenCode after the allowlist approves it.
 
 ## Provider quota backend

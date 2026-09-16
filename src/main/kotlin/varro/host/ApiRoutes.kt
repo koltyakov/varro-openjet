@@ -21,6 +21,7 @@ object ApiRoutes {
     const val NAMESPACE = "/varro"
 
     object Endpoints {
+        const val MODEL_PRICING = "$NAMESPACE/model-pricing"
         const val PROVIDER_LIMIT = "$NAMESPACE/provider-limit"
         const val PLAN_OPEN = "$NAMESPACE/plan/open"
         const val OPENCODE_CONFIG = "$NAMESPACE/opencode-config"
@@ -223,6 +224,11 @@ object ApiRoutes {
         route("/experimental/workspace/status", methodsNoQuery("GET")),
 
         // --- Varro host namespace --------------------------------------------
+        route(Endpoints.MODEL_PRICING) { request, _ ->
+            request.method == "GET" &&
+                request.onlyQuery("providerID", "modelID") &&
+                request.required("providerID") && request.required("modelID")
+        },
         route(Endpoints.PROVIDER_LIMIT) { request, _ ->
             request.method == "GET" &&
                 request.onlyQuery("providerID", "modelID") &&

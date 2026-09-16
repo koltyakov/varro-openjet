@@ -133,7 +133,7 @@ internal object QuotaParsers {
         val result = mutableListOf<JsonObject>()
         val period = config.obj("currentPeriod")
         val type = period.string("type").orEmpty().uppercase()
-        window("credits", when { type.contains("WEEK") -> "Weekly Credits"; type.contains("MONTH") -> "Monthly Credits"; type.contains("DAY") -> "Daily Credits"; else -> "Credits" },
+        window("credits", when { type.contains("WEEK") -> "Weekly Credits"; type.contains("MONTH") -> "Monthly Credits"; type.contains("DAY") -> "Daily Credits"; else -> "Weekly Credits" },
             null, null, period.reset(now, "end") ?: config.reset(now, "billingPeriodEnd"), config.number("creditUsagePercent"), "credits")?.let(result::add)
         fun amount(row: JsonObject?, key: String) = row.obj(key).number("val") ?: row.number(key)
         val cap = amount(config, "onDemandCap")

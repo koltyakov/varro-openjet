@@ -108,7 +108,7 @@ VARRO_SOURCE=/absolute/path/to/varro npm run sync
 
 A local sync copies the checkout's current files, including uncommitted edits. The recorded commit identifies its HEAD, not those edits.
 
-Review the vendor diff for protocol changes and new host requests. Check dependency changes in upstream against `webview/package.json`; sync copies sources but does not update this project's dependencies. When dependencies change, run `npm install` in `webview/` with the pinned toolchain and include the updated lockfile. Keep toolchain versions aligned with `Dockerfile`.
+Review the vendor diff for protocol changes and new host requests. Sync updates version specifiers for existing dependencies in `webview/package.json`; check upstream for any new dependencies the webview needs. When dependencies change, run `npm install` in `webview/` with the pinned toolchain and include the updated lockfile. Keep toolchain versions aligned with `Dockerfile`.
 
 Run browser checks, then `./gradlew check buildPlugin` from the root, and verify the affected flows in the sandbox.
 

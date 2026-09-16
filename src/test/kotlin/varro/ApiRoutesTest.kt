@@ -98,6 +98,17 @@ class ApiRoutesTest {
     }
 
     @Test
+    fun `model pricing requires both identifiers and only allows GET`() {
+        val path = "/varro/model-pricing?providerID=openai&modelID=gpt-5"
+        assertTrue(ApiRoutes.isAllowed("GET", path))
+        assertFalse(ApiRoutes.isAllowed("POST", path))
+        assertFalse(ApiRoutes.isAllowed("GET", "$path&url=https://example.com"))
+        assertFalse(ApiRoutes.isAllowed("GET", "/varro/model-pricing?providerID=openai"))
+        assertFalse(ApiRoutes.isAllowed("GET", "/varro/model-pricing?modelID=gpt-5"))
+        assertFalse(ApiRoutes.isAllowed("GET", "/varro/model-pricing?providerID=openai&modelID="))
+    }
+
+    @Test
     fun `extracts the session id from host namespace paths`() {
         assertEquals("ses_123", ApiRoutes.varroSessionId("/varro/session/ses_123/pin"))
         assertEquals("ses_123", ApiRoutes.varroSessionId("/varro/session/ses_123/diff-summary?revision=x"))

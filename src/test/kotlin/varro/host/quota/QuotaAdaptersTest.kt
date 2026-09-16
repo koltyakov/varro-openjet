@@ -118,6 +118,12 @@ class QuotaAdaptersTest {
                 frame(resets) + frame("grpc-status: 0\r\n".toByteArray(), 0x80.toByte()) else frame(credits))
         }, "fixture")
         assertEquals(2_000_000_000_000L, rpc.credits(now).long("resetAt"))
+        for (days in listOf(1, 7, 13, 19, 46)) {
+            assertEquals("Weekly Credits", rpc.credits(2_000_000_000_000L - days * 86_400_000L).str("label"))
+        }
+        for (days in listOf(20, 30, 45)) {
+            assertEquals("Monthly Credits", rpc.credits(2_000_000_000_000L - days * 86_400_000L).str("label"))
+        }
         val reset = rpc.resets(now)!!
         assertEquals(1, reset.int("availableCount"))
         assertEquals(2_000_000_000_000L, reset.arr("credits")!![0].asJsonObject.long("expiresAt"))

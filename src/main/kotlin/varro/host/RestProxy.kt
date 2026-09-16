@@ -55,6 +55,7 @@ class RestProxy(
     }),
 ) {
     private val log = logger<RestProxy>()
+    private val modelPricing = ModelPricingCatalog()
 
     /** In-flight requests, keyed by the webview's cancel key. */
     private val activeRequests = ConcurrentHashMap<String, Int>()
@@ -228,6 +229,9 @@ class RestProxy(
         fun q(key: String): String? = query[key]?.firstOrNull()?.takeIf { it.isNotBlank() }
 
         return when {
+            pathname == ApiRoutes.Endpoints.MODEL_PRICING ->
+                modelPricing.get(q("providerID")!!, q("modelID")!!) ?: JsonNull.INSTANCE
+
             pathname == ApiRoutes.Endpoints.WORKSPACE_PROBLEMS -> WorkspaceProblems.snapshot(project)
 
             pathname == ApiRoutes.Endpoints.PROVIDER_LIMIT ->
