@@ -28,6 +28,8 @@ INCLUDE_INCOMPATIBLE=0
 # cannot offer to install somewhere the IDE would then refuse to load it.
 SINCE_BUILD="$(sed -n 's/^pluginSinceBuild=//p' gradle.properties)"
 UNTIL_BUILD="$(sed -n 's/^pluginUntilBuild=//p' gradle.properties | sed 's/\..*//')"
+BUILD_RANGE="${SINCE_BUILD}-${UNTIL_BUILD}"
+[ -n "$UNTIL_BUILD" ] || BUILD_RANGE="${SINCE_BUILD}+"
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -69,7 +71,8 @@ profile_build() {
 is_compatible() {
   build="$(profile_build "$1")"
   [ -z "$build" ] && return 1
-  [ "$build" -ge "$SINCE_BUILD" ] && [ "$build" -le "$UNTIL_BUILD" ]
+  [ "$build" -ge "$SINCE_BUILD" ] || return 1
+  [ -z "$UNTIL_BUILD" ] || [ "$build" -le "$UNTIL_BUILD" ]
 }
 
 detect_ides() {
@@ -97,7 +100,7 @@ fi
 
 if [ "$ACTION" = "list" ]; then
   echo "IDE profiles under $CONFIG_ROOT"
-  echo "(plugin supports builds ${SINCE_BUILD}-${UNTIL_BUILD})"
+  echo "(plugin supports builds ${BUILD_RANGE})"
   echo
   for ide in "${DETECTED[@]}"; do
     marker=" "
@@ -127,7 +130,7 @@ else
     fi
   done
   if [ "${#TARGETS[@]:-0}" -eq 0 ]; then
-    echo "error: no IDE in the supported build range ${SINCE_BUILD}-${UNTIL_BUILD}." >&2
+    echo "error: no IDE in the supported build range ${BUILD_RANGE}." >&2
     echo "       Run --list to see what was found, or --all to install anyway." >&2
     exit 1
   fi
