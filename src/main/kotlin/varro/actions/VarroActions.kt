@@ -116,6 +116,10 @@ class UsageAction : VarroAction() {
     override fun perform(project: Project, service: VarroProjectService, event: AnActionEvent) = service.generateUsageReport()
 }
 
+class ImportLegacySessionAction : VarroAction() {
+    override fun perform(project: Project, service: VarroProjectService, event: AnActionEvent) = service.importLegacySession()
+}
+
 class NewEditorAction : VarroAction() {
     override fun perform(project: Project, service: VarroProjectService, event: AnActionEvent) { service.openEditor() }
 }

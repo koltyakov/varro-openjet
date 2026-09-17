@@ -1015,6 +1015,7 @@ export type WebviewMessage =
     }
   | { type: 'session/open-in-sidebar'; payload: { sessionId: string; directory?: string } }
   | { type: 'session/open-in-opencode'; payload: { sessionId: string; directory?: string } }
+  | { type: 'session/import-v1'; payload: { sessionId: string; directory: string } }
   | { type: 'chat/new-editor' }
   | { type: 'chat/new-window' }
   | { type: 'window-chat-theme/set-reversed'; payload: { reversed: boolean } }
@@ -1073,8 +1074,8 @@ export type WebviewMessage =
       payload: { paths: string[]; deferred: boolean; sessionId?: string };
     }
   | { type: 'composer/images-update'; payload: { images: ClipboardImageSnapshot[] } }
-  | { type: 'files/remove'; payload: { path: string } }
-  | { type: 'files/clear' }
+  | { type: 'files/remove'; payload: { path: string; sentSessionId?: string } }
+  | { type: 'files/clear'; payload?: { sentSessionId: string } }
   | { type: 'queued-messages/update'; payload: { messages: QueuedMessageSnapshot[] } }
   | {
       type: 'queued-messages/claim';

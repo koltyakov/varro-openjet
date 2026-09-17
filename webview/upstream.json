@@ -1,6 +1,6 @@
 {
   "repository": "https://github.com/koltyakov/varro.git",
-  "ref": "main",
+  "ref": "v2",
   "copy": [
     { "from": "src/webview", "to": "vendor/webview" },
     { "from": "src/shared", "to": "vendor/shared" }

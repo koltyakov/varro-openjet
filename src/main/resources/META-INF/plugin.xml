@@ -43,6 +43,14 @@
     ]]></description>
 
     <change-notes><![CDATA[
+        <h3>0.3.0</h3>
+        <p>Added OpenCode V2 support from 2.0.5, alongside V1 support from 1.16.0, with automatic
+            protocol detection and discovery of registered local V2 services. Added authenticated V2
+            connections, V2 configuration support, and CLI updates using the matching package.
+            Added a Tools-menu action to import V1 conversations and their same-workspace child sessions
+            into V2. Usage reports now read both versions and avoid counting imported conversations twice.
+            Updated chat rendering for V2 skill, shell and patch activity. The tool window now shows
+            the connected OpenCode server version.</p>
         <h3>0.2.0</h3>
         <p>Removed the upper IDE build limit, with support starting at 2025.2. Detached chat window
             commands now appear only on IDEs with the required APIs, available in 2026.1 and newer.
@@ -166,6 +174,9 @@
                     text="Varro Settings" icon="AllIcons.General.Settings"/>
             <action id="Varro.Usage" class="varro.actions.UsageAction"
                     text="OpenCode Usage Report"/>
+            <action id="Varro.ImportLegacySession" class="varro.actions.ImportLegacySessionAction"
+                    text="Import OpenCode v1 Session into v2"
+                    description="Copy a local v1 conversation into OpenCode v2"/>
             <action id="Varro.About" class="varro.actions.AboutAction"
                     text="About Varro OpenJet"/>
 

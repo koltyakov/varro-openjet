@@ -63,6 +63,8 @@ npm run build
 
 Host tests cover project storage, editor context, session permission modes, and quota events. Type checking is a separate command; Gradle's `check` task does not invoke it.
 
+For the released OpenCode V2 adapter, set `VARRO_OPENCODE_TEST_BINARY` to a V2 executable when running Gradle tests. `OpenCodeV2IntegrationTest` uses an isolated database and a local fixture provider. It skips when the variable is absent. See [V2 support](docs/opencode-v2-support.md).
+
 Add regression coverage when changing persistence, request routing, protocol handling, or recovery behavior. Match the existing Kotlin tests in `src/test/kotlin/varro/` and browser tests in `webview/src/`.
 
 For Kotlin-only iteration after an initial webview build:

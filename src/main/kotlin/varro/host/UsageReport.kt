@@ -27,7 +27,7 @@ class UsageReport(
             val created = info.obj("time").long("completed") ?: info.obj("time").long("created") ?: return
             if (created > now || created < windows.minOf { it.second }) return
             check(++aggregated <= 250_000) { "Usage report exceeds the 250,000-message local aggregation limit" }
-            val model = "${info.str("providerID") ?: info.obj("model").str("providerID") ?: "unknown"}\u0000${info.str("modelID") ?: info.obj("model").str("modelID") ?: "unknown"}"
+            val model = "${info.str("providerID") ?: info.obj("model").str("providerID") ?: "unknown"}\u0000${info.str("modelID") ?: info.obj("model").str("id") ?: info.obj("model").str("modelID") ?: "unknown"}"
             val usage = Total().apply { add(id, info) }
             if (usage.total <= 0) return
             windows.forEachIndexed { index, (_, start) ->

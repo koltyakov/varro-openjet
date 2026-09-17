@@ -703,6 +703,7 @@ class VarroProjectService(private val project: Project) : Disposable {
                     }
 
                 "session/open-in-editor" -> payload?.let { openEditor(it, inWindow = it.bool("inWindow") == true) }
+                "session/import-v1" -> importLegacySession(payload.str("sessionId"), payload.str("directory"))
                 "session/open-in-sidebar" ->
                     payload.str("sessionId")?.let { sessionId ->
                         sidebarCommand("command/open-session", Json.obj("sessionId" to sessionId, "directory" to payload.str("directory")))
@@ -904,6 +905,37 @@ class VarroProjectService(private val project: Project) : Disposable {
             } catch (failure: Exception) {
                 notify("Could not export session: ${failure.message}", NotificationType.ERROR)
             }
+        }
+    }
+
+    fun importLegacySession(sessionID: String? = null, requestedDirectory: String? = null) {
+        ApplicationManager.getApplication().executeOnPooledThread {
+            try {
+                check(lastStatus.get() is ServerStatus.Running && server.transport.apiVersion == 2) { "Connect to OpenCode v2 before importing v1 history" }
+                val directory = project.guessProjectDir()?.path ?: project.basePath ?: error("Project has no workspace directory")
+                require(requestedDirectory == null || varro.server.WorkspacePaths.isSame(directory, requestedDirectory)) { "Import must use this project's workspace" }
+                val importer = LegacySessionImport(LocalUsageDatabase.defaultPath(server.cli.serverEnvironment())) { method, path, body ->
+                    server.transport.request(method, path, body, varro.server.RequestOptions(unscoped = true)).data
+                }
+                val choices = importer.list(directory)
+                fun copy(choice: LegacySessionImport.Choice) {
+                    ApplicationManager.getApplication().executeOnPooledThread {
+                        try {
+                            val id = importer.importCopy(choice)
+                            sidebarCommand("command/open-session", Json.obj("sessionId" to id, "directory" to directory))
+                        } catch (failure: Exception) { notify("Could not import v1 session: ${failure.message}", NotificationType.ERROR) }
+                    }
+                }
+                if (sessionID != null) copy(choices.firstOrNull { it.id == sessionID } ?: error("The selected v1 session is no longer available"))
+                else {
+                    check(choices.isNotEmpty()) { "No local OpenCode v1 conversations found for this workspace" }
+                    ApplicationManager.getApplication().invokeLater {
+                        if (!project.isDisposed) com.intellij.openapi.ui.popup.JBPopupFactory.getInstance()
+                            .createPopupChooserBuilder(choices).setTitle("Import OpenCode v1 Session into v2")
+                            .setItemChosenCallback(::copy).createPopup().showCenteredInCurrentWindow(project)
+                    }
+                }
+            } catch (failure: Exception) { notify("Could not import v1 session: ${failure.message}", NotificationType.ERROR) }
         }
     }
 

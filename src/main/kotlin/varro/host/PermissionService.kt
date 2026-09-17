@@ -97,6 +97,7 @@ class PermissionService(
 
         fun fromConfig(value: JsonElement?): JsonArray {
             if (value == null || value.isJsonNull) return JsonArray()
+            if (value.isJsonArray) return validateRules(value)
             if (value.isJsonPrimitive) return validateRules(Json.array(listOf(
                 Json.obj("permission" to "*", "pattern" to "*", "action" to value))))
             val rules = JsonArray()

@@ -23,7 +23,7 @@ import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 
 /** Health probe result. */
-data class HealthInfo(val healthy: Boolean, val version: String? = null)
+data class HealthInfo(val healthy: Boolean, val version: String? = null, val pid: Long? = null)
 
 /** A REST response plus the pagination cursor OpenCode returns out of band. */
 data class OpenCodeResponse(val data: JsonElement?, val nextCursor: String? = null)
@@ -67,8 +67,18 @@ class OpenCodeTransport(
     private val isDisposing: () -> Boolean,
     private val updateEventStreamState: (EventStreamState) -> Unit,
     private val emitEvent: (JsonElement) -> Unit,
+    private val getAuthorization: () -> String? = { null },
+    sessionStateDirectory: java.nio.file.Path? = null,
 ) {
     private val log = logger<OpenCodeTransport>()
+    @Volatile var apiVersion: Int = 1
+        private set
+    @Volatile var healthFailure: String? = null
+        private set
+    private val v2 = OpenCodeV2Adapter(::performRequest,
+        sessionStateDirectory?.let(::OpenCodeV2SessionState) ?: OpenCodeV2SessionState())
+
+    fun resetProtocol() { apiVersion = 1; v2.reset() }
 
     private val client: HttpClient = HttpClient.newBuilder()
         .connectTimeout(Duration.ofSeconds(10))
@@ -136,7 +146,13 @@ class OpenCodeTransport(
     ): OpenCodeResponse {
         activeRequestCount.incrementAndGet()
         if (method.uppercase() !in setOf("GET", "HEAD")) lastMutationAt.set(System.currentTimeMillis())
-        try { return performRequest(method, path, body, options) }
+        try {
+            val response = if (apiVersion == 2) v2.request(method.uppercase(), path, body,
+                options.copy(directory = options.directory ?: if (options.unscoped) null else workspaceDirectoryForRequest(method, path)))
+            else performRequest(method, path, body, options)
+            if (apiVersion == 2) observeSessions(method, path, response.data)
+            return response
+        }
         finally { activeRequestCount.decrementAndGet() }
     }
 
@@ -151,6 +167,7 @@ class OpenCodeTransport(
         val normalizedMethod = method.uppercase()
         val builder = HttpRequest.newBuilder(URI.create(scoped.url))
             .timeout(Duration.ofMillis(options.timeoutMs ?: requestTimeoutMs(normalizedMethod, path)))
+        getAuthorization()?.let { builder.header("Authorization", it) }
 
         OpenCodeRequestScope.directoryHeaders(scoped.directory).forEach(builder::header)
 
@@ -260,17 +277,42 @@ class OpenCodeTransport(
     }
 
     fun readHealthInfo(): HealthInfo {
-        val request = HttpRequest.newBuilder(URI.create("${getUrl()}$HEALTH_PATH"))
-            .timeout(Duration.ofMillis(HEALTH_TIMEOUT_MS))
-            .GET()
-            .build()
-        return runCatching {
-            val response = client.send(request, HttpResponse.BodyHandlers.ofString())
-            if (response.statusCode() !in 200..299) return@runCatching HealthInfo(false)
-            val record = Json.parseOrNull(response.body()).asObjectOrNull()
-            val healthy = record.bool("healthy") ?: return@runCatching HealthInfo(false)
-            HealthInfo(healthy, record.str("version"))
-        }.getOrElse { HealthInfo(false) }
+        var failure: String? = null
+        for (path in listOf("/api/info", "/api/status", HEALTH_PATH)) {
+            val health = runCatching {
+                val builder = HttpRequest.newBuilder(URI.create("${getUrl()}$path")).timeout(Duration.ofMillis(HEALTH_TIMEOUT_MS)).GET()
+                getAuthorization()?.let { builder.header("Authorization", it) }
+                val response = client.send(builder.build(), HttpResponse.BodyHandlers.ofInputStream())
+                val text = response.body().use { readBounded(it, 65536) }
+                if (response.statusCode() !in 200..299) {
+                    if (response.statusCode() in setOf(401, 403)) failure = "OpenCode rejected authentication. Check the registered service credentials or OPENCODE_SERVER_PASSWORD."
+                    return@runCatching null
+                }
+                val record = Json.parseOrNull(text).asObjectOrNull() ?: return@runCatching null
+                val version = record.str("version") ?: return@runCatching null
+                if (path == HEALTH_PATH) {
+                    if (record.bool("healthy") != true || !version.startsWith("1.")) return@runCatching null
+                    apiVersion = 1
+                } else {
+                    if (!version.startsWith("2.") || record.get("pid")?.let { it.isJsonPrimitive && it.asJsonPrimitive.isNumber && it.asLong > 0 } != true) return@runCatching null
+                    apiVersion = 2
+                }
+                HealthInfo(true, version, record.get("pid")?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isNumber }?.asLong)
+            }.getOrNull()
+            if (health != null) { healthFailure = null; return health }
+        }
+        healthFailure = failure
+        return HealthInfo(false)
+    }
+
+    private fun observeSessions(method: String, path: String, data: JsonElement?) {
+        val route = path.substringBefore('?')
+        if (route != "/session" && !SESSION_BY_ID_ROUTE.matches(route) && !(method == "POST" && route.endsWith("/fork"))) return
+        val sessions = if (data?.isJsonArray == true) data.asJsonArray.toList() else listOfNotNull(data)
+        sessions.forEach { value -> value.asObjectOrNull()?.let { session -> session.str("id")?.let { id ->
+            session.str("directory")?.let { observedSessionDirectories[id] = it }
+            onSessionObserved(session)
+        } } }
     }
 
     fun checkHealth(): Boolean = readHealthInfo().healthy
@@ -305,7 +347,7 @@ class OpenCodeTransport(
         val connectedAt: Long
 
         try {
-            val scoped = OpenCodeRequestScope.scope(serverUrl, EVENT_STREAM_PATH, null)
+            val scoped = OpenCodeRequestScope.scope(serverUrl, if (apiVersion == 2) "/api/event" else EVENT_STREAM_PATH, null)
             val builder = HttpRequest.newBuilder(URI.create(scoped.url))
                 .header("Accept", "text/event-stream")
                 // No read timeout: an idle SSE connection is normal. Stalls are
@@ -313,6 +355,7 @@ class OpenCodeTransport(
                 .timeout(Duration.ofMillis(EVENT_CONNECT_TIMEOUT_MS))
                 .GET()
             OpenCodeRequestScope.directoryHeaders(scoped.directory).forEach(builder::header)
+            getAuthorization()?.let { builder.header("Authorization", it) }
             lastEventId.get().takeIf { it.isNotEmpty() }?.let { builder.header("Last-Event-ID", it) }
 
             val response = client.send(builder.build(), HttpResponse.BodyHandlers.ofInputStream())
@@ -321,7 +364,12 @@ class OpenCodeTransport(
                 return
             }
             if (response.statusCode() !in 200..299) {
+                response.body().close()
                 throw OpenCodeRequestException("Failed to open event stream: ${response.statusCode()}")
+            }
+            if (!response.headers().firstValue("content-type").orElse("").startsWith("text/event-stream")) {
+                response.body().close()
+                throw OpenCodeRequestException("OpenCode returned a non-SSE event stream")
             }
 
             handle.body = response.body()
@@ -439,10 +487,13 @@ class OpenCodeTransport(
             return
         }
 
-        runCatching { ServerEvents.observe(parsed, pendingAttentionRequests, observedSessionDirectories) }
+        val events = if (apiVersion == 2) parsed.asObjectOrNull()?.let(v2::events).orEmpty() else listOf(parsed)
+        for (event in events) {
+        runCatching { ServerEvents.observe(event, pendingAttentionRequests, observedSessionDirectories) }
             .onFailure { log.warn("Event observation threw: ${it.message}") }
-        runCatching { emitEvent(parsed) }
+        runCatching { emitEvent(event) }
             .onFailure { log.warn("Event listener threw: ${it.message}") }
+        }
     }
 
     fun stopEventStream() {

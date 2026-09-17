@@ -168,7 +168,7 @@ class RestProxy(
     private fun forward(method: String, path: String, body: JsonElement?, queuedDispatch: Boolean = false): JsonElement? {
         val request = ApiRoutes.parse(method, path)
 
-        if (queuedDispatch && method == "GET") {
+        if (method == "GET" && request != null && Regex("^/session/[^/]+/message$").matches(request.pathname) && request.query.containsKey("limit")) {
             val response = server.transport.request(method, path, options = RequestOptions(
                 directory = body.asObjectOrNull().str("workspaceDirectory"), captureNextCursor = true,
             ))
@@ -195,7 +195,7 @@ class RestProxy(
      */
     private fun sessionPage(path: String, request: ApiRoutes.Request): JsonElement {
         val limit = request.query["limit"]?.firstOrNull()?.toIntOrNull()?.coerceIn(1, 1_000) ?: 100
-        val response = server.transport.request("GET", path)
+        val response = server.transport.request("GET", path, options = RequestOptions(captureNextCursor = true))
         val sessions = response.data.asArrayOrNull() ?: JsonArray()
 
         val recycled = store.recycleBin.flatMap {
@@ -216,7 +216,7 @@ class RestProxy(
         }
 
         val items = JsonArray().apply { ordered.take(limit).forEach(::add) }
-        return Json.obj("items" to items, "hasMore" to (ordered.size > limit))
+        return Json.obj("items" to items, "hasMore" to (ordered.size > limit || response.nextCursor != null))
     }
 
     // --- Host API namespace ---------------------------------------------------

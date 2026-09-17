@@ -112,8 +112,32 @@ class UsageReportTest {
 
     @Test
     fun `data directory follows XDG and default on all platforms`() {
+        assertEquals(Path.of("/custom/history.db"), LocalUsageDatabase.defaultPath(mapOf("OPENCODE_DB" to "/custom/history.db"), "/home"))
         assertEquals(Path.of("/data/opencode/opencode.db"), LocalUsageDatabase.defaultPath(mapOf("XDG_DATA_HOME" to " /data "), "/home"))
         assertEquals(Path.of("/home/.local/share/opencode/opencode.db"), LocalUsageDatabase.defaultPath(emptyMap(), "/home"))
+    }
+
+    @Test fun `v2 import replaces original usage instead of double counting`() {
+        val path = fixture()
+        DriverManager.getConnection("jdbc:sqlite:$path").use { database ->
+            database.createStatement().use {
+                it.execute("CREATE TABLE session_v2(id TEXT PRIMARY KEY,metadata TEXT,time_updated INTEGER)")
+                it.execute("CREATE TABLE session_message(id TEXT PRIMARY KEY,session_id TEXT,type TEXT,seq INTEGER,data TEXT)")
+                it.execute("INSERT INTO session_v2 VALUES('copy','{\"varroLegacyImport\":{\"sourceSessionID\":\"s\"}}',$now)")
+                it.execute("INSERT INTO session_message VALUES('user','copy','user',1,'{}')")
+            }
+            val native = message().apply {
+                remove("providerID"); remove("modelID"); remove("parentID"); remove("role")
+                add("model", Json.obj("providerID" to "native", "id" to "v2-model"))
+            }
+            database.prepareStatement("INSERT INTO session_message VALUES('assistant','copy','assistant',2,?)").use {
+                it.setString(1, native.toString()); it.executeUpdate()
+            }
+        }
+        val report = UsageReport(path) { _, _ -> error("No REST requests expected") }.build(true, now)
+        assertTrue(report.contains("1 sessions scanned"))
+        assertTrue(report.contains("| native | v2-model | 1 | 168 |"))
+        assertFalse(report.contains("| provider | model |"))
     }
 
     private fun message() = Json.obj(

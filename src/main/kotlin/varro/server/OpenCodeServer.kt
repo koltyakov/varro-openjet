@@ -86,6 +86,7 @@ class OpenCodeServer(
         isDisposing = { phase.get() == Phase.DISPOSING || phase.get() == Phase.RESTARTING },
         updateEventStreamState = ::applyEventStreamState,
         emitEvent = { event -> eventListeners.forEach { runCatching { it(event) } } },
+        getAuthorization = process::authorization,
     )
 
     fun url(): String = "http://127.0.0.1:${process.port}"
@@ -150,6 +151,17 @@ class OpenCodeServer(
         setStatus(ServerStatus.Starting)
 
         try {
+            // Validate the registered service identity before adopting its port.
+            if (settings.serverCommand.isBlank()) {
+                OpenCodeConnection.registration(cli.serverEnvironment())?.let { registration ->
+                    process.adoptPort(java.net.URI(registration.url).port)
+                    val health = transport.readHealthInfo()
+                    if (!health.healthy || health.pid != registration.pid || health.version != registration.version) {
+                        process.resetPortState()
+                        transport.resetProtocol()
+                    }
+                }
+            }
             // 1. Adopt a healthy server rather than fighting it for the port.
             val existing = transport.readHealthInfo()
             if (existing.healthy) {
@@ -161,6 +173,10 @@ class OpenCodeServer(
                     return
                 }
                 finishStart(generation)
+                return
+            }
+            transport.healthFailure?.let { message ->
+                setStatus(ServerStatus.Error(message))
                 return
             }
 
@@ -286,7 +302,7 @@ class OpenCodeServer(
         process.stop()
         setStatus(
             ServerStatus.Error(
-                message = "The OpenCode server did not become healthy within ${STARTUP_TIMEOUT_MS / 1000}s.",
+                message = transport.healthFailure ?: "The OpenCode server did not become healthy within ${STARTUP_TIMEOUT_MS / 1000}s.",
                 detail = ServerErrorDetail(
                     kind = ServerErrorKind.GENERIC,
                     cause = process.output.takeLast(2_000).ifBlank { null },
@@ -334,7 +350,7 @@ class OpenCodeServer(
                 detail = ServerErrorDetail(
                     kind = ServerErrorKind.CLI_MISSING,
                     installMethod = info.installMethod,
-                    suggestedCommand = "npm install -g opencode-ai",
+                    suggestedCommand = "npm install -g @opencode/cli",
                     searchedPaths = info.searchedPaths,
                 ),
             )
@@ -342,17 +358,19 @@ class OpenCodeServer(
 
     private fun checkCompatibility(version: String?): ServerStatus.Error? {
         if (version == null) return null
-        if (OpenCodeCli.compareVersions(version, OpenCodeCli.MINIMUM_SUPPORTED_VERSION) >= 0) return null
+        val required = if (version.startsWith("2.")) "2.0.5" else OpenCodeCli.MINIMUM_SUPPORTED_VERSION
+        if (version.substringBefore('.') !in setOf("1", "2")) return ServerStatus.Error("Unsupported OpenCode API version: $version")
+        if (OpenCodeCli.compareVersions(version, required) >= 0) return null
         val info = cli.resolve()
         return ServerStatus.Error(
-            message = "OpenCode update required. Varro needs ${OpenCodeCli.MINIMUM_SUPPORTED_VERSION} or newer, " +
+            message = "OpenCode update required. Varro needs $required or newer, " +
                 "but found $version.",
             detail = ServerErrorDetail(
                 kind = ServerErrorKind.UPDATE_REQUIRED,
                 installMethod = info.installMethod,
-                suggestedCommand = info.installMethod.upgradeCommand ?: "opencode upgrade",
+                suggestedCommand = cli.upgradeCommand() ?: "opencode upgrade",
                 observed = version,
-                required = OpenCodeCli.MINIMUM_SUPPORTED_VERSION,
+                required = required,
             ),
         )
     }
@@ -378,6 +396,7 @@ class OpenCodeServer(
             process.stop()
             cli.clearCache()
             serverVersion.set(null)
+            transport.resetProtocol()
             setStatus(ServerStatus.Stopped)
         } finally {
             phase.set(Phase.IDLE)

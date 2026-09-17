@@ -1,6 +1,6 @@
 {
   "repository": "https://github.com/koltyakov/varro.git",
-  "ref": "main",
+  "ref": "v2",
   "copy": [
     {
       "from": "src/webview",
@@ -18,8 +18,8 @@
     "**/*.test-support.ts"
   ],
   "revision": {
-    "commit": "45108f2858cbbcba507415329f5667aa334c74d4",
+    "commit": "d6cccc26808fbf69d5670917845579b5a57d211c",
     "localChanges": false,
-    "describedAt": "2026-09-16T20:53:46.726Z"
+    "describedAt": "2026-09-17T17:28:52.067Z"
   }
 }

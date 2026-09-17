@@ -28,16 +28,33 @@ internal class LocalUsageDatabase(private val path: Path) {
             org.sqlite.ProgressHandler.setHandler(database, 1_000, object : org.sqlite.ProgressHandler() {
                 override fun progress(): Int { checkProgress(); return 0 }
             })
-            val filter = if (start == null) "" else " WHERE time_updated >= ?"
-            val sessionCount = database.prepareStatement("SELECT count(*) FROM session$filter").use { statement ->
+            database.autoCommit = false
+            val tables = database.createStatement().use { statement -> statement.executeQuery("SELECT name FROM sqlite_master WHERE type='table'").use { rows ->
+                buildSet { while (rows.next()) add(rows.getString(1)) }
+            } }
+            val sources = mutableListOf<String>()
+            val messages = mutableListOf<String>()
+            if (tables.containsAll(listOf("session", "message"))) {
+                sources.add("SELECT id,id AS identity,time_updated,1 AS version FROM session")
+                messages.add("SELECT m.session_id,m.data,json_extract(m.data,'$.parentID') AS parentID FROM selected s CROSS JOIN message m ON s.id=m.session_id " +
+                    "WHERE s.version=1 AND length(m.data)<=1048576 AND json_extract(m.data,'$.role')='assistant'")
+            }
+            if (tables.containsAll(listOf("session_v2", "session_message"))) {
+                sources.add("SELECT id,coalesce(json_extract(metadata,'$.varroLegacyImport.sourceSessionID'),id) AS identity,time_updated,2 AS version FROM session_v2")
+                messages.add("SELECT m.session_id,m.data,coalesce(json_extract(m.data,'$.parentID'),(SELECT u.id FROM session_message u WHERE u.session_id=m.session_id " +
+                    "AND u.type='user' AND u.seq<m.seq ORDER BY u.seq DESC LIMIT 1)) AS parentID FROM selected s CROSS JOIN session_message m ON s.id=m.session_id " +
+                    "WHERE s.version=2 AND m.type='assistant' AND length(m.data)<=1048576")
+            }
+            if (sources.isEmpty()) throw java.sql.SQLException("No supported OpenCode usage tables found")
+            val selected = "WITH ranked AS (SELECT *,row_number() OVER (PARTITION BY identity ORDER BY time_updated DESC,version DESC,id DESC) AS rank FROM (" +
+                sources.joinToString(" UNION ALL ") + ")), selected AS (SELECT * FROM ranked WHERE rank=1" + (if (start == null) "" else " AND time_updated>=?") + ") "
+            val sessionCount = database.prepareStatement(selected + "SELECT count(*) FROM selected").use { statement ->
                 if (start != null) statement.setLong(1, start)
                 statement.executeQuery().use { rows -> rows.next(); rows.getLong(1) }
             }
-            val scope = if (start == null) "" else "m.session_id IN (SELECT id FROM session$filter) AND "
-            val fields = listOf("providerID", "modelID", "model", "parentID", "time", "tokens")
+            val fields = listOf("providerID", "modelID", "model", "time", "tokens")
                 .joinToString(", ") { "'$it', json_extract(m.data, '$.$it')" }
-            val query = "SELECT m.session_id, json_object($fields) FROM message m " +
-                "WHERE ${scope}length(m.data) <= 1048576 AND json_extract(m.data, '$.role') = 'assistant' LIMIT 1000001"
+            val query = selected + "SELECT m.session_id, json_object($fields, 'parentID',m.parentID) FROM (" + messages.joinToString(" UNION ALL ") + ") m LIMIT 1000001"
             database.prepareStatement(query).use { statement ->
                 if (start != null) statement.setLong(1, start)
                 statement.executeQuery().use { rows ->
@@ -49,13 +66,14 @@ internal class LocalUsageDatabase(private val path: Path) {
                     }
                 }
             }
+            database.rollback()
             return sessionCount
         }
     }
 
     companion object {
         fun defaultPath(environment: Map<String, String> = System.getenv(), home: String = System.getProperty("user.home")): Path =
-            Path.of(environment["XDG_DATA_HOME"]?.trim()?.takeIf { it.isNotEmpty() } ?: Path.of(home, ".local", "share").toString())
+            environment["OPENCODE_DB"]?.takeIf { it.isNotBlank() }?.let { Path.of(it) } ?: Path.of(environment["XDG_DATA_HOME"]?.trim()?.takeIf { it.isNotEmpty() } ?: Path.of(home, ".local", "share").toString())
                 .resolve("opencode/opencode.db")
     }
 }

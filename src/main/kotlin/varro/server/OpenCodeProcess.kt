@@ -48,6 +48,10 @@ class OpenCodeProcess(
 
     val port: Int get() = currentPort.get().takeIf { it > 0 } ?: configuredPort()
 
+    fun adoptPort(port: Int) { currentPort.set(port) }
+
+    fun authorization(): String? = OpenCodeConnection.credentials("http://127.0.0.1:$port", cli.serverEnvironment())
+
     val isManaged: Boolean get() = managed.get()
 
     val isRunning: Boolean get() = handler.get()?.isProcessTerminated == false
@@ -107,6 +111,10 @@ class OpenCodeProcess(
         }
 
         capturedOutput.set("")
+        val credentialUrl = "http://127.0.0.1:$launchPort"
+        OpenCodeConnection.forget(credentialUrl)
+        val stdout = OpenCodeStartupOutput { OpenCodeConnection.register(credentialUrl, it) }
+        val stderr = OpenCodeStartupOutput { OpenCodeConnection.register(credentialUrl, it) }
         val processHandler = try {
             OSProcessHandler(general)
         } catch (failure: Exception) {
@@ -115,12 +123,14 @@ class OpenCodeProcess(
         }
         processHandler.addProcessListener(object : ProcessListener {
             override fun onTextAvailable(event: ProcessEvent, outputType: Key<*>) {
-                val text = event.text ?: return
+                val text = (if (outputType.toString() == "stderr") stderr else stdout).write(event.text ?: return)
+                if (text.isEmpty()) return
                 capturedOutput.updateAndGet { appendBounded(it, text) }
                 if (outputType.toString() == "stderr") callbacks.onStderr(text) else callbacks.onStdout(text)
             }
 
             override fun processTerminated(event: ProcessEvent) {
+                OpenCodeConnection.forget(credentialUrl)
                 managed.set(false)
                 callbacks.onExit(event.exitCode)
             }
@@ -165,7 +175,7 @@ class OpenCodeProcess(
     /** Upgrades the CLI in place. Returns the combined output for diagnostics. */
     fun upgrade(): UpgradeResult {
         val info = cli.resolve()
-        val command = info.installMethod.upgradeCommand
+        val command = cli.upgradeCommand()
             ?: return UpgradeResult(
                 succeeded = false,
                 output = "No automatic upgrade is available for this install (${info.installMethod.id}).",

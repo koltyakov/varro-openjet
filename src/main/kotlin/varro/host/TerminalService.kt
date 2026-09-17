@@ -99,6 +99,11 @@ class TerminalService(private val project: Project) {
          * install and upgrade paths surfaced by the server-status recovery UI.
          */
         val ALLOWED_COMMANDS: Set<String> = setOf(
+            "npm install -g @opencode/cli",
+            "npm install -g @opencode/cli@latest",
+            "pnpm add -g @opencode/cli@latest",
+            "bun add -g @opencode/cli@latest",
+            "yarn global add @opencode/cli@latest",
             "opencode auth login",
             "opencode auth",
             "opencode providers logout",

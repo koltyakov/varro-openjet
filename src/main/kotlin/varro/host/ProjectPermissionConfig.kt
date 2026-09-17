@@ -4,6 +4,7 @@ import com.google.gson.JsonArray
 import com.google.gson.JsonObject
 import varro.protocol.Json
 import varro.protocol.asObjectOrNull
+import varro.server.OpenCodeV2Projection
 import varro.store.JsonJournal
 import java.nio.file.Files
 import java.nio.file.Path
@@ -12,11 +13,16 @@ import java.nio.file.Path
 class ProjectPermissionConfig(private val directory: Path) {
     fun path(): Path = directory.resolve("opencode.jsonc").takeIf(Files::exists) ?: directory.resolve("opencode.json")
 
-    @Synchronized fun read(): JsonArray = PermissionService.fromConfig(readDocument().get("permission"))
+    @Synchronized fun read(): JsonArray {
+        val document = readDocument()
+        return if (document.has("permissions")) OpenCodeV2Projection.legacyRules(document.get("permissions"))
+        else PermissionService.fromConfig(document.get("permission"))
+    }
 
     @Synchronized fun write(rules: JsonArray) {
         val document = readDocument()
-        document.add("permission", PermissionService.toConfig(rules))
+        if (document.has("permissions")) document.add("permissions", OpenCodeV2Projection.rules(rules))
+        else document.add("permission", PermissionService.toConfig(rules))
         JsonJournal(path()).write(document)
     }
 

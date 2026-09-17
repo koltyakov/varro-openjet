@@ -66,9 +66,17 @@ class OpenCodeHostServices(
         },
     )
 
-    private fun requestGlobalConfig(method: String, body: JsonObject? = null): JsonObject =
-        server.transport.request(method, "/global/config", body, RequestOptions(unscoped = true))
+    private fun requestGlobalConfig(method: String, body: JsonObject? = null): JsonObject {
+        if (method == "PATCH" && server.transport.apiVersion == 2) {
+            val environment = server.cli.serverEnvironment()
+            val root = Path.of(environment["XDG_CONFIG_HOME"] ?: Path.of(System.getProperty("user.home"), ".config").toString(), "opencode")
+            OpenCodeGlobalConfig(root).patch(body ?: error("Missing configuration patch"))
+            server.transport.request("POST", "/global/dispose")
+            return requestGlobalConfig("GET")
+        }
+        return server.transport.request(method, "/global/config", body, RequestOptions(unscoped = true))
             .data.asObjectOrNull() ?: error("OpenCode returned an invalid global configuration")
+    }
 
     override fun readOpenCodeConfig(): JsonObject = modelRouting.read()
 
@@ -90,7 +98,8 @@ class OpenCodeHostServices(
     @Synchronized override fun updateOpenCodePermissions(body: JsonElement?): JsonObject {
         val rules = PermissionService.validateRules(body.asObjectOrNull()?.get("rules"))
         projectPermissions().write(rules)
-        server.transport.request("PATCH", "/config", JsonObject(), RequestOptions(directory = project.basePath))
+        if (server.transport.apiVersion == 2) server.transport.request("POST", "/global/dispose", options = RequestOptions(directory = project.basePath))
+        else server.transport.request("PATCH", "/config", JsonObject(), RequestOptions(directory = project.basePath))
         return readOpenCodePermissions()
     }
 
@@ -149,7 +158,7 @@ class OpenCodeHostServices(
     // --- Session diff summary -------------------------------------------------
 
     private val sessionSummaries = SessionSummaryService(
-        readLocal = LocalSessionSummary(LocalUsageDatabase.defaultPath(EnvironmentUtil.getEnvironmentMap()))::read,
+        readLocal = { id -> if (server.transport.apiVersion == 2) null else LocalSessionSummary(LocalUsageDatabase.defaultPath(EnvironmentUtil.getEnvironmentMap())).read(id) },
         request = { path, directory ->
             server.transport.request("GET", path, options = RequestOptions(directory = directory)).data
         },

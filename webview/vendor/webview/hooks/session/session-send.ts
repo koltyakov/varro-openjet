@@ -771,17 +771,20 @@ function clearCapturedComposerAttachments(
   return cleared;
 }
 
-function commitClearedComposerAttachments(cleared: ClearedComposerAttachments) {
+function commitClearedComposerAttachments(
+  cleared: ClearedComposerAttachments,
+  sentSessionId: string
+) {
   const removedFilePaths = cleared.droppedFiles
     .map((file) => file.path)
     .filter((path) => !appStore.state.droppedFiles.some((file) => file.path === path));
 
   if (removedFilePaths.length > 0) {
     if (appStore.state.droppedFiles.length === 0) {
-      postMessage({ type: 'files/clear' });
+      postMessage({ type: 'files/clear', payload: { sentSessionId } });
     } else {
       for (const path of removedFilePaths) {
-        postMessage({ type: 'files/remove', payload: { path } });
+        postMessage({ type: 'files/remove', payload: { path, sentSessionId } });
       }
     }
   }
@@ -1081,7 +1084,7 @@ export class SessionSendOperations {
                 payload: { paths: imagePaths, deferred: true, sessionId: sentSessionId },
               });
             }
-            commitClearedComposerAttachments(clearedAttachments);
+            commitClearedComposerAttachments(clearedAttachments, sentSessionId);
             clearedAttachments = null;
           },
           restoreSentComposerAttachments: () => {
@@ -1118,7 +1121,41 @@ export class SessionSendOperations {
         clearPendingAbort: this.deps.clearPendingAbort,
         clearSessionUsageLimit: clearSessionUsageLimitForSessionTree,
         setSessionFailed: sessionStore.setSessionFailed,
-        continueInterruptedSession: this.deps.continueInterruptedSession,
+        resendMessage: async (targetSessionId, targetMessageId) => {
+          const assistant = appStore.state.messages.find(
+            (entry) => entry.info.id === targetMessageId && entry.info.sessionID === targetSessionId
+          )?.info;
+          const original =
+            assistant?.role === 'assistant'
+              ? appStore.state.messages.find(
+                  (entry) =>
+                    entry.info.id === assistant.parentID && entry.info.sessionID === targetSessionId
+                )
+              : undefined;
+          if (!original || original.info.role !== 'user') {
+            throw new Error('The original request is not loaded. Reopen the session and retry.');
+          }
+          const parts = original.parts
+            .filter(
+              (part) =>
+                part.type === 'text' ||
+                part.type === 'file' ||
+                part.type === 'agent' ||
+                part.type === 'subtask'
+            )
+            .map(({ id: _id, sessionID: _sessionID, messageID: _messageID, ...part }) => part);
+          await this.deps.syncSessionMcps(targetSessionId);
+          await this.deps.sendAsync(targetSessionId, {
+            parts,
+            agent: original.info.agent,
+            model: original.info.model,
+            variant: original.info.model.variant,
+          });
+          await Promise.all([
+            this.deps.syncSession(targetSessionId),
+            this.deps.recheckSessionStatus(targetSessionId),
+          ]).catch(() => {});
+        },
         stopLoading: uiStore.stopLoading,
       },
       messageId,
@@ -1236,6 +1273,7 @@ export async function sendMessageWithDependencies(
   if (sendBody.variant === undefined) delete sendBody.variant;
 
   const expectsAssistantReply = !sendBody.noReply && sendBody.delivery !== 'steer';
+  const isSteerDelivery = sendBody.delivery === 'steer';
   const optimisticMessage = createOptimisticUserMessage(
     sessionId,
     messageId,
@@ -1300,9 +1338,10 @@ export async function sendMessageWithDependencies(
     if (isForeignQueuedDispatch) return true;
     const syncResults = await Promise.allSettled([
       deps.syncSession(sessionId),
-      deps.syncSessionMessages(sessionId),
+      ...(isSteerDelivery ? [] : [deps.syncSessionMessages(sessionId)]),
       deps.recheckSessionStatus(sessionId),
     ]);
+    if (isSteerDelivery) await retryPostSendMessageSync(deps, sessionId, true);
     if (deps.getMessageCount(sessionId) === 0) {
       if (optimisticMessage) deps.appendOptimisticMessage?.(optimisticMessage);
       await retryPostSendMessageSync(deps, sessionId);
@@ -1494,11 +1533,12 @@ async function retryPostSendMessageSync(
     syncSessionMessages(sessionId: string): Promise<void | boolean | object>;
     logError?(context: string, cause: unknown): void;
   },
-  sessionId: string
+  sessionId: string,
+  force = false
 ) {
   for (const delayMs of [250, 750]) {
     await new Promise((resolve) => setTimeout(resolve, delayMs));
-    if (deps.getMessageCount(sessionId) > 0) return;
+    if (!force && deps.getMessageCount(sessionId) > 0) return;
     try {
       await deps.syncSessionMessages(sessionId);
     } catch (err) {
@@ -1516,7 +1556,7 @@ export async function retryMessageWithDependencies(
     clearPendingAbort(sessionId: string): void;
     clearSessionUsageLimit(sessionId: string): void;
     setSessionFailed(sessionId: string, failed: boolean): void;
-    continueInterruptedSession(sessionId: string): Promise<void | boolean | object>;
+    resendMessage(sessionId: string, messageId: string): Promise<void | boolean | object>;
     stopLoading(): void;
   },
   messageId: string,
@@ -1532,7 +1572,7 @@ export async function retryMessageWithDependencies(
   deps.setSessionFailed(sessionId, false);
 
   try {
-    await deps.continueInterruptedSession(sessionId);
+    await deps.resendMessage(sessionId, messageId);
   } catch (err) {
     deps.stopLoading();
     deps.setSessionFailed(sessionId, true);

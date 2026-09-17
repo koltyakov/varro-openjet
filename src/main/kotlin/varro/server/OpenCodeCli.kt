@@ -127,13 +127,13 @@ class OpenCodeCli(
         }
 
         val candidates = if (SystemInfo.isWindows) {
-            listOf("opencode.exe", "opencode.cmd", "opencode.bat")
+            listOf("opencode2.exe", "opencode2.cmd", "opencode2.bat", "opencode.exe", "opencode.cmd", "opencode.bat")
         } else {
-            listOf("opencode")
+            listOf("opencode2", "opencode")
         }
 
-        for (directory in searchPath()) {
-            for (candidate in candidates) {
+        for (candidate in candidates) {
+            for (directory in searchPath()) {
                 val file = File(directory, candidate)
                 if (file.exists()) {
                     return OpenCodeCommandInfo(
@@ -268,6 +268,11 @@ class OpenCodeCli(
         return version
     }
 
+    fun upgradeCommand(): String? {
+        val command = resolve().installMethod.upgradeCommand ?: return null
+        return if (readInstalledVersion()?.startsWith("2.") == true) command.replace("opencode-ai@latest", "@opencode/cli@latest") else command
+    }
+
     private fun resolveLinkTarget(command: String): String =
         runCatching { Paths.get(command).toRealPath().toString() }.getOrDefault(command)
 
@@ -300,7 +305,7 @@ class OpenCodeCli(
     companion object {
         /** Message shown when the CLI cannot be found anywhere. */
         const val MISSING_CLI_MESSAGE: String =
-            "OpenCode CLI was not found. Install it with `npm install -g opencode-ai`, " +
+            "OpenCode CLI was not found. Install it with `npm install -g @opencode/cli`, " +
                 "or set the OpenCode command in Settings | Tools | Varro."
 
         private val VERSION_PATTERN = Regex("""\d+\.\d+\.\d+(?:-[0-9A-Za-z.\-]+)?""")

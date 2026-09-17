@@ -101,7 +101,7 @@ internal class AskAgentConfig(
     companion object {
         private fun containsAsk(raw: String): Boolean = runCatching {
             val config = Json.parseOrNull(ProjectPermissionConfig.stripJsonComments(raw)).asObjectOrNull()
-            config == null || config.obj("agent")?.keySet()?.any { it.equals("ask", ignoreCase = true) } == true
+            config == null || listOf("agent", "agents").any { key -> config.obj(key)?.keySet()?.any { it.equals("ask", ignoreCase = true) } == true }
         }.getOrDefault(true)
 
         private fun definition() = Json.obj(

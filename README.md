@@ -13,19 +13,19 @@ The plugin reuses Varro's chat UI, with a Kotlin backend for editor integration,
 You'll need:
 
 - A JetBrains IDE in the supported build range, 252 through 262, with a JCEF-enabled runtime. The plugin is built against IntelliJ IDEA 2026.2.2.
-- OpenCode CLI 1.16.0 or newer, available on `PATH` or configured in Settings > Tools > Varro.
+- OpenCode CLI V2 2.0.5 or newer, or V1 1.16.0 or newer, available on `PATH` or configured in Settings > Tools > Varro.
 - An OpenCode provider set up with `opencode auth login` or `/connect` in chat.
 
-If you haven't installed OpenCode yet, follow its [installation guide](https://opencode.ai/docs) or use npm:
+If you haven't installed OpenCode yet, follow its [installation guide](https://opencode.ai/v2/docs/cli) or use npm:
 
 ```bash
-npm install -g opencode-ai
+npm install -g @opencode/cli
 opencode auth login
 ```
 
 Download the plugin ZIP from [GitHub Releases](https://github.com/koltyakov/varro-openjet/releases), or build it using the instructions below. Open Settings > Plugins > Install Plugin from Disk and select the ZIP. Restart the IDE and open the Varro tool window on the right.
 
-Varro starts OpenCode at `127.0.0.1:4096` when needed. If a compatible, healthy OpenCode server is already listening, it connects to that server instead. A managed server can try subsequent ports when its port is occupied. You can change the port or disable automatic startup in Settings > Tools > Varro.
+Varro discovers a registered local V2 service when no explicit CLI command is configured. Otherwise it connects to a healthy server at `127.0.0.1:4096`, or starts one when needed. It detects V1 and V2 automatically and authenticates V2 requests in the Kotlin host. CLI discovery prefers `opencode2` when installed alongside `opencode`. A managed server can try subsequent ports when its port is occupied. You can change the command, port, or automatic startup in Settings > Tools > Varro.
 
 Background CLI updates are enabled by default and run only for a managed server while sessions and host work are idle. The updated CLI takes effect on the next server start. Varro only stops servers it started.
 
@@ -99,6 +99,10 @@ Shared settings include model visibility, pins, ordering, names, server options,
 Writes merge changed fields under a cross-process file lock and replace the JSON atomically. Concurrent changes to the same preference use the last write. Invalid or unsupported files remain untouched; synchronization resumes after they are repaired.
 
 ### Sessions and model controls
+
+To copy existing V1 history into V2, connect to V2 and run **Tools > Varro > Import OpenCode v1 Session into v2**. Select a conversation from the current workspace. The importer copies its same-workspace children, keeps the original records unchanged, and does not execute historical tools or send a model request. Copies have new IDs and a `(v1 copy)` title suffix.
+
+V2 session sharing is unavailable. Varro stores V2-only metadata and archive timestamp overrides under `$XDG_STATE_HOME/varro/opencode-v2`, defaulting to `~/.local/state/varro/opencode-v2`. These annotations use the same format as Varro for VS Code. See [V2 support](docs/opencode-v2-support.md) for the adapter and verification details.
 
 - Queue messages while a session is running. The host persists queued dispatches and reconciles them with message history after reconnecting. It does not automatically retry a send whose outcome is uncertain.
 - Deleted session trees go to the recycle bin for 7 days. Restore them there, or permanently delete them by emptying the bin. Expired entries are removed when the bin is read.
