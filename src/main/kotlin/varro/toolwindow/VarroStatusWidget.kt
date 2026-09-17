@@ -25,15 +25,16 @@ class VarroStatusWidgetFactory : StatusBarWidgetFactory {
 private class VarroStatusWidget(private val project: Project) : StatusBarWidget, StatusBarWidget.TextPresentation {
     private var timer: ScheduledFuture<*>? = null
     @Volatile private var text = "Varro"
+    @Volatile private var serverVersion: String? = null
     @Volatile private var toolWindowVisible = false
     @Volatile private var disposed = false
 
     override fun ID() = "VarroStatus"
     override fun getPresentation(): StatusBarWidget.WidgetPresentation = this
-    override fun getText() = if (toolWindowVisible) "" else text
+    override fun getText() = if (toolWindowVisible) serverVersion?.let { "OpenCode $it" } ?: "" else text
     override fun getAlignment() = 0f
     override fun getTooltipText() = when {
-        toolWindowVisible -> null
+        toolWindowVisible -> serverVersion?.let { "OpenCode server version $it" }
         hasUnreadStatus() -> "$text. Click to view completed sessions."
         hasRunningStatus() -> "$text. Click to view running sessions."
         else -> "$text. Click to open Varro chat."
@@ -60,12 +61,15 @@ private class VarroStatusWidget(private val project: Project) : StatusBarWidget,
         })
         timer = AppExecutorUtil.getAppScheduledExecutorService().scheduleWithFixedDelay({
             if (!disposed && !project.isDisposed) {
-                val nextText = project.getServiceIfCreated(VarroProjectService::class.java)?.statusBarText() ?: "Varro"
+                val service = project.getServiceIfCreated(VarroProjectService::class.java)
+                val nextText = service?.statusBarText() ?: "Varro"
+                val nextVersion = service?.serverVersion()
                 ApplicationManager.getApplication().invokeLater {
                     if (!disposed && !project.isDisposed) {
                         val nextVisible = ToolWindowManager.getInstance(project).getToolWindow("Varro")?.isVisible == true
-                        if (nextText != text || nextVisible != toolWindowVisible) {
+                        if (nextText != text || nextVersion != serverVersion || nextVisible != toolWindowVisible) {
                             text = nextText
+                            serverVersion = nextVersion
                             toolWindowVisible = nextVisible
                             statusBar.updateWidget(ID())
                         }

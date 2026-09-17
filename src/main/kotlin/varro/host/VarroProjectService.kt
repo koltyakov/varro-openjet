@@ -798,6 +798,8 @@ class VarroProjectService(private val project: Project) : Disposable {
         sidebarCommand("command/focus-input")
     }
 
+    fun serverVersion(): String? = server.version()
+
     fun statusBarText(): String {
         val attention = server.transport.attentionCount()
         val unread = store.completedSessionUnreadIds.size
