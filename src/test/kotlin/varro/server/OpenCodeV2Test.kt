@@ -27,6 +27,74 @@ class OpenCodeV2Test {
         }
     }
 
+    @Test fun `assistant history preserves automatic retry metadata for recovery notices`() {
+        val response = Json.obj("id" to "msg_retry", "type" to "assistant", "finish" to "error",
+            "time" to Json.obj("created" to 1000, "completed" to 2000),
+            "error" to Json.obj("type" to "provider.transport", "message" to "Connection closed"),
+            "retry" to Json.obj("attempt" to 2, "at" to 3000))
+        val info = OpenCodeV2Projection.message(response, "ses_test", parentID = "msg_user").obj("info")
+        assertEquals(response.obj("retry"), info.obj("retry"))
+        assertEquals("msg_user", info.str("parentID"))
+        assertEquals("error", info.str("finish"))
+        assertEquals("Connection closed", info.obj("error").obj("data").str("message"))
+
+        response.remove("retry")
+        assertFalse(OpenCodeV2Projection.message(response, "ses_test").obj("info")!!.has("retry"))
+    }
+
+    @Test fun `Windows location queries normalize absolute drive letters only`() {
+        for ((directory, expected) in listOf("c:\\Users\\Andrew\\Repo" to "C:\\Users\\Andrew\\Repo", "d:/Projects/Repo" to "D:/Projects/Repo",
+            "C:\\Repo" to "C:\\Repo", "/workspace/repo" to "/workspace/repo", "\\\\server\\share\\Repo" to "\\\\server\\share\\Repo", "c:relative" to "c:relative")) {
+            val native = adapter { _, path, _ ->
+                assertEquals("/api/location?location[directory]=$expected", java.net.URLDecoder.decode(path, Charsets.UTF_8))
+                Json.obj()
+            }
+            native.request("GET", "/path", null, RequestOptions(directory = directory))
+            native.request("GET", "/path?directory=${java.net.URLEncoder.encode(directory, Charsets.UTF_8)}", null, RequestOptions(directory = "/other"))
+        }
+    }
+
+    @Test fun `interleaved history identities match type-local stream ordinals including empty blocks`() {
+        val history = OpenCodeV2Projection.message(Json.obj("id" to "msg_test", "type" to "assistant", "content" to listOf(
+            Json.obj("type" to "reasoning", "text" to "Inspecting"),
+            Json.obj("type" to "tool", "id" to "call_test", "name" to "read", "state" to Json.obj("status" to "running", "input" to Json.obj())),
+            Json.obj("type" to "text", "text" to ""), Json.obj("type" to "reasoning", "text" to "Checked"), Json.obj("type" to "text", "text" to "Answer"))), "ses_test")
+        val expected = listOf("msg_test:reasoning:0", "call_test", "msg_test:text:0", "msg_test:reasoning:1", "msg_test:text:1")
+        assertEquals(expected, history.arr("parts")!!.map { it.asJsonObject.str("id") })
+        for (phase in listOf("started", "delta", "ended")) for (kind in listOf("text", "reasoning")) for (ordinal in 0..1) {
+            val event = OpenCodeV2Events.project(Json.obj("type" to "session.$kind.$phase", "data" to Json.obj("sessionID" to "ses_test", "assistantMessageID" to "msg_test", "ordinal" to ordinal)), Json.obj()).single()
+            assertEquals("msg_test:$kind:$ordinal", event.obj("properties").str("${kind}ID"))
+        }
+        for (started in listOf(null, 0L, 1000L)) {
+            val event = OpenCodeV2Events.project(Json.obj("type" to "session.step.started", "created" to 2000, "data" to Json.obj("started" to started)), Json.obj()).single()
+            assertEquals(started ?: 2000L, event.obj("properties").long("timestamp"))
+        }
+    }
+
+    @Test fun `hidden OAuth fields use conditional defaults and respect supplied answers`() {
+        val integration = Json.obj("id" to "opencode", "methods" to listOf(Json.obj("id" to "login", "type" to "oauth", "form" to listOf(
+            Json.obj("key" to "server", "type" to "string", "hidden" to true, "default" to "https://console.example"),
+            Json.obj("key" to "account", "type" to "string", "title" to "Account"),
+            Json.obj("key" to "inactive", "type" to "boolean", "hidden" to true, "default" to true,
+                "when" to listOf(Json.obj("key" to "account", "op" to "eq", "value" to "other")))))))
+        for (inputs in listOf(null, Json.obj("server" to "https://custom.example"), Json.obj("account" to "other"))) {
+            var sent: JsonObject? = null
+            val native = adapter { _, path, body -> when (path) {
+                "/api/provider" -> Json.obj("data" to emptyList<Any>())
+                "/api/integration" -> Json.obj("data" to listOf(integration))
+                "/api/provider/opencode" -> Json.obj("data" to Json.obj("integrationID" to "opencode"))
+                "/api/integration/opencode" -> Json.obj("data" to integration)
+                "/api/integration/opencode/connect/oauth" -> { sent = body.asObjectOrNull().obj("answer"); Json.obj("data" to Json.obj("attemptID" to "attempt_test")) }
+                else -> error("Unexpected route $path")
+            } }
+            val methods = native.request("GET", "/provider/auth", null, RequestOptions()).data.asObjectOrNull().arr("opencode")!!
+            assertEquals(listOf("account"), methods[0].asJsonObject.arr("prompts")!!.map { it.asJsonObject.str("key") })
+            native.request("POST", "/provider/opencode/oauth/authorize", Json.obj("method" to 0, "inputs" to inputs), RequestOptions())
+            assertEquals(inputs.str("server") ?: "https://console.example", sent.str("server"))
+            assertEquals(inputs.str("account") == "other", sent!!.has("inactive"))
+        }
+    }
+
     @Test fun `native history skips control records and keeps inbox and parent identities`() {
         val native = adapter { _, path, _ -> when {
             path.endsWith("/inbox") -> Json.obj("data" to listOf(Json.obj("id" to "msg_pending", "type" to "user", "time" to Json.obj("created" to 4), "payload" to Json.obj("text" to "queued"))))
@@ -43,10 +111,10 @@ class OpenCodeV2Test {
         assertEquals(2, messages.size())
         val assistant = messages[0].asJsonObject
         assertEquals("msg_user", assistant.obj("info").str("parentID"))
-        assertEquals("msg_assistant:content:0", assistant.arr("parts")!![0].asJsonObject.str("id"))
+        assertEquals("msg_assistant:reasoning:0", assistant.arr("parts")!![0].asJsonObject.str("id"))
         assertEquals("msg_pending", messages[1].asJsonObject.obj("info").str("id"))
         val event = native.events(Json.obj("id" to "evt_delta", "type" to "session.reasoning.delta", "data" to Json.obj("sessionID" to "ses_test", "assistantMessageID" to "msg_assistant", "ordinal" to 0, "delta" to "thinking"))).single()
-        assertEquals("msg_assistant:content:0", event.obj("properties").str("reasoningID"))
+        assertEquals("msg_assistant:reasoning:0", event.obj("properties").str("reasoningID"))
     }
 
     @Test fun `permission failures retain owning child until acknowledgement`() {

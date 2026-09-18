@@ -95,7 +95,7 @@ internal object OpenCodeV2Projection {
         val id = value.str("id").orEmpty()
         val type = value.str("type")
         val time = value.obj("time") ?: Json.obj()
-        fun part(ordinal: Int, kind: String, fields: JsonObject) = Json.obj("id" to "$id:content:$ordinal", "sessionID" to sessionID,
+        fun part(ordinal: Int, kind: String, fields: JsonObject) = Json.obj("id" to "$id:${if (type == "assistant") kind else "content"}:$ordinal", "sessionID" to sessionID,
             "messageID" to id, "type" to kind).apply { fields.entrySet().forEach { add(it.key, it.value) } }
         if (type == "shell" || type == "skill") {
             val completed = type == "skill" || value.str("status") != "running"
@@ -129,15 +129,21 @@ internal object OpenCodeV2Projection {
             info.add("cost", value.get("cost") ?: Json.toElement(0))
             info.add("tokens", value.get("tokens") ?: Json.obj("input" to 0, "output" to 0, "reasoning" to 0, "cache" to Json.obj("read" to 0, "write" to 0)))
             info.add("finish", value.get("finish"))
+            value.obj("retry")?.let { retry -> info.add("retry", Json.obj("attempt" to retry.get("attempt"), "at" to retry.get("at"))) }
             val error = value.obj("error") ?: if (type == "idle") context.obj("error") ?: Json.obj("type" to "UnknownError",
                 "message" to "OpenCode failed before a response was recorded. Check the provider connection and the OpenCode server log.") else null
             if (error != null) info.add("error", Json.obj("name" to (error.str("type") ?: "UnknownError"),
                 "data" to Json.obj("message" to error.str("message"), "statusCode" to error.get("status"))))
             if (type == "idle") info.add("time", time.deepCopy().apply { add("completed", time.get("created")) })
-            value.arr("content").orEmpty().forEachIndexed { ordinal, entry ->
-                val content = entry.asObjectOrNull() ?: return@forEachIndexed
+            // Stream ordinals count each content type separately, including empty blocks.
+            val ordinals = mutableMapOf<String, Int>()
+            value.arr("content").orEmpty().forEach { entry ->
+                val content = entry.asObjectOrNull() ?: return@forEach
                 if (content.str("type") != "tool") {
-                    parts.add(part(ordinal, content.str("type").orEmpty(), Json.obj("text" to content.get("text"),
+                    val kind = content.str("type").orEmpty()
+                    val ordinal = ordinals.getOrDefault(kind, 0)
+                    ordinals[kind] = ordinal + 1
+                    parts.add(part(ordinal, kind, Json.obj("text" to content.get("text"),
                         "time" to if (content.str("type") == "reasoning") Json.obj("start" to (content.obj("time")?.get("created") ?: time.get("created")),
                             "end" to content.obj("time")?.get("completed")) else null)))
                 } else {

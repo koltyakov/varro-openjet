@@ -269,8 +269,16 @@ class OpenCodeCli(
     }
 
     fun upgradeCommand(): String? {
-        val command = resolve().installMethod.upgradeCommand ?: return null
-        return if (readInstalledVersion()?.startsWith("2.") == true) command.replace("opencode-ai@latest", "@opencode/cli@latest") else command
+        val method = resolve().installMethod
+        val command = method.upgradeCommand ?: return null
+        if (readInstalledVersion()?.startsWith("2.") != true) return command
+        return when (method) {
+            OpenCodeInstallMethod.CURL -> if (SystemInfo.isWindows) null else "curl -fsSL https://opencode.ai/v2/install | bash"
+            OpenCodeInstallMethod.PNPM -> "pnpm add -g --allow-build=@opencode/cli @opencode/cli@latest"
+            OpenCodeInstallMethod.BUN -> "bun add -g --trust @opencode/cli@latest"
+            OpenCodeInstallMethod.HOMEBREW -> "brew upgrade anomalyco/tap/opencode-v2"
+            else -> command.replace("opencode-ai@latest", "@opencode/cli@latest")
+        }
     }
 
     private fun resolveLinkTarget(command: String): String =

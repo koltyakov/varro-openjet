@@ -99,6 +99,13 @@ class TerminalService(private val project: Project) {
          * install and upgrade paths surfaced by the server-status recovery UI.
          */
         val ALLOWED_COMMANDS: Set<String> = setOf(
+            "npm i -g @opencode/cli",
+            "npm i -g opencode-ai",
+            "pnpm add -g --allow-build=@opencode/cli @opencode/cli@latest",
+            "bun add -g --trust @opencode/cli@latest",
+            "brew upgrade anomalyco/tap/opencode-v2",
+            "brew upgrade opencode",
+            "curl -fsSL https://opencode.ai/v2/install | bash",
             "npm install -g @opencode/cli",
             "npm install -g @opencode/cli@latest",
             "pnpm add -g @opencode/cli@latest",

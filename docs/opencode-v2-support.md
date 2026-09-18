@@ -1,6 +1,6 @@
 # OpenCode V2 support
 
-OpenJet supports V1 from 1.16.0 and V2 from 2.0.5. The webview and shared sources were synced from the local Varro checkout's `v2` branch at `d6cccc26808f`. The Kotlin adapter follows that branch's released-server contracts, including its generated skill and shell transcript records. Pending and running V2 patch calls render as active edits.
+OpenJet supports V1 from 1.16.0 and V2 from 2.0.5. The webview and shared sources were synced from Varro's `main` branch at `5b7dc5db5706`. The Kotlin adapter follows that revision's released-server contracts, including its generated skill and shell transcript records. Pending and running V2 patch calls render as active edits. Assistant history preserves automatic retry metadata for recovery notices.
 
 ## Connection and startup
 
@@ -18,6 +18,8 @@ The default CLI search prefers `opencode2` over `opencode`. An explicit command 
 - `OpenCodeV2SessionState.kt` persists metadata and timestamp overrides that the released server cannot patch. These files are compatible with Varro's annotations.
 
 History reads include admitted user inputs still in the inbox. Pagination filters control records and reads preceding context to recover assistant parent IDs. Aggregate response budgets and repeated-cursor checks bound those reads.
+
+Text and reasoning use separate type-local part ordinals so streamed content reconciles with interleaved history. Windows location requests uppercase absolute drive letters. V2.0.7 authentication forms omit hidden fields from the UI and submit their applicable defaults. Ordinary sends in Default mode preserve session-scoped Always approvals; explicit mode changes can still reset rules.
 
 Permission and form replies retain the owning session. The adapter removes pending requests only after the server acknowledges the reply. Native permission configuration keeps its ordered `permissions` array. Model routing edits preserve native `agents` keys when the target file uses V2 configuration.
 

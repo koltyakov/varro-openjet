@@ -53,7 +53,8 @@ internal class OpenCodeV2Adapter(
         val query = path.substringAfter('?', "").split('&').filter { it.isNotEmpty() }.associate {
             decode(it.substringBefore('=')) to decode(it.substringAfter('=', ""))
         }
-        val directory = query["directory"] ?: options.directory
+        // V2 instruction discovery expects the filesystem's uppercase Windows drive letter.
+        val directory = (query["directory"] ?: options.directory)?.replace(Regex("^[a-z]:[\\\\/]")) { it.value.uppercase() }
         val input = body.asObjectOrNull() ?: Json.obj()
         fun scoped(target: String) = target + if (directory == null) "" else "${if ('?' in target) '&' else '?'}location%5Bdirectory%5D=${encode(directory)}"
         fun raw(verb: String, target: String, payload: JsonElement? = null) = wire(verb, target, payload, options.copy(unscoped = true, captureNextCursor = false)).data
@@ -420,7 +421,18 @@ internal class OpenCodeV2Adapter(
             val methods = data("GET", base).asObjectOrNull().arr("methods").orEmpty().mapNotNull { it.asObjectOrNull() }.filter { it.str("type") in setOf("key", "oauth") }
             val selected = methods.getOrNull(input.int("method") ?: 0)
             require(selected.str("type") == "oauth") { "Unsupported OpenCode authentication method" }
-            val attempt = data("POST", "$base/connect/oauth", Json.obj("methodID" to selected?.get("id"), "answer" to input.get("inputs"))).asObjectOrNull()
+            val answer = input.obj("inputs")?.deepCopy() ?: Json.obj()
+            selected.arr("form").orEmpty().mapNotNull { it.asObjectOrNull() }.forEach { field ->
+                val key = field.str("key") ?: return@forEach
+                if (field.str("type") == "external" || field.bool("hidden") != true || answer.has(key)) return@forEach
+                val excluded = field.arr("when").orEmpty().any { entry ->
+                    val condition = entry.asObjectOrNull()
+                    val equal = answer.get(condition.str("key")) == condition?.get("value")
+                    if (condition.str("op") == "eq") !equal else equal
+                }
+                if (!excluded && field.has("default")) answer.add(key, field.get("default"))
+            }
+            val attempt = data("POST", "$base/connect/oauth", Json.obj("methodID" to selected?.get("id"), "answer" to if (answer.size() > 0) answer else input.get("inputs"))).asObjectOrNull()
             oauth[provider] = integration to (attempt.str("attemptID") ?: error("Invalid OpenCode OAuth attempt"))
             return Json.obj("url" to attempt?.get("url"), "method" to if (attempt.str("mode") == "code") "code" else "auto", "instructions" to attempt.str("instructions").orEmpty())
         }
@@ -443,7 +455,7 @@ internal class OpenCodeV2Adapter(
 
     private fun authMethods(integration: JsonObject?) = Json.array(integration.arr("methods").orEmpty().mapNotNull { it.asObjectOrNull() }
         .filter { it.str("type") in setOf("oauth", "key") }.map { method -> Json.obj("type" to if (method.str("type") == "key") "api" else "oauth", "label" to (method.str("label") ?: "API key"),
-            "prompts" to method.arr("form").orEmpty().mapNotNull { it.asObjectOrNull() }.filter { it.str("type") != "external" }.map { field ->
+            "prompts" to method.arr("form").orEmpty().mapNotNull { it.asObjectOrNull() }.filter { it.str("type") != "external" && it.bool("hidden") != true }.map { field ->
                 Json.obj("key" to field.get("key"), "message" to (field.str("title") ?: field.str("description") ?: field.str("key")),
                     "type" to if (field.str("type") == "string" && field.has("options")) "select" else "text", "options" to field.arr("options")?.map { option ->
                         Json.obj("label" to option.asObjectOrNull().str("label"), "value" to option.asObjectOrNull()?.get("value"), "hint" to option.asObjectOrNull().str("description")) })

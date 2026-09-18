@@ -55,13 +55,15 @@ internal object OpenCodeV2Events {
         if (Regex("^session\\.(text|reasoning)\\.").containsMatchIn(type)) {
             val id = data.str("assistantMessageID") ?: return emptyList()
             val ordinal = data.int("ordinal") ?: return emptyList()
-            return next(properties.apply { addProperty("textID", "$id:content:$ordinal"); addProperty("reasoningID", "$id:content:$ordinal") })
+            val kind = if (type.startsWith("session.text.")) "text" else "reasoning"
+            return next(properties.apply { addProperty("textID", "$id:$kind:$ordinal"); addProperty("reasoningID", "$id:$kind:$ordinal") })
         }
         if (type.startsWith("session.tool.")) return next(properties.apply {
             add("callID", data.get("id")); add("structured", data.get("metadata")); add("provider", data.get("state")); add("result", data.get("resultState"))
             addProperty("name", OpenCodeV2Projection.legacyAction(data.str("name"))); addProperty("output", OpenCodeV2Projection.toolOutput(data.get("content")))
         })
         if (type.startsWith("session.step.")) return next(properties.apply {
+            if (type == "session.step.started" && data.num("started") != null) add("timestamp", data.get("started"))
             add("model", data.obj("model")?.deepCopy()?.apply { add("modelID", get("id")) }); addProperty("executionContinues", true)
         })
         if (Regex("^session\\.(compaction|revert)\\.").containsMatchIn(type) || type in setOf("session.synthetic", "session.moved")) return next()
