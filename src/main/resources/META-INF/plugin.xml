@@ -6,35 +6,44 @@
     <description><![CDATA[
         <h2>OpenCode workbench for JetBrains IDEs</h2>
         <p>
-            Varro OpenJet runs <a href="https://opencode.ai">OpenCode</a> inside JetBrains IDEs.
-            It adds project-aware chat, parallel sessions, plan and change review, model and
-            permission controls, and usage reporting.
+            Use <a href="https://opencode.ai">OpenCode</a> in IntelliJ IDEA, WebStorm, PyCharm,
+            GoLand, DataGrip and other JetBrains IDEs. Ask questions about your project, plan changes
+            and review AI-generated edits without leaving the IDE.
         </p>
+        <h3>Features</h3>
+        <ul>
+            <li>Run parallel chat sessions in the tool window, editor tabs or detached IDE windows.</li>
+            <li>Add files, editor selections, terminal output and project errors and warnings as context.
+                In IDEs with Database Tools, attach table schemas and selected rows.</li>
+            <li>Review plans, tool activity and file diffs. Control permissions per session or project.</li>
+            <li>Choose models and agents, view API pricing and provider quotas, and track token usage
+                across projects.</li>
+            <li>Generate commit messages from your Git changes.</li>
+            <li>Connect to OpenCode V1 or V2 with automatic version detection, and import V1
+                conversations into V2.</li>
+        </ul>
         <p>
-            OpenCode remains responsible for agents, providers, models, commands, skills and MCP
-            servers. Varro OpenJet reads that configuration and provides an IDE interface for it,
-            so the same setup works in the OpenCode TUI, in VS Code via Varro, and here.
-        </p>
-        <p>
-            This is a port of <a href="https://github.com/koltyakov/varro">Varro</a>, the OpenCode
-            extension for VS Code. The chat interface is the upstream one, running in the IDE's
-            embedded browser; the host that drives it is written for the IntelliJ Platform.
+            Varro OpenJet brings the <a href="https://github.com/koltyakov/varro">Varro</a> chat
+            interface from VS Code to the IntelliJ Platform. It uses your existing OpenCode
+            configuration for providers, models, agents, commands, skills and MCP servers.
         </p>
 
         <h3>Requirements</h3>
         <ul>
-            <li>An IDE build with the JCEF runtime (the default on all current JetBrains IDEs).</li>
-            <li>The OpenCode CLI 1.16.0 or newer, on <code>PATH</code> or configured in
-                <em>Settings | Tools | Varro</em>. Install it with
-                <code>npm install -g opencode-ai</code>.</li>
+            <li>A JetBrains IDE 2025.2 or newer with a JCEF-enabled runtime.
+                Detached chat window commands require IDE 2026.1 or newer.</li>
+            <li>OpenCode CLI V2 2.0.5 or newer, or V1 1.16.0 or newer, on <code>PATH</code> or
+                configured in <em>Settings | Tools | Varro</em>. Install V2 with
+                <code>npm install -g @opencode/cli</code>.</li>
             <li>A configured provider. Run <code>opencode auth login</code>, or use
                 <code>/connect</code> in the chat.</li>
         </ul>
 
         <h3>Network and credential disclosure</h3>
         <ul>
-            <li>Chat requests go through the local OpenCode server on <code>127.0.0.1</code>
-                (port 4096 by default). Native provider-limit polling also contacts provider quota endpoints.</li>
+            <li>Chat requests go through a local OpenCode server. Varro can discover a registered V2
+                service, connect on the configured port, or start a server when needed.</li>
+            <li>Provider-limit polling contacts provider quota endpoints directly.</li>
             <li>Provider-limit polling uses existing provider credentials in the IDE host, including
                 supported OAuth refresh. The webview receives quota counters and statuses, not credentials.</li>
             <li>Terminal commands the chat can request are restricted to a fixed allowlist of
@@ -43,6 +52,11 @@
     ]]></description>
 
     <change-notes><![CDATA[
+        <h3>0.3.1</h3>
+        <p>Added retry recovery notices to assistant history. Updated V2 installation and upgrade
+            commands, provider authentication forms and server status screens. Fixed handling of
+            streamed message parts, permissions and Windows paths. Provider connection forms now
+            accept optional fields and support multiple conditions for showing a field.</p>
         <h3>0.3.0</h3>
         <p>Added OpenCode V2 support from 2.0.5, alongside V1 support from 1.16.0, with automatic
             protocol detection and discovery of registered local V2 services. Added authenticated V2
