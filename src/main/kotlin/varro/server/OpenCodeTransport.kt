@@ -117,6 +117,8 @@ class OpenCodeTransport(
         System.currentTimeMillis() - lastMutationAt.get() >= 60_000
 
     fun attentionCount(): Int = pendingAttentionRequests.values.toSet().size
+    fun pendingAttentionSessionIDs(): Set<String> = pendingAttentionRequests.values.toSet()
+    val hasGlobalSessionStatus: Boolean get() = apiVersion == 2
 
     /** Attention requests (permissions/questions) awaiting a reply, mapped to their session. */
     private val pendingAttentionRequests = ConcurrentHashMap<String, String>()

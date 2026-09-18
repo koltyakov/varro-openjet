@@ -52,6 +52,12 @@
     ]]></description>
 
     <change-notes><![CDATA[
+        <h3>0.3.2</h3>
+        <p>Added shared OpenCode server ownership across Varro family products, with ownership handoff
+            and recovery after an IDE host exits. Closing a project now leaves its server available
+            to other Varro hosts. Fixed ownership recovery after macOS binary updates. Restart checks
+            now detect active sessions and pending questions or permissions, while allowing idle V2
+            servers to restart when historical session directories have been deleted.</p>
         <h3>0.3.1</h3>
         <p>Added retry recovery notices to assistant history. Updated V2 installation and upgrade
             commands, provider authentication forms and server status screens. Fixed handling of

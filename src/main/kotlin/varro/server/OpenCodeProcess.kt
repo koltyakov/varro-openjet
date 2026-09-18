@@ -21,12 +21,7 @@ interface ProcessLaunchCallbacks {
 /**
  * Owns the `opencode serve` child process.
  *
- * Port of the process half of `src/extension/open-code-process.ts`. Upstream's
- * cross-host ownership leases are deliberately simplified: a JetBrains project
- * is the only owner of a server it spawns, and a server already listening on the
- * port is adopted read-only rather than taken over. What is kept is the
- * behaviour users notice - the port-in-use retry walk, bounded output capture,
- * and a graceful-then-forced shutdown.
+ * Coordinates ownership with other Varro products through shared per-user leases.
  */
 class OpenCodeProcess(
     private val cli: OpenCodeCli,
@@ -43,6 +38,29 @@ class OpenCodeProcess(
     private val managed = AtomicBoolean(false)
     private val capturedOutput = AtomicReference("")
     private val askAgentConfig = AskAgentConfig(cli.serverEnvironment(), workspaceCwd)
+    private val ownership by lazy { ServerOwnership(configuredPort()) }
+    private var ownershipRegistered = false
+    private var serverPassword: String? = null
+
+    fun restoreConnection() {
+        ownership.connection()?.let { (port, password) ->
+            adoptPort(port)
+            password?.let { OpenCodeConnection.register("http://127.0.0.1:$port", it) }
+        }
+    }
+
+    fun refreshOwnership(takeover: Boolean = false): Boolean = ownership.refresh(port, takeover).also { managed.set(it) }
+
+    fun confirmOwnership(): Boolean {
+        val pid = handler.get()?.process?.pid() ?: return false
+        return ownership.register(port, pid, serverPassword).also { ownershipRegistered = it; managed.set(it) }
+    }
+
+    fun disconnect() {
+        ownership.relinquish()
+        managed.set(false)
+        handler.set(null)
+    }
 
     fun updateAskAgent(): Boolean = isManaged && askAgentConfig.rewrite(askAgentEnabled())
 
@@ -113,8 +131,9 @@ class OpenCodeProcess(
         capturedOutput.set("")
         val credentialUrl = "http://127.0.0.1:$launchPort"
         OpenCodeConnection.forget(credentialUrl)
-        val stdout = OpenCodeStartupOutput { OpenCodeConnection.register(credentialUrl, it) }
-        val stderr = OpenCodeStartupOutput { OpenCodeConnection.register(credentialUrl, it) }
+        serverPassword = cli.serverEnvironment()["OPENCODE_SERVER_PASSWORD"]
+        val stdout = OpenCodeStartupOutput { serverPassword = it; OpenCodeConnection.register(credentialUrl, it) }
+        val stderr = OpenCodeStartupOutput { serverPassword = it; OpenCodeConnection.register(credentialUrl, it) }
         val processHandler = try {
             OSProcessHandler(general)
         } catch (failure: Exception) {
@@ -147,6 +166,16 @@ class OpenCodeProcess(
      * session state, then forced once the grace window elapses.
      */
     fun stop(gracePeriodMs: Long = GRACEFUL_SHUTDOWN_MS) {
+        if (handler.get() == null && !managed.get()) return
+        if (ownershipRegistered || handler.get() == null) {
+            if (ownership.stop(gracePeriodMs)) {
+                handler.set(null)
+                managed.set(false)
+                ownershipRegistered = false
+                askAgentConfig.close()
+            } else error("OpenCode ownership changed or could not be verified; retry the restart")
+            return
+        }
         try {
             stopProcess(gracePeriodMs)
         } finally {

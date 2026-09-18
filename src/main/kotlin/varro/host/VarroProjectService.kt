@@ -578,11 +578,7 @@ class VarroProjectService(private val project: Project) : Disposable {
                 "server/restart" -> restartServer(payload.bool("force") == true)
                 "server/restart/check" -> broadcast(
                     "server/restart-blocked",
-                    Json.obj(
-                        "totalSessionCount" to 0,
-                        "directories" to JsonArray(),
-                        "checkId" to (payload.int("checkId") ?: 0),
-                    ),
+                    server.readRestartBlockers().apply { addProperty("checkId", payload.int("checkId") ?: 0) },
                 )
 
                 // --- Persisted state --------------------------------------------
@@ -779,8 +775,9 @@ class VarroProjectService(private val project: Project) : Disposable {
 
     fun restartServer(force: Boolean) {
         when (server.restart(force)) {
+            OpenCodeServer.RestartOutcome.BLOCKED -> broadcast("server/restart-blocked", server.readRestartBlockers())
             OpenCodeServer.RestartOutcome.NOT_MANAGED -> notify(
-                "The OpenCode server was not started by this IDE. Restart it where you launched it.",
+                "The OpenCode server is not managed by a Varro product. Restart it where you launched it.",
                 NotificationType.INFORMATION,
             )
             OpenCodeServer.RestartOutcome.BUSY -> notify(

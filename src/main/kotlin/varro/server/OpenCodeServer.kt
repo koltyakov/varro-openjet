@@ -151,6 +151,7 @@ class OpenCodeServer(
         setStatus(ServerStatus.Starting)
 
         try {
+            process.restoreConnection()
             // Validate the registered service identity before adopting its port.
             if (settings.serverCommand.isBlank()) {
                 OpenCodeConnection.registration(cli.serverEnvironment())?.let { registration ->
@@ -166,6 +167,7 @@ class OpenCodeServer(
             val existing = transport.readHealthInfo()
             if (existing.healthy) {
                 log.info("Adopting the OpenCode server already listening on ${url()}")
+                process.refreshOwnership()
                 serverVersion.set(existing.version)
                 val compatibility = checkCompatibility(existing.version)
                 if (compatibility != null) {
@@ -276,7 +278,10 @@ class OpenCodeServer(
                 process.stop()
                 return false
             }
-            if (transport.checkHealth()) return true
+            if (transport.checkHealth()) {
+                check(process.confirmOwnership()) { "Could not confirm shared OpenCode server ownership" }
+                return true
+            }
             if (process.hasPortInUseDetected()) {
                 process.stop()
                 return false
@@ -319,20 +324,19 @@ class OpenCodeServer(
         setStatus(ServerStatus.Running(url(), EventStreamState.DEGRADED))
         transport.startEventStream(OpenCodeRequestScope.normalizeDirectory(workspaceCwd()))
         if (maintenanceStarted.compareAndSet(false, true)) scheduler.scheduleWithFixedDelay({
+            runCatching { process.refreshOwnership() }.onFailure { log.info("OpenCode ownership check failed", it) }
             runCatching { maintenance.tick() }.onFailure { log.info("OpenCode maintenance check failed", it) }
         }, 60, 60, TimeUnit.SECONDS)
     }
 
     private fun isIdleForMaintenance(): Boolean {
         if (hasHostWork() || !transport.isQuiet()) return false
-        val directories = (transport.observedSessionDirectories().values + listOfNotNull(workspaceCwd())).toSet()
-        if (directories.isEmpty()) return false
-        return directories.all { directory ->
-            val statuses = transport.request("GET", "/session/status", options = RequestOptions(directory = directory))
-                .data.asObjectOrNull() ?: return@all false
-            statuses.entrySet().all { it.value.asObjectOrNull().str("type") == "idle" }
-        }
+        return process.refreshOwnership() && readRestartBlockers().get("totalSessionCount").asInt == 0
     }
+
+    fun readRestartBlockers() = RestartPreflight(
+        transport.hasGlobalSessionStatus, transport.observedSessionDirectories(), transport::pendingAttentionSessionIDs,
+    ) { path, options -> transport.request("GET", path, options = options) }.read()
 
     private fun missingCliStatus(info: OpenCodeCommandInfo): ServerStatus.Error =
         if (info.configuredCommandMissing) {
@@ -383,13 +387,13 @@ class OpenCodeServer(
      * too - and the caller is told so it can say that in the UI.
      */
     fun restart(force: Boolean): RestartOutcome {
-        if (!process.isManaged && status.get() is ServerStatus.Running) {
-            return RestartOutcome.NOT_MANAGED
-        }
         if (!phase.compareAndSet(Phase.IDLE, Phase.RESTARTING)) return RestartOutcome.BUSY
-
-        disposeGeneration.incrementAndGet()
         try {
+            if (status.get() is ServerStatus.Running) {
+                if (!force && readRestartBlockers().get("totalSessionCount").asInt > 0) return RestartOutcome.BLOCKED
+                if (!process.refreshOwnership(takeover = true)) return RestartOutcome.NOT_MANAGED
+            }
+            disposeGeneration.incrementAndGet()
             transport.stopEventStream()
             transport.abortRequests()
             transport.clearPendingAttentionRequests()
@@ -406,7 +410,7 @@ class OpenCodeServer(
         return RestartOutcome.RESTARTED
     }
 
-    enum class RestartOutcome { RESTARTED, NOT_MANAGED, BUSY }
+    enum class RestartOutcome { RESTARTED, NOT_MANAGED, BUSY, BLOCKED }
 
     /** Repoints REST scoping and the event stream at another workspace root. */
     fun activateDirectory(directory: String?) {
@@ -448,9 +452,7 @@ class OpenCodeServer(
         phase.set(Phase.DISPOSING)
         disposeGeneration.incrementAndGet()
         transport.dispose()
-        // Only a server this project spawned is stopped; an adopted one keeps
-        // serving the other IDE windows that are still attached to it.
-        process.stop()
+        runCatching { process.disconnect() }.onFailure { log.warn("Could not relinquish OpenCode ownership", it) }
         scheduler.shutdownNow()
         runCatching { scheduler.awaitTermination(2, TimeUnit.SECONDS) }
         statusListeners.clear()
