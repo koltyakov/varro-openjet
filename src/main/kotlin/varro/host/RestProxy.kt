@@ -81,6 +81,7 @@ class RestProxy(
         fun updateOpenCodePermissions(body: JsonElement?): JsonObject
         fun judgePermission(body: JsonElement?): JsonObject
         fun judgeModel(providerId: String?, modelId: String?, variant: String?): JsonObject
+        fun decisionProviders(method: String, body: JsonElement?): JsonObject
         fun permissionRules(sessionId: String, rules: JsonElement?, directory: String?): JsonArray
         fun allowPermission(body: JsonObject, project: Boolean, directory: String?): JsonArray
         fun providerLimit(providerId: String, modelId: String?): JsonObject
@@ -265,6 +266,8 @@ class RestProxy(
                 else services.updateOpenCodePermissions(body)
 
             pathname == ApiRoutes.Endpoints.PERMISSION_JUDGE -> services.judgePermission(body)
+
+            pathname == ApiRoutes.Endpoints.DECISION_PROVIDERS -> services.decisionProviders(method, body)
 
             // `ChatModelSelection | null`, unwrapped.
             pathname == ApiRoutes.Endpoints.PERMISSION_JUDGE_MODEL ->

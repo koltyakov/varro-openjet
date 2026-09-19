@@ -125,6 +125,11 @@ class VarroConfigurable : BoundConfigurable("Varro") {
                     .comment("`providerID/modelID`. Leave empty to disable model-based approval.")
                     .columns(40)
             }
+            row {
+                checkBox("Use TypeSafe Jev to judge permission requests before the judge model")
+                    .bindSelected(settings::decisionsJevAutoApprove)
+                    .comment("Only confident answers approve; anything else asks you. Connect it with <b>Add decision model</b> in the Varro Models view menu, or set <code>TYPESAFE_API_KEY</code>. Permission details are sent to TypeSafe.")
+            }
             row("Commit message model:") {
                 textField()
                     .bindText(settings::commitMessageModel)

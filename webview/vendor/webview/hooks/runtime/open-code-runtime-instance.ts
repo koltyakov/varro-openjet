@@ -46,6 +46,7 @@ import type { MessageEntry, Permission, Session, SessionStatus } from '../../typ
 import {
   clearQueuedMessagesForSession,
   getModelPreferencesSnapshot,
+  getReviewerModelNames,
   getSessionTreeIds,
   getSessionTreeRootId,
   isSessionAwaitingInput,
@@ -307,7 +308,8 @@ function finishAutoApproveActivity(
     | 'auto-review-failed'
     | 'manually-approved'
     | 'manually-rejected',
-  detail?: string
+  detail?: string,
+  reviewerModel?: { providerID: string; modelID: string }
 ) {
   const current = appStore.state.sessionAutoPermissionActivity[permission.sessionID] ?? [];
   const index = current.findIndex((activity) => activity.permissionId === permission.id);
@@ -317,6 +319,7 @@ function finishAutoApproveActivity(
     title:
       permission.title?.trim() || permission.type || current[index]?.title || 'Permission request',
     detail: detail || undefined,
+    reviewer: reviewerModel ? formatReviewer(reviewerModel) : undefined,
     createdAt: index >= 0 ? current[index]!.createdAt : Date.now(),
   };
   appStore.setState(
@@ -327,6 +330,11 @@ function finishAutoApproveActivity(
       : [...current, next]
     ).slice(-MAX_AUTO_APPROVE_ACTIVITY)
   );
+}
+
+function formatReviewer(route: { providerID: string; modelID: string }) {
+  const names = getReviewerModelNames(route);
+  return `${names.providerName} / ${names.modelName}`;
 }
 
 function clearReviewingAutoApproveActivity(permission: Pick<Permission, 'id' | 'sessionID'>) {
@@ -1823,7 +1831,8 @@ export function createOpenCodeRuntime(): OpenCodeRuntime {
       finishAutoApproveActivity(
         permission,
         'approval-required',
-        outcome.response.reason || 'Automatic review requested manual approval.'
+        outcome.response.reason || 'Automatic review requested manual approval.',
+        outcome.response.reviewerModel
       );
       return;
     }
@@ -1851,7 +1860,8 @@ export function createOpenCodeRuntime(): OpenCodeRuntime {
         outcome.response.reason ||
           (outcome.response.decision === 'allow'
             ? 'Approved by automatic review.'
-            : 'Rejected by automatic review.')
+            : 'Rejected by automatic review.'),
+        outcome.response.reviewerModel
       );
     } catch (err) {
       logError('autoApproveJudge', err);

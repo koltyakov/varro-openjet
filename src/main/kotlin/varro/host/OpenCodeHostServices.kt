@@ -6,8 +6,10 @@ import com.google.gson.JsonObject
 import com.intellij.notification.NotificationGroupManager
 import com.intellij.notification.NotificationType
 import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.application.ModalityState
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.project.guessProjectDir
+import com.intellij.openapi.ui.Messages
 import com.intellij.util.EnvironmentUtil
 import varro.protocol.Json
 import varro.protocol.asObjectOrNull
@@ -123,12 +125,16 @@ class OpenCodeHostServices(
         try {
             permissions.allow(body, project, directory)
         } catch (failure: Exception) {
-            NotificationGroupManager.getInstance()
-                .getNotificationGroup(VarroProjectService.NOTIFICATION_GROUP)
-                .createNotification("Varro", "Could not save Always Allow: ${failure.message}", NotificationType.ERROR)
-                .notify(this.project)
+            notify("Could not save Always Allow: ${failure.message}", NotificationType.ERROR)
             throw failure
         }
+
+    private fun notify(message: String, type: NotificationType) {
+        NotificationGroupManager.getInstance()
+            .getNotificationGroup(VarroProjectService.NOTIFICATION_GROUP)
+            .createNotification("Varro", message, type)
+            .notify(project)
+    }
 
     private val projectPermissionConfig by lazy { ProjectPermissionConfig(
         Path.of(project.guessProjectDir()?.path ?: project.basePath ?: error("Project has no workspace directory")),
@@ -137,12 +143,42 @@ class OpenCodeHostServices(
 
     // --- Automatic permission approval ----------------------------------------
 
-    private val judge = PermissionJudge({ settings.chatAutoApproveModel }, { method, path, body, timeout ->
-        server.transport.request(method, path, body, RequestOptions(timeoutMs = timeout)).data
-    }) { id ->
-        val store = varro.store.VarroStore.getInstance(project)
-        synchronized(store) { store.hiddenSessionIds = store.hiddenSessionIds + id }
-    }
+    private val decisionProviders = DecisionProviders(
+        settings = settings,
+        ui = object : DecisionProviders.Ui {
+            override fun promptApiKey(): String? {
+                var value: String? = null
+                ApplicationManager.getApplication().invokeAndWait({
+                    value = Messages.showPasswordDialog(project,
+                        "Paste a TypeSafe API key. Varro stores it in the IDE password safe.",
+                        "Connect TypeSafe Jev", null)
+                }, ModalityState.any())
+                return value
+            }
+
+            override fun showError(message: String) = notify(message, NotificationType.ERROR)
+
+            override fun showInfo(message: String) = notify(message, NotificationType.INFORMATION)
+        },
+        onChanged = {
+            ApplicationManager.getApplication().messageBus.syncPublisher(VarroSettings.TOPIC).settingsChanged()
+        },
+    )
+
+    override fun decisionProviders(method: String, body: JsonElement?): JsonObject =
+        if (method == "GET") decisionProviders.status() else decisionProviders.handle(body)
+
+    private val judge = PermissionJudge(
+        configuredModel = { settings.chatAutoApproveModel },
+        request = { method, path, body, timeout ->
+            server.transport.request(method, path, body, RequestOptions(timeoutMs = timeout)).data
+        },
+        hide = { id ->
+            val store = varro.store.VarroStore.getInstance(project)
+            synchronized(store) { store.hiddenSessionIds = store.hiddenSessionIds + id }
+        },
+        jev = JevDecisions(JevClient(decisionProviders::apiKey), decisionProviders::readSettings, decisionProviders::hasApiKey),
+    )
 
     override fun judgePermission(body: JsonElement?): JsonObject = judge.judge(body)
 

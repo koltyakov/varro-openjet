@@ -52,6 +52,12 @@
     ]]></description>
 
     <change-notes><![CDATA[
+        <h3>0.3.3</h3>
+        <p>Added TypeSafe Jev as an optional reviewer for Auto-mode permission requests, connected from
+            the Models view menu and stored in the IDE password safe, or read from
+            <code>TYPESAFE_API_KEY</code>. Jev reviews requests before the judge model and approves only
+            confident, low-risk actions. Everything else asks, and Jev errors fall back to the judge model.
+            Auto-approve activity now shows which model reviewed each request.</p>
         <h3>0.3.2</h3>
         <p>Added shared OpenCode server ownership across Varro family products, with ownership handoff
             and recovery after an IDE host exits. Closing a project now leaves its server available

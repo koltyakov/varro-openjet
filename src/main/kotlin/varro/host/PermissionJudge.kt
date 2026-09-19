@@ -1,15 +1,22 @@
 package varro.host
 
+import com.google.gson.JsonArray
 import com.google.gson.JsonElement
 import com.google.gson.JsonObject
+import com.intellij.openapi.diagnostic.Logger
 import varro.protocol.*
 
 class PermissionJudge(
     private val configuredModel: () -> String,
     private val request: (String, String, JsonElement?, Long) -> JsonElement?,
     private val hide: (String) -> Unit,
+    private val jev: JevDecisions? = null,
 ) {
-    fun model(fallback: JsonObject? = null): JsonObject? {
+    /** The reviewer the composer shows: Jev when it is enabled, otherwise the model judge. */
+    fun model(fallback: JsonObject? = null): JsonObject? =
+        jev?.takeIf { it.isAutoApproveEnabled() }?.model ?: judgeModel(fallback)
+
+    private fun judgeModel(fallback: JsonObject?): JsonObject? {
         val configured = configuredModel().trim()
         val selection = configured.ifEmpty {
             request("GET", "/config", null, 3000).asObjectOrNull().str("small_model").orEmpty()
@@ -27,6 +34,14 @@ class PermissionJudge(
         if (permission.text("sessionID") == null || type.isEmpty()) return ask("Missing permission context.")
         if (type in SAFE) return Json.obj("decision" to "allow", "reason" to "Known read-only or session-local tool.")
         if (type == "external_directory") return ask("External directory access requires approval.")
+        if (jev != null && jev.isAutoApproveEnabled()) {
+            try {
+                return jev.judgePermission(permission, input.arr("approvedReferences") ?: JsonArray())
+                    .apply { add("reviewerModel", jev.model) }
+            } catch (failure: Exception) {
+                log.warn("Jev permission judge failed; using model judge: ${failure.message}")
+            }
+        }
         var sessionId: String? = null
         val deadline = System.nanoTime() + 19_000_000_000L
         fun call(method: String, path: String, payload: JsonElement?): JsonElement? {
@@ -35,7 +50,7 @@ class PermissionJudge(
             return request(method, path, payload, remaining)
         }
         return try {
-            val selected = model(input.obj("model"))
+            val selected = judgeModel(input.obj("model"))
             sessionId = call("POST", "/session", Json.obj(
                 "title" to "varro:permission-judge", "parentID" to permission.str("sessionID"),
                 "permission" to Json.array(listOf(
@@ -53,7 +68,9 @@ class PermissionJudge(
                         "reason" to Json.obj("type" to "string"), "actionSummary" to Json.obj("type" to "string")),
                     "required" to listOf("decision", "reason", "actionSummary"))),
             ))
-            parseDecision(response)
+            parseDecision(response).apply {
+                if (selected != null) add("reviewerModel", Json.obj("providerID" to selected.str("providerID"), "modelID" to selected.str("modelID")))
+            }
         } catch (failure: Exception) {
             ask("Permission review failed: ${failure.message}")
         } finally {
@@ -62,6 +79,7 @@ class PermissionJudge(
     }
 
     companion object {
+        private val log = Logger.getInstance(PermissionJudge::class.java)
         private val SAFE = setOf("read", "list", "glob", "grep", "codesearch", "lsp", "todoread", "todowrite", "question")
         fun ask(reason: String) = Json.obj("decision" to "ask", "reason" to reason)
         fun parseDecision(response: JsonElement?): JsonObject {

@@ -40,6 +40,7 @@ object ApiRoutes {
         const val PERMISSION_SESSION_RULES = "$NAMESPACE/permission/session-rules"
         const val PERMISSION_SERVER_MEMORY = "$NAMESPACE/permission/server-memory"
         const val PERMISSION_PROJECT_ALLOW = "$NAMESPACE/permission/project-allow"
+        const val DECISION_PROVIDERS = "$NAMESPACE/decision-providers"
     }
 
     private const val MAX_PATH_LENGTH = 4096
@@ -251,6 +252,7 @@ object ApiRoutes {
         route(Endpoints.OPENCODE_CONFIG_MODEL_ROUTING, methodsNoQuery("POST")),
         route(Endpoints.OPENCODE_CONFIG_PERMISSIONS, methodsNoQuery("GET", "POST")),
         route(Endpoints.PERMISSION_JUDGE, methodsNoQuery("POST")),
+        route(Endpoints.DECISION_PROVIDERS, methodsNoQuery("GET", "POST")),
         route(Endpoints.PERMISSION_PROJECT_ALLOW) { request, _ ->
             request.method == "POST" && request.optionalDirectory()
         },

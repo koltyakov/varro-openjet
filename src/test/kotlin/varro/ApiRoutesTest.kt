@@ -32,6 +32,14 @@ class ApiRoutesTest {
     }
 
     @Test
+    fun `allows decision provider status and updates without a query`() {
+        assertTrue(ApiRoutes.isAllowed("GET", "/varro/decision-providers"))
+        assertTrue(ApiRoutes.isAllowed("POST", "/varro/decision-providers"))
+        assertFalse(ApiRoutes.isAllowed("DELETE", "/varro/decision-providers"))
+        assertFalse(ApiRoutes.isAllowed("GET", "/varro/decision-providers?x=1"))
+    }
+
+    @Test
     fun `rejects unknown routes and methods`() {
         assertFalse(ApiRoutes.isAllowed("GET", "/admin"))
         assertFalse(ApiRoutes.isAllowed("DELETE", "/global/health"))
