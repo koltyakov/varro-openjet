@@ -62,6 +62,14 @@ class VarroProjectService(private val project: Project) : Disposable {
     private val proxies = java.util.concurrent.ConcurrentHashMap<WebviewHost, RestProxy>()
     @Volatile private var focusedHost: WebviewHost? = null
 
+    /**
+     * The one surface that runs Full/Auto permission automation. Without an owner
+     * every webview only shows prompts; with several, each would judge and reply
+     * to the same request. The lease changes with the owner so stale replies lose.
+     */
+    @Volatile private var permissionOwner: WebviewHost? = null
+    @Volatile private var permissionLease = 0L
+
     private val started = AtomicBoolean(false)
     private val lastStatus = AtomicReference<ServerStatus>(ServerStatus.Stopped)
 
@@ -225,8 +233,10 @@ class VarroProjectService(private val project: Project) : Disposable {
             proxies.remove(host)?.dispose()
             if (focusedHost === host) focusedHost = null
             queue.detach(viewId)
+            reconcilePermissionOwner()
             broadcastEditorTabs()
         }
+        reconcilePermissionOwner()
         broadcastEditorTabs()
         host.reload()
         return host
@@ -323,6 +333,7 @@ class VarroProjectService(private val project: Project) : Disposable {
             addProperty("showTurnTimer", settings.chatShowTurnTimer)
             addProperty("desktopSessionPaneSide", settings.sessionPaneSide())
             addProperty("defaultPermissionMode", settings.permissionMode())
+            add("permissionAutomation", Json.obj("owner" to (permissionOwner?.viewId == viewId), "lease" to permissionLease))
             addProperty("chatFontSize", resolvedChatFontSize())
             addProperty("chatEditorFontSize", resolvedEditorFontSize())
             addProperty("chatFontFamily", settings.chatFontFamily)
@@ -457,6 +468,7 @@ class VarroProjectService(private val project: Project) : Disposable {
             when (type) {
                 "ready" -> {
                     host?.markReady()
+                    host?.post("permission-automation/update", permissionAutomation(host))
                     broadcast("server/status", lastStatus.get().toJson())
                     broadcast("context/update", context.context)
                     broadcastConfig()
@@ -1082,6 +1094,22 @@ class VarroProjectService(private val project: Project) : Disposable {
             }
         }, project.disposed)
     }
+
+    /** Prefers the tool window, then the current owner, matching upstream's sidebar-first rule. */
+    @Synchronized
+    private fun reconcilePermissionOwner() {
+        val current = permissionOwner
+        val next = panels.firstOrNull { it.surface == WebviewHost.Surface.SIDEBAR }
+            ?: current?.takeIf { it in panels }
+            ?: panels.firstOrNull()
+        if (next === current) return
+        permissionOwner = next
+        if (next != null) permissionLease++
+        panels.forEach { it.post("permission-automation/update", permissionAutomation(it)) }
+    }
+
+    private fun permissionAutomation(host: WebviewHost): JsonObject =
+        Json.obj("owner" to (host === permissionOwner), "lease" to permissionLease)
 
     private fun broadcastEditorTabs() = broadcast("editor-tabs/state", Json.obj(
         "open" to panels.any { it.surface == WebviewHost.Surface.EDITOR },

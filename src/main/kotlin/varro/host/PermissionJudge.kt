@@ -34,6 +34,8 @@ class PermissionJudge(
         if (permission.text("sessionID") == null || type.isEmpty()) return ask("Missing permission context.")
         if (type in SAFE) return Json.obj("decision" to "allow", "reason" to "Known read-only or session-local tool.")
         if (type == "external_directory") return ask("External directory access requires approval.")
+        // One budget covers Jev and the fallback so the webview's 20s review timeout never fires first.
+        val deadline = System.nanoTime() + 19_000_000_000L
         if (jev != null && jev.isAutoApproveEnabled()) {
             try {
                 return jev.judgePermission(permission, input.arr("approvedReferences") ?: JsonArray())
@@ -43,7 +45,6 @@ class PermissionJudge(
             }
         }
         var sessionId: String? = null
-        val deadline = System.nanoTime() + 19_000_000_000L
         fun call(method: String, path: String, payload: JsonElement?): JsonElement? {
             val remaining = (deadline - System.nanoTime()) / 1_000_000
             check(remaining > 0) { "Permission review timed out" }
