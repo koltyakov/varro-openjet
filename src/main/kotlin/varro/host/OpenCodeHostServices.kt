@@ -156,6 +156,7 @@ class OpenCodeHostServices(
 
     private val projectPermissionConfig by lazy { ProjectPermissionConfig(
         Path.of(project.guessProjectDir()?.path ?: project.basePath ?: error("Project has no workspace directory")),
+        native = { server.transport.apiVersion == 2 },
     ) }
     private fun projectPermissions() = projectPermissionConfig
 

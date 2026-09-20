@@ -19,7 +19,7 @@ object OpenCodeRequestScope {
 
     const val DIRECTORY_HEADER: String = "x-opencode-directory"
 
-    fun scope(baseUrl: String, path: String, directory: String?): ScopedRequest {
+    fun scope(baseUrl: String, path: String, directory: String?, legacyDirectoryDecoding: Boolean = false): ScopedRequest {
         // Guard against a webview-supplied path escaping to another origin.
         // `//host/path` is a protocol-relative URL, not a path.
         if (!path.startsWith("/") || path.startsWith("//")) {
@@ -71,6 +71,9 @@ object OpenCodeRequestScope {
             normalizedDirectory
         }
 
+        if (legacyDirectoryDecoding && !isApiPath) params["directory"]?.let { values ->
+            params["directory"] = values.map { it.replace("%", "%25") }.toMutableList()
+        }
         val query = buildQuery(params)
         val url = buildString {
             append(base.scheme).append("://").append(base.authority)
@@ -81,7 +84,7 @@ object OpenCodeRequestScope {
     }
 
     fun directoryHeaders(directory: String?): Map<String, String> =
-        if (directory.isNullOrEmpty()) emptyMap() else mapOf(DIRECTORY_HEADER to directory)
+        if (directory.isNullOrEmpty()) emptyMap() else mapOf(DIRECTORY_HEADER to encode(directory))
 
     /**
      * Trims trailing separators but otherwise preserves the original spelling.

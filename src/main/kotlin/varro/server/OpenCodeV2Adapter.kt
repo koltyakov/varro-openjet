@@ -20,13 +20,16 @@ internal class OpenCodeV2Adapter(
     private val failures = ConcurrentHashMap<String, JsonObject>()
     private val parents = ConcurrentHashMap<String, String>()
     private val submissions = Array(64) { Any() }
-    private val oauth = ConcurrentHashMap<String, Pair<String, String>>()
+    private data class OAuthAttempt(val integration: String, val id: String, val provider: String, val directory: String?)
+    private val oauth = ConcurrentHashMap<String, OAuthAttempt>()
+    private val backgroundWork = OpenCodeV2BackgroundWork()
 
-    fun reset() { permissions.clear(); forms.clear(); contexts.clear(); inputTypes.clear(); failures.clear(); parents.clear(); oauth.clear() }
+    fun reset() { permissions.clear(); forms.clear(); contexts.clear(); inputTypes.clear(); failures.clear(); parents.clear(); oauth.clear(); backgroundWork.reset() }
 
     fun events(event: JsonObject): List<JsonObject> {
         val type = event.str("type").orEmpty()
         val data = event.obj("data") ?: return emptyList()
+        backgroundWork.observe(type, data, event.obj("location").str("directory"))
         val sessionID = data.str("sessionID")
         val context = sessionID?.let { id -> contexts.compute(id) { _, old -> (old?.deepCopy() ?: Json.obj()).apply {
             (event.obj("location") ?: data.obj("location")).str("directory")?.let { addProperty("directory", it) }
@@ -45,10 +48,14 @@ internal class OpenCodeV2Adapter(
         if (type in setOf("form.replied", "form.cancelled")) data.str("id")?.let(forms::remove)
         for (map in listOf(contexts, failures)) while (map.size > 4096) map.keys.firstOrNull()?.let(map::remove)
         while (inputTypes.size > 4096) inputTypes.keys.firstOrNull()?.let(inputTypes::remove)
-        return OpenCodeV2Events.project(event, context)
+        return OpenCodeV2Events.project(event, context.deepCopy().apply {
+            addProperty("backgroundPending", sessionID?.let(backgroundWork::isWaiting) == true)
+            add("backgroundStartedAt", Json.toElement(sessionID?.let(backgroundWork::startedAt)))
+        })
     }
 
     fun request(method: String, path: String, body: JsonElement?, options: RequestOptions): OpenCodeResponse {
+        options.checkCancelled()
         val route = path.substringBefore('?')
         val query = path.substringAfter('?', "").split('&').filter { it.isNotEmpty() }.associate {
             decode(it.substringBefore('=')) to decode(it.substringAfter('=', ""))
@@ -57,7 +64,10 @@ internal class OpenCodeV2Adapter(
         val directory = (query["directory"] ?: options.directory)?.replace(Regex("^[a-z]:[\\\\/]")) { it.value.uppercase() }
         val input = body.asObjectOrNull() ?: Json.obj()
         fun scoped(target: String) = target + if (directory == null) "" else "${if ('?' in target) '&' else '?'}location%5Bdirectory%5D=${encode(directory)}"
-        fun raw(verb: String, target: String, payload: JsonElement? = null) = wire(verb, target, payload, options.copy(unscoped = true, captureNextCursor = false)).data
+        fun raw(verb: String, target: String, payload: JsonElement? = null): JsonElement? {
+            options.checkCancelled()
+            return wire(verb, target, payload, options.copy(unscoped = true, captureNextCursor = false)).data
+        }
         fun data(verb: String, target: String, payload: JsonElement? = null): JsonElement {
             val result = raw(verb, target, payload).asObjectOrNull()
             return result?.get("data") ?: error("Invalid OpenCode v2 response for ${target.substringBefore('?')}")
@@ -112,12 +122,19 @@ internal class OpenCodeV2Adapter(
                 val model = OpenCodeV2Projection.modelRef(config?.get("model")) ?: data("GET", scoped("/api/model/default")).asObjectOrNull()
                 return result(model?.let { Json.obj("providerID" to it.get("providerID"), "modelID" to it.get("id"), "variant" to it.get("variant")) })
             }
-            "/session/status" -> return result(Json.obj().apply {
-                data("GET", "/api/session/active").asObjectOrNull()?.entrySet()?.forEach { (id, status) ->
+            "/session/status" -> {
+                val version = backgroundWork.snapshotVersion()
+                val active = data("GET", "/api/session/active").asObjectOrNull() ?: error("Invalid OpenCode v2 active sessions")
+                val shells = objects(data("GET", scoped("/api/shell")))
+                val waiting = backgroundWork.reconcile(shells, active.keySet(), directory, version)
+                return result(Json.obj().apply {
+                active.entrySet().forEach { (id, status) ->
                     require(status.asObjectOrNull().str("type") == "running") { "Invalid OpenCode v2 active status" }
                     add(id, Json.obj("type" to "busy"))
-                } ?: error("Invalid OpenCode v2 active sessions")
-            })
+                }
+                waiting.forEach { add(it, Json.obj("type" to "busy", "background" to true, "backgroundStartedAt" to backgroundWork.startedAt(it))) }
+                })
+            }
             "/session", "/experimental/session" -> if (method == "GET") {
                 val params = query.filterKeys { it in setOf("limit", "search", "parentID", "cursor", "order") }.toMutableMap()
                 if (route == "/session" && directory != null) params["directory"] = directory
@@ -130,7 +147,7 @@ internal class OpenCodeV2Adapter(
                     "location" to directory?.let { Json.obj("directory" to it) })
                 if (input.hasNonNull("permission")) payload.add("permissions", OpenCodeV2Projection.rules(input.get("permission")))
                 val created = data("POST", "/api/session", payload).asJsonObject
-                input.str("parentID")?.let { annotations.update(created.str("id")!!, Json.obj("parentID" to it)) }
+                input.str("parentID")?.let { annotations.update(created.str("id")!!, Json.obj("parentID" to it), options::checkCancelled) }
                 return result(session(created))
             }
             "/permission" -> {
@@ -208,14 +225,20 @@ internal class OpenCodeV2Adapter(
                     })
                     val patch = Json.obj()
                     for (key in listOf("metadata", "time")) if (input.has(key)) patch.add(key, input.get(key))
-                    if (patch.size() > 0) annotations.update(id, patch)
+                    if (patch.size() > 0) annotations.update(id, patch, options::checkCancelled)
                     return result(session(data("GET", endpoint).asJsonObject))
                 }
             }
             when (action) {
                 "children" -> return result(objects(data("GET", "/api/session?parentID=${encode(id)}&limit=1000")).map(::session))
                 "message" -> if (method == "GET") return messages(id, directory, query, options)
-                "abort", "summarize" -> { raw("POST", "$endpoint/${if (action == "abort") "interrupt" else "compact"}", Json.obj()); return result(true) }
+                "abort", "summarize" -> {
+                    if (action == "abort" && backgroundWork.isWaiting(id)) {
+                        backgroundWork.shellIDs(id).forEach { raw("DELETE", scoped("/api/shell/${encode(it)}")) }
+                        backgroundWork.clearSession(id)
+                    }
+                    raw("POST", "$endpoint/${if (action == "abort") "interrupt" else "compact"}", Json.obj()); return result(true)
+                }
                 "fork" -> return result(session(data("POST", "$endpoint/fork", Json.obj("before" to input.get("messageID"))).asJsonObject))
                 "revert" -> { raw("POST", "$endpoint/revert/stage", Json.obj("messageID" to input.get("messageID"), "files" to true)); return result(session(data("GET", endpoint).asJsonObject)) }
                 "unrevert" -> { raw("DELETE", "$endpoint/revert"); return result(session(data("GET", endpoint).asJsonObject)) }
@@ -285,9 +308,9 @@ internal class OpenCodeV2Adapter(
             if (method == "DELETE") { authenticate(key, "", method, input, directory, options, integration); return result(Json.obj("success" to true)) }
             if (action == "callback") { authenticate(key, "callback", "POST", input, directory, options, integration); return result(request("GET", "/mcp", null, options).data.asObjectOrNull()?.get(name)) }
             val authorization = authenticate(key, "authorize", "POST", input, directory, options, integration).asJsonObject
-            if (action != "authenticate") return result(Json.obj("authorizationUrl" to authorization.get("url"), "oauthState" to oauth[key]?.second))
+            if (action != "authenticate") return result(Json.obj("authorizationUrl" to authorization.get("url"), "oauthState" to authorization.get("attemptID")))
             com.intellij.ide.BrowserUtil.browse(authorization.str("url") ?: error("Missing MCP authentication URL"))
-            authenticate(key, "callback", "POST", Json.obj(), directory, options, integration)
+            authenticate(key, "callback", "POST", Json.obj("attemptID" to authorization.get("attemptID")), directory, options, integration)
             return result(true)
         }
         error("OpenCode v2 does not support this Varro operation: $method $route")
@@ -363,7 +386,9 @@ internal class OpenCodeV2Adapter(
         val ids = messages.map { it.obj("info").str("id") }.toMutableSet()
         inbox.sortedBy { it.obj("time").long("created") ?: 0 }.forEach { item ->
             if (item.str("type") == "user" && ids.add(item.str("id"))) messages.add(OpenCodeV2Projection.message(
-                (item.obj("payload") ?: Json.obj()).deepCopy().apply { add("id", item.get("id")); addProperty("type", "user"); add("time", item.get("time")) }, id, directory.orEmpty(), context = context))
+                (item.obj("payload") ?: Json.obj()).deepCopy().apply { add("id", item.get("id")); addProperty("type", "user"); add("time", item.get("time")) }, id, directory.orEmpty(), context = context).apply {
+                    obj("info")!!.add("pendingDelivery", item.get("delivery"))
+                })
         }
         return OpenCodeResponse(Json.array(messages), if (options.captureNextCursor) cursor else null)
     }
@@ -411,6 +436,13 @@ internal class OpenCodeV2Adapter(
                     "capabilities" to Json.obj("tools" to true, "input" to listOf("text"), "output" to listOf("text")), "limit" to Json.obj("context" to 0, "output" to 0))
                 target.obj("models").obj(modelID)?.entrySet()?.forEach { normalized.add(it.key, it.value) }
                 model.entrySet().forEach { normalized.add(it.key, it.value) }
+                val existing = target.obj("models").obj(modelID)
+                normalized.add("cost", if (model.hasNonNull("cost")) OpenCodeV2Projection.modelCost(model.get("cost"))
+                    else existing?.get("cost") ?: OpenCodeV2Projection.modelCost(null))
+                normalized.add("limit", Json.obj("context" to 0, "output" to 0).apply {
+                    existing.obj("limit")?.entrySet()?.forEach { add(it.key, it.value) }
+                    model.obj("limit")?.entrySet()?.forEach { add(it.key, it.value) }
+                })
                 normalized.addProperty("enabled", model.bool("disabled") != true)
                 if (model.arr("variants") != null) normalized.add("variants", Json.obj().apply { model.arr("variants")!!.forEach { add(it.asObjectOrNull().str("id"), it) } })
                 if (!normalized.has("variants")) normalized.add("variants", Json.obj())
@@ -423,13 +455,20 @@ internal class OpenCodeV2Adapter(
     }
 
     private fun authenticate(provider: String, action: String, method: String, input: JsonObject, directory: String?, options: RequestOptions, override: String? = null): JsonElement {
-        fun raw(verb: String, path: String, body: JsonElement? = null) = wire(verb, path + directory?.let { "?location%5Bdirectory%5D=${encode(it)}" }.orEmpty(), body, options.copy(unscoped = true)).data
+        fun raw(verb: String, path: String, body: JsonElement? = null): JsonElement? {
+            options.checkCancelled()
+            return wire(verb, path + directory?.let { "?location%5Bdirectory%5D=${encode(it)}" }.orEmpty(), body, options.copy(unscoped = true)).data
+        }
         fun data(verb: String, path: String, body: JsonElement? = null) = raw(verb, path, body).asObjectOrNull()?.get("data") ?: error("Invalid OpenCode authentication response")
         var integration = override ?: provider
         if (override == null) try { data("GET", "/api/provider/${encode(provider)}").asObjectOrNull().str("integrationID")?.let { integration = it } }
         catch (failure: Exception) { if (failure.message?.startsWith("404 ") != true) throw failure }
         val base = "/api/integration/${encode(integration)}"
-        if (method == "PUT" && input.str("type") == "api") { raw("POST", "$base/connect/key", Json.obj("key" to input.get("key"))); return Json.toElement(true) }
+        if (method == "PUT" && input.str("type") == "api") {
+            val form = data("GET", base).asObjectOrNull().arr("methods").orEmpty().mapNotNull { it.asObjectOrNull() }.firstOrNull { it.str("type") == "key" }.arr("form")
+            raw("POST", "$base/connect/key", Json.obj("key" to input.get("key"), "answer" to authAnswers(form, input.get("metadata"))))
+            return Json.toElement(true)
+        }
         if (method == "DELETE") {
             val connections = data("GET", base).asObjectOrNull().arr("connections").orEmpty().mapNotNull { it.asObjectOrNull() }
             val credentials = connections.filter { it.str("type") == "credential" }
@@ -441,45 +480,83 @@ internal class OpenCodeV2Adapter(
             val methods = data("GET", base).asObjectOrNull().arr("methods").orEmpty().mapNotNull { it.asObjectOrNull() }.filter { it.str("type") in setOf("key", "oauth") }
             val selected = methods.getOrNull(input.int("method") ?: 0)
             require(selected.str("type") == "oauth") { "Unsupported OpenCode authentication method" }
-            val answer = input.obj("inputs")?.deepCopy() ?: Json.obj()
-            selected.arr("form").orEmpty().mapNotNull { it.asObjectOrNull() }.forEach { field ->
-                val key = field.str("key") ?: return@forEach
-                if (field.str("type") == "external" || field.bool("hidden") != true || answer.has(key)) return@forEach
-                val excluded = field.arr("when").orEmpty().any { entry ->
-                    val condition = entry.asObjectOrNull()
-                    val equal = answer.get(condition.str("key")) == condition?.get("value")
-                    if (condition.str("op") == "eq") !equal else equal
-                }
-                if (!excluded && field.has("default")) answer.add(key, field.get("default"))
-            }
-            val attempt = data("POST", "$base/connect/oauth", Json.obj("methodID" to selected?.get("id"), "answer" to if (answer.size() > 0) answer else input.get("inputs"))).asObjectOrNull()
-            oauth[provider] = integration to (attempt.str("attemptID") ?: error("Invalid OpenCode OAuth attempt"))
-            return Json.obj("url" to attempt?.get("url"), "method" to if (attempt.str("mode") == "code") "code" else "auto", "instructions" to attempt.str("instructions").orEmpty())
+            val attempt = data("POST", "$base/connect/oauth", Json.obj("methodID" to selected?.get("id"), "answer" to authAnswers(selected.arr("form"), input.get("inputs")))).asObjectOrNull()
+            val id = attempt.str("attemptID") ?: error("Invalid OpenCode OAuth attempt")
+            oauth[id] = OAuthAttempt(integration, id, provider, directory)
+            return Json.obj("attemptID" to id, "url" to attempt?.get("url"), "method" to if (attempt.str("mode") == "code") "code" else "auto", "instructions" to attempt.str("instructions").orEmpty())
         }
         if (action == "callback") {
-            val attempt = oauth[provider] ?: error("OpenCode OAuth attempt was not started")
-            val endpoint = "/api/integration/${encode(attempt.first)}/connect/oauth/${encode(attempt.second)}"
-            if (input.hasNonNull("code")) raw("POST", "$endpoint/complete", Json.obj("code" to input.get("code")))
-            val deadline = System.currentTimeMillis() + 300_000
-            while (true) {
-                val status = data("GET", endpoint).asObjectOrNull()
-                if (status.str("status") == "complete") break
-                require(status.str("status") == "pending" && System.currentTimeMillis() < deadline) { status.str("message") ?: "OpenCode authentication did not complete" }
-                Thread.sleep(500)
+            val candidates = oauth.values.filter { it.provider == provider && it.directory == directory }
+            val attempt = (input.str("attemptID")?.let { id -> candidates.firstOrNull { it.id == id } }
+                ?: if (!input.hasNonNull("attemptID")) candidates.singleOrNull() else null) ?: error("OpenCode OAuth attempt was not started")
+            val endpoint = "/api/integration/${encode(attempt.integration)}/connect/oauth/${encode(attempt.id)}"
+            var completed = false
+            try {
+                if (input.hasNonNull("code")) raw("POST", "$endpoint/complete", Json.obj("code" to input.get("code")))
+                val deadline = System.currentTimeMillis() + 300_000
+                while (true) {
+                    val status = data("GET", endpoint).asObjectOrNull()
+                    options.checkCancelled()
+                    if (status.str("status") == "complete") break
+                    require(status.str("status") == "pending" && System.currentTimeMillis() < deadline) { status.str("message") ?: "OpenCode authentication did not complete" }
+                    Thread.sleep(500)
+                }
+                completed = true
+                return Json.toElement(true)
+            } finally {
+                oauth.remove(attempt.id, attempt)
+                if (!completed) runCatching {
+                    wire("DELETE", endpoint + directory?.let { "?location%5Bdirectory%5D=${encode(it)}" }.orEmpty(), null,
+                        options.copy(unscoped = true, isCancelled = { false }, timeoutMs = 5_000))
+                }
             }
-            oauth.remove(provider)
-            return Json.toElement(true)
         }
         error("This credential operation requires OpenCode v2 credential management")
     }
 
     private fun authMethods(integration: JsonObject?) = Json.array(integration.arr("methods").orEmpty().mapNotNull { it.asObjectOrNull() }
         .filter { it.str("type") in setOf("oauth", "key") }.map { method -> Json.obj("type" to if (method.str("type") == "key") "api" else "oauth", "label" to (method.str("label") ?: "API key"),
-            "prompts" to method.arr("form").orEmpty().mapNotNull { it.asObjectOrNull() }.filter { it.str("type") != "external" && it.bool("hidden") != true }.map { field ->
+            "prompts" to method.arr("form").orEmpty().mapNotNull { it.asObjectOrNull() }.filter { it.str("type") != "external" }.map { field ->
                 Json.obj("key" to field.get("key"), "message" to (field.str("title") ?: field.str("description") ?: field.str("key")),
-                    "type" to if (field.str("type") == "string" && field.has("options")) "select" else "text", "options" to field.arr("options")?.map { option ->
-                        Json.obj("label" to option.asObjectOrNull().str("label"), "value" to option.asObjectOrNull()?.get("value"), "hint" to option.asObjectOrNull().str("description")) })
+                    "required" to (field.bool("required") == true), "hidden" to field.get("hidden"),
+                    "default" to field.get("default")?.takeIf { it.isJsonPrimitive }?.asString,
+                    "placeholder" to field.get("placeholder"), "when" to field.arr("when")?.map { condition -> condition.asJsonObject.deepCopy().apply { addProperty("value", get("value").asString) } },
+                    "type" to if (field.str("type") == "boolean" || (field.str("type") == "string" && field.has("options"))) "select" else "text",
+                    "options" to if (field.str("type") == "boolean") listOf(Json.obj("value" to "true", "label" to "Yes"), Json.obj("value" to "false", "label" to "No"))
+                    else field.arr("options")?.map { option ->
+                        Json.obj("label" to option.asObjectOrNull().str("label"), "value" to option.asObjectOrNull()?.get("value")?.asString, "hint" to option.asObjectOrNull().str("description")) })
             }) })
+
+    private fun authAnswers(form: JsonArray?, value: JsonElement?): JsonElement? {
+        val answer = value.asObjectOrNull()?.deepCopy() ?: Json.obj()
+        val fields = form.orEmpty().mapNotNull { it.asObjectOrNull() }
+        fields.forEach { field ->
+            val key = field.str("key") ?: return@forEach
+            val input = answer.get(key)?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isString }?.asString ?: return@forEach
+            when (field.str("type")) {
+                "boolean" -> {
+                    require(input in setOf("true", "false")) { "Invalid boolean answer for ${field.str("title") ?: key}" }
+                    answer.addProperty(key, input == "true")
+                }
+                "number", "integer" -> {
+                    val number = input.toDoubleOrNull()
+                    require(number != null && number.isFinite() && (field.str("type") != "integer" || number % 1.0 == 0.0)) { "Invalid ${field.str("type")} answer for ${field.str("title") ?: key}" }
+                    answer.addProperty(key, number)
+                }
+            }
+        }
+        fields.forEach { field ->
+            val key = field.str("key") ?: return@forEach
+            if (field.str("type") == "external" || field.bool("hidden") != true || answer.has(key)) return@forEach
+            val excluded = field.arr("when").orEmpty().any { entry ->
+                val condition = entry.asObjectOrNull()
+                val equal = answer.get(condition.str("key")) == condition?.get("value")
+                if (condition.str("op") == "eq") !equal else equal
+            }
+            if (!excluded && field.has("default")) answer.add(key, field.get("default"))
+        }
+        return if (answer.size() > 0) answer else value
+    }
 
     companion object {
         private fun objects(value: JsonElement?): List<JsonObject> = value.asArrayOrNull()?.map { it.asObjectOrNull() ?: error("Invalid OpenCode v2 record") } ?: error("Invalid OpenCode v2 list")

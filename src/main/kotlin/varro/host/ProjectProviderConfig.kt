@@ -7,7 +7,7 @@ import java.nio.file.Path
 
 /** Workspace policy for automatically discovered V2 providers. */
 internal class ProjectProviderConfig(private val directory: Path) {
-    fun path(): Path = directory.resolve("opencode.jsonc").takeIf(Files::exists) ?: directory.resolve("opencode.json")
+    fun path(): Path = ProjectConfigPath.resolve(directory, native = true)
 
     @Synchronized fun disable(providerID: String) {
         require(providerID in setOf("ollama", "lmstudio", "vllm")) { "Invalid local provider" }

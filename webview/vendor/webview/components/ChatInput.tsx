@@ -224,6 +224,7 @@ import {
   QueuedMessages,
   type QueuedMessageItem,
 } from './chat-input/QueuedMessages';
+import { getUserMessageEditText } from './message/UserMessageContent';
 import { UsageLimitBanner } from './chat-input/UsageLimitBanner';
 import {
   estimateContextBreakdown,
@@ -1578,9 +1579,18 @@ export function ChatInput(props: { newSession?: boolean; onBeforeSend?: () => vo
   const skillCommands = createMemo(() =>
     state.commands.filter((command) => command.source === 'skill')
   );
+  const composerBackgroundPending = createMemo(() => {
+    const sessionId = composerSessionId();
+    if (props.newSession || !sessionId) return false;
+    const rootId = getSessionTreeRootId(sessionId) || sessionId;
+    return [rootId, sessionId, ...getSessionTreeIds(rootId)].some((id) => {
+      const status = state.sessionStatus[id];
+      return status?.type === 'busy' && status.background === true;
+    });
+  });
   const latestAssistantResponseIsTerminal = createMemo(() => {
     const sessionId = composerSessionId();
-    if (!sessionId) return false;
+    if (!sessionId || composerBackgroundPending()) return false;
     for (let index = state.messages.length - 1; index >= 0; index -= 1) {
       const message = state.messages[index];
       if (!message || message.info.sessionID !== sessionId) continue;
@@ -4261,7 +4271,7 @@ export function ChatInput(props: { newSession?: boolean; onBeforeSend?: () => vo
         latestAssistant &&
         (!!latestAssistant.time.completed || !!latestAssistant.error) &&
         (!isContinuationAssistantFinish(latestAssistant.finish) || !!latestAssistant.error);
-      if (terminalAssistantSettled) return null;
+      if (terminalAssistantSettled && !composerBackgroundPending()) return null;
 
       const incompleteAssistant =
         latestAssistant && !latestAssistant.time.completed && !latestAssistant.error;
@@ -4694,6 +4704,38 @@ export function ChatInput(props: { newSession?: boolean; onBeforeSend?: () => vo
       : []
   );
 
+  const pendingSteersForSession = createMemo(() => {
+    const deliveredIds = new Set(
+      state.messages
+        .filter((entry) => entry.info.role === 'user' && !entry.info.pendingDelivery)
+        .map((entry) => entry.info.id)
+    );
+    const queued = queuedForSession().filter(
+      (item) => steeringQueuedMessageIds().has(item.id) && !deliveredIds.has(item.messageId ?? '')
+    );
+    const queuedMessageIds = new Set(queued.map((item) => item.messageId));
+    return [
+      ...queued,
+      ...state.messages
+        .filter(
+          (entry) =>
+            entry.info.sessionID === composerSessionId() &&
+            entry.info.role === 'user' &&
+            entry.info.pendingDelivery === 'steer' &&
+            !queuedMessageIds.has(entry.info.id)
+        )
+        .map((entry) => ({
+          id: entry.info.id,
+          sessionId: entry.info.sessionID,
+          text:
+            getUserMessageEditText(entry.parts) ||
+            entry.parts
+              .flatMap((part) => (part.type === 'file' ? [part.filename || 'Attachment'] : []))
+              .join(', '),
+        })),
+    ];
+  });
+
   const selectedAgentLabel = () => {
     const name = state.selectedAgent;
     if (!name) return 'Agent';
@@ -4751,11 +4793,14 @@ export function ChatInput(props: { newSession?: boolean; onBeforeSend?: () => vo
 
       <Show
         when={
-          !hasExpandedDiffOverlay() && queuedForSession().length > 0 && !composerEditingMessage()
+          !hasExpandedDiffOverlay() &&
+          (queuedForSession().length > 0 || pendingSteersForSession().length > 0) &&
+          !composerEditingMessage()
         }
       >
         <QueuedMessages
-          items={queuedForSession()}
+          items={queuedForSession().filter((item) => !steeringQueuedMessageIds().has(item.id))}
+          pendingSteers={pendingSteersForSession()}
           dispatchingItemId={dispatchingQueuedMessageId()}
           failedDispatchItemIds={failedQueuedMessageIds()}
           steeringItemIds={steeringQueuedMessageIds()}

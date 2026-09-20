@@ -60,13 +60,18 @@ internal object OpenCodeV2Projection {
         add("options", value.obj("request").obj("body") ?: Json.obj())
     }
 
-    fun model(value: JsonObject) = value.deepCopy().apply {
-        val costs = value.arr("cost").orEmpty().mapNotNull { it.asObjectOrNull() }
+    fun modelCost(value: JsonElement?): JsonObject {
+        val costs = (value.asArrayOrNull()?.toList() ?: listOfNotNull(value)).mapNotNull { it.asObjectOrNull() }
         val cost = costs.firstOrNull { !it.hasNonNull("tier") } ?: costs.firstOrNull()
-        add("api", Json.obj("id" to value.get("modelID"), "npm" to value.str("package").orEmpty(), "url" to ""))
-        add("cost", Json.obj("input" to (cost.num("input") ?: 0), "output" to (cost.num("output") ?: 0),
+        return Json.obj("input" to (cost.num("input") ?: 0), "output" to (cost.num("output") ?: 0),
             "cache_read" to (cost.obj("cache").num("read") ?: 0), "cache_write" to (cost.obj("cache").num("write") ?: 0),
-            "cache" to cost.obj("cache"), "tiers" to costs.filter { it.hasNonNull("tier") }))
+            "cache" to Json.obj("read" to (cost.obj("cache").num("read") ?: 0), "write" to (cost.obj("cache").num("write") ?: 0)),
+            "tiers" to costs.filter { it.hasNonNull("tier") })
+    }
+
+    fun model(value: JsonObject) = value.deepCopy().apply {
+        add("api", Json.obj("id" to value.get("modelID"), "npm" to value.str("package").orEmpty(), "url" to ""))
+        add("cost", modelCost(value.get("cost")))
         add("variants", JsonObject().apply { value.arr("variants").orEmpty().forEach { v -> v.asObjectOrNull().str("id")?.let { add(it, v) } } })
         add("options", value.obj("settings") ?: Json.obj())
         value.obj("time").long("released")?.takeIf { it > 0 }?.let {

@@ -13,6 +13,7 @@ internal object OpenCodeV2Events {
             "workspaceDirectory" to ((event.obj("location") ?: data.obj("location")).str("directory") ?: context.str("directory")))
         fun emit(name: String, props: JsonObject = properties) = base.deepCopy().apply { addProperty("type", name); add("properties", props) }
         fun next(props: JsonObject = properties) = listOf(emit(type.replaceFirst("session.", "session.next."), props))
+        val background = Json.obj("type" to "busy", "background" to true, "backgroundStartedAt" to context.get("backgroundStartedAt"))
         when (type) {
             "server.connected" -> return listOf(emit(type))
             "session.created" -> return listOf(emit(type, Json.obj("info" to data.deepCopy().apply {
@@ -22,8 +23,8 @@ internal object OpenCodeV2Events {
             "session.renamed" -> return listOf(emit("session.updated", Json.obj("info" to Json.obj("id" to sessionID, "title" to data.get("title"), "time" to Json.obj("updated" to event.get("created"))))))
             "session.deleted" -> return listOf(emit(type, Json.obj("sessionID" to sessionID, "info" to Json.obj("id" to sessionID))))
             "session.status.updated" -> return listOf(emit("session.status"))
-            "session.execution.started" -> return listOf(emit("session.status", Json.obj("sessionID" to sessionID, "status" to Json.obj("type" to "busy"))))
-            "session.execution.succeeded", "session.execution.interrupted" -> return listOf(emit("session.status", Json.obj("sessionID" to sessionID, "status" to Json.obj("type" to "idle"))))
+            "session.execution.started" -> return listOf(emit("session.status", Json.obj("sessionID" to sessionID, "status" to if (context.bool("backgroundPending") == true) background else Json.obj("type" to "busy"))))
+            "session.execution.succeeded", "session.execution.interrupted" -> return listOf(emit("session.status", Json.obj("sessionID" to sessionID, "status" to if (context.bool("backgroundPending") == true) background else Json.obj("type" to "idle"))))
             "session.execution.failed" -> {
                 val result = mutableListOf<JsonObject>()
                 if (context.bool("hasAssistant") != true && event.str("id") != null) {
@@ -65,7 +66,8 @@ internal object OpenCodeV2Events {
         if (type.startsWith("session.step.")) return next(properties.apply {
             if (type == "session.step.started" && data.num("started") != null) add("timestamp", data.get("started"))
             add("model", data.obj("model")?.deepCopy()?.apply { add("modelID", get("id")) }); addProperty("executionContinues", true)
-        })
+        }) + if (type == "session.step.ended" && context.bool("backgroundPending") == true)
+            listOf(emit("session.status", Json.obj("sessionID" to sessionID, "status" to background)).apply { addProperty("id", "${event.str("id")}:waiting"); remove("seq") }) else emptyList()
         if (Regex("^session\\.(compaction|revert)\\.").containsMatchIn(type) || type in setOf("session.synthetic", "session.moved")) return next()
         return if (sessionID.isNotEmpty() && event.obj("durable").long("seq") != null)
             listOf(emit("session.next.context.updated", Json.obj("sessionID" to sessionID)).apply { addProperty("sequenceOnly", true) }) else emptyList()

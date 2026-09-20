@@ -16,16 +16,17 @@ internal class OpenCodeGlobalConfig(private val directory: Path) {
         } else Json.obj()
         val native = listOf("agents", "permissions", "providers", "commands", "plugins").any(document::has)
         patch.entrySet().forEach { (key, value) ->
-            if (native && key == "small_model") {
+            if (key == "small_model" && if (value.asString.isEmpty()) document.obj("agents").obj("title").hasNonNull("model") else native) {
                 val agents = document.obj("agents") ?: Json.obj().also { document.add("agents", it) }
                 val title = agents.obj("title") ?: Json.obj().also { agents.add("title", it) }
                 if (value.asString.isEmpty()) title.remove("model") else title.add("model", value)
             } else if (key == "agent") {
-                val targetKey = if (native) "agents" else "agent"
-                val agents = document.obj(targetKey) ?: Json.obj().also { document.add(targetKey, it) }
                 value.asJsonObject.entrySet().forEach { (name, fields) ->
-                    val agent = agents.obj(name) ?: Json.obj().also { agents.add(name, it) }
                     fields.asJsonObject.entrySet().forEach { (field, setting) ->
+                        val useNative = if (field == "model" && setting.asString.isEmpty()) document.obj("agents").obj(name).hasNonNull("model") else native
+                        val targetKey = if (useNative) "agents" else "agent"
+                        val agents = document.obj(targetKey) ?: Json.obj().also { document.add(targetKey, it) }
+                        val agent = agents.obj(name) ?: Json.obj().also { agents.add(name, it) }
                         if (field == "model" && setting.asString.isEmpty()) agent.remove(field) else agent.add(field, setting)
                     }
                 }

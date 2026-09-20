@@ -11,6 +11,7 @@ import {
 import { Portal } from 'solid-js/web';
 import type {
   ProviderAuthMethod,
+  ProviderAuthAuthorization,
   ProviderAuthPromptSelect,
   ProviderAuthPromptText,
 } from '../../shared/opencode-types';
@@ -43,15 +44,13 @@ export function ProviderConnectionDialog(props: {
   const [inputs, setInputs] = createSignal<Record<string, string>>({});
   const [apiKey, setApiKey] = createSignal('');
   const [authorizationCode, setAuthorizationCode] = createSignal('');
-  const [authorization, setAuthorization] = createSignal<{
-    url: string;
-    method: 'auto' | 'code';
-    instructions: string;
-  } | null>(null);
+  const [authorization, setAuthorization] = createSignal<ProviderAuthAuthorization | null>(null);
   const [isSubmitting, setIsSubmitting] = createSignal(false);
   const [errorMessage, setErrorMessage] = createSignal('');
   let authController: AbortController | undefined;
   let initialProviderApplied = false;
+
+  onCleanup(() => authController?.abort(new Error('Provider authorization cancelled')));
 
   const providers = createMemo(() => {
     if (props.isLoadingProviders) return [];
@@ -84,9 +83,10 @@ export function ProviderConnectionDialog(props: {
     const index = methodIndex();
     return index === null ? undefined : selectedProvider()?.methods[index];
   });
-  const visiblePrompts = createMemo(() =>
-    (selectedMethod()?.prompts ?? []).filter((prompt) => promptIsVisible(prompt, inputs()))
-  );
+  const visiblePrompts = createMemo(() => {
+    const prompts = selectedMethod()?.prompts ?? [];
+    return prompts.filter((prompt) => !prompt.hidden && promptIsVisible(prompt, inputs(), prompts));
+  });
 
   function close() {
     authController?.abort(new Error('Provider authorization cancelled'));
@@ -144,7 +144,13 @@ export function ProviderConnectionDialog(props: {
   function chooseMethod(index: number) {
     authController?.abort(new Error('Provider authorization cancelled'));
     setMethodIndex(index);
-    setInputs({});
+    setInputs(
+      Object.fromEntries(
+        (selectedMethod()?.prompts ?? []).flatMap((prompt) =>
+          !prompt.hidden && prompt.default !== undefined ? [[prompt.key, prompt.default]] : []
+        )
+      )
+    );
     setApiKey('');
     setAuthorization(null);
     setAuthorizationCode('');
@@ -173,6 +179,7 @@ export function ProviderConnectionDialog(props: {
   }
 
   async function connect() {
+    if (isSubmitting()) return;
     const id = providerID();
     const index = methodIndex();
     const method = selectedMethod();
@@ -214,7 +221,11 @@ export function ProviderConnectionDialog(props: {
       }
       if (nextAuthorization.method === 'auto') {
         const connected = await client.config.completeProviderAuth(
-          { providerID: id, method: index },
+          {
+            providerID: id,
+            method: index,
+            attemptID: nextAuthorization.attemptID,
+          },
           { signal: controller.signal }
         );
         if (controller.signal.aborted) return;
@@ -227,12 +238,15 @@ export function ProviderConnectionDialog(props: {
         setErrorMessage(error instanceof Error ? error.message : String(error));
       }
     } finally {
-      if (authController === controller) authController = undefined;
-      setIsSubmitting(false);
+      if (authController === controller) {
+        authController = undefined;
+        setIsSubmitting(false);
+      }
     }
   }
 
   async function submitCode() {
+    if (isSubmitting()) return;
     const id = providerID();
     const index = methodIndex();
     const code = authorizationCode().trim();
@@ -243,7 +257,12 @@ export function ProviderConnectionDialog(props: {
     authController = controller;
     try {
       const connected = await client.config.completeProviderAuth(
-        { providerID: id, method: index, code },
+        {
+          providerID: id,
+          method: index,
+          code,
+          attemptID: authorization()?.attemptID,
+        },
         { signal: controller.signal }
       );
       if (controller.signal.aborted) return;
@@ -255,8 +274,10 @@ export function ProviderConnectionDialog(props: {
         setErrorMessage(error instanceof Error ? error.message : String(error));
       }
     } finally {
-      if (authController === controller) authController = undefined;
-      setIsSubmitting(false);
+      if (authController === controller) {
+        authController = undefined;
+        setIsSubmitting(false);
+      }
     }
   }
 
@@ -816,12 +837,22 @@ function PromptSelect(props: {
 
 function promptIsVisible(
   prompt: NonNullable<ProviderAuthMethod['prompts']>[number],
-  inputs: Record<string, string>
-) {
+  inputs: Record<string, string>,
+  prompts: NonNullable<ProviderAuthMethod['prompts']>,
+  visited = new Set<string>()
+): boolean {
+  if (visited.has(prompt.key)) return false;
   if (!prompt.when) return true;
+  const nextVisited = new Set(visited).add(prompt.key);
   const conditions = Array.isArray(prompt.when) ? prompt.when : [prompt.when];
   return conditions.every((condition) => {
-    const matches = inputs[condition.key] === condition.value;
+    const dependency = prompts.find((entry) => entry.key === condition.key && entry.hidden);
+    const value = dependency
+      ? promptIsVisible(dependency, inputs, prompts, nextVisited)
+        ? dependency.default
+        : undefined
+      : inputs[condition.key];
+    const matches = value === condition.value;
     return condition.op === 'eq' ? matches : !matches;
   });
 }

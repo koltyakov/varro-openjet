@@ -40,7 +40,12 @@ data class RequestOptions(
     /** Override the directory this request is scoped to. */
     val directory: String? = null,
     val timeoutMs: Long? = null,
-)
+    val isCancelled: () -> Boolean = { false },
+) {
+    fun checkCancelled() {
+        if (isCancelled()) throw java.util.concurrent.CancellationException("OpenCode request cancelled")
+    }
+}
 
 /**
  * REST and SSE transport for the OpenCode server.
@@ -159,12 +164,13 @@ class OpenCodeTransport(
     }
 
     private fun performRequest(method: String, path: String, body: JsonElement?, options: RequestOptions): OpenCodeResponse {
+        options.checkCancelled()
         val directory = if (options.unscoped) {
             null
         } else {
             options.directory ?: workspaceDirectoryForRequest(method, path)
         }
-        val scoped = OpenCodeRequestScope.scope(getUrl(), path, directory)
+        val scoped = OpenCodeRequestScope.scope(getUrl(), path, directory, legacyDirectoryDecoding = apiVersion == 1)
 
         val normalizedMethod = method.uppercase()
         val builder = HttpRequest.newBuilder(URI.create(scoped.url))
@@ -184,8 +190,16 @@ class OpenCodeTransport(
         val future = client.sendAsync(builder.build(), HttpResponse.BodyHandlers.ofInputStream())
         inFlight.add(future)
         val response = try {
-            future.join()
+            var received: HttpResponse<InputStream>? = null
+            while (received == null) {
+                options.checkCancelled()
+                try { received = future.get(100, java.util.concurrent.TimeUnit.MILLISECONDS) }
+                catch (_: java.util.concurrent.TimeoutException) { /* Check cancellation while waiting for headers. */ }
+            }
+            received
         } catch (failure: Exception) {
+            future.cancel(true)
+            if (failure is java.util.concurrent.CancellationException) throw failure
             val cause = failure.cause ?: failure
             log.warn("OpenCode request failed: $normalizedMethod ${diagnosticRoute(path)}: ${cause.message}")
             if (cause is HttpTimeoutException) {

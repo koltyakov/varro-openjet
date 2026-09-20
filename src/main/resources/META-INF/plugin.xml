@@ -52,6 +52,14 @@
     ]]></description>
 
     <change-notes><![CDATA[
+        <h3>0.3.5</h3>
+        <p>Updated the Varro chat UI and aligned the OpenCode V2 backend. Background shell work now
+            keeps sessions busy through follow-up turns and stops when cancelled. Queued and steering
+            messages retain their delivery state. Fixed provider sign-in attempt tracking, cancellation
+            cleanup and authentication form defaults and field types. Corrected configured model pricing,
+            partial model limits, project configuration precedence and mixed-format model routing.
+            Fixed workspace paths containing Unicode or literal percent escapes, and hid incomplete
+            HTML tags while Markdown streams.</p>
         <h3>0.3.4</h3>
         <p>Added workspace disabling for automatically discovered Ollama, LM Studio and vLLM providers
             in OpenCode V2. Disabled providers' configured models now stay hidden. Fixed provider

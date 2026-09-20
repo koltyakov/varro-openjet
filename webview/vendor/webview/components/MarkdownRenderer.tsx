@@ -67,6 +67,7 @@ type MarkdownFenceState = {
 type StreamingMarkdownScanState = {
   content: string;
   lastBoundary: number | null;
+  safeBoundary: number;
   openFence: MarkdownFenceState | null;
   resumeIndex: number;
   resumeLastBoundary: number | null;
@@ -1000,6 +1001,7 @@ function scanLastSafeMarkdownBoundary(
   return {
     content,
     lastBoundary,
+    safeBoundary: 0,
     openFence: cloneFenceState(openFence),
     resumeIndex,
     resumeLastBoundary,
@@ -1011,6 +1013,9 @@ function getStreamingMarkdownSegments(
   content: string,
   previousState?: StreamingMarkdownScanState | null
 ): MarkdownRenderSegments {
+  // Marked normalizes line endings before lexing, so its raw token offsets must
+  // use the same text as the incremental boundary scanner.
+  if (content.includes('\r')) content = content.replace(/\r\n?/g, '\n');
   const scanState = scanLastSafeMarkdownBoundary(content, previousState);
   const hasUnclosedFence = scanState.openFence !== null;
   if (scanState.lastBoundary === null) {
@@ -1022,8 +1027,30 @@ function getStreamingMarkdownSegments(
     };
   }
 
-  const stableContent = content.slice(0, scanState.lastBoundary).trimEnd();
-  const tailContent = content.slice(scanState.lastBoundary);
+  let boundary = scanState.lastBoundary;
+  const scanStart =
+    previousState && content.startsWith(previousState.content) ? previousState.safeBoundary : 0;
+  const unsettledContent = content.slice(scanStart);
+  if (/^ {0,3}(?:[-+*]|\d+[.)])(?:\s|$)/m.test(unsettledContent)) {
+    // Blank lines can separate items or paragraphs within one list. Only promote
+    // whole blocks, otherwise the tail paints as a second list with a larger gap.
+    let offset = scanStart;
+    for (const token of marked.lexer(unsettledContent)) {
+      const end = offset + token.raw.length;
+      const pendingListMarker =
+        token.type === 'list' &&
+        !content.slice(end, boundary).trim() &&
+        /^\d{1,9}[.)]?[ \t]*$/.test(content.slice(boundary));
+      if (offset < boundary && ((end > boundary && token.type !== 'space') || pendingListMarker)) {
+        boundary = offset;
+        break;
+      }
+      offset = end;
+    }
+  }
+  scanState.safeBoundary = boundary;
+  const stableContent = content.slice(0, boundary).trimEnd();
+  const tailContent = content.slice(boundary);
   if (!stableContent || !tailContent.trim()) {
     return {
       stableContent: '',
@@ -1110,10 +1137,14 @@ function isEscapedMarkdownDelimiter(content: string, index: number, lineStart: n
   return backslashCount % 2 === 1;
 }
 
-function renderIncompleteStreamingMarkdown(content: string): IncompleteStreamingMarkdown {
+function renderIncompleteStreamingMarkdown(
+  content: string,
+  escapeRawHtml: boolean
+): IncompleteStreamingMarkdown {
   let index = 0;
   let openFence: MarkdownFenceState | null = null;
   let inlineStart: number | null = null;
+  let htmlTagStart: number | null = null;
   let inlineDelimiterLength = 0;
   const linkLabelStarts: number[] = [];
   let linkDestinationStart: number | null = null;
@@ -1171,7 +1202,15 @@ function renderIncompleteStreamingMarkdown(content: string): IncompleteStreaming
         }
 
         if (inlineStart === null && !isEscapedMarkdownDelimiter(content, cursor, index)) {
-          if (character === '[') {
+          if (
+            !escapeRawHtml &&
+            character === '<' &&
+            /^<\/?(?:[A-Za-z][\w:-]*(?:\s[^<>]*|\/)?)?$/.test(content.slice(cursor))
+          ) {
+            // A partial tag paints as prose until its closing angle bracket arrives.
+            // Keep that temporary text out of layout, including standalone closing tags.
+            htmlTagStart = cursor;
+          } else if (character === '[') {
             linkLabelStarts.push(cursor);
           } else if (character === ']') {
             const labelStart = linkLabelStarts.pop();
@@ -1194,7 +1233,7 @@ function renderIncompleteStreamingMarkdown(content: string): IncompleteStreaming
     index = nextBreak === -1 ? content.length : nextBreak + 1;
   }
 
-  const hiddenStarts = [inlineStart, linkDestinationStart, ...linkLabelStarts].filter(
+  const hiddenStarts = [inlineStart, htmlTagStart, linkDestinationStart, ...linkLabelStarts].filter(
     (start): start is number => start !== null
   );
   let suppressedFenceSuffixStart: number | null = null;
@@ -1251,6 +1290,17 @@ function renderIncompleteStreamingMarkdown(content: string): IncompleteStreaming
   }
   if (pendingStart >= content.length) {
     return { content, marker: null, pendingText: null, hidePendingText: false };
+  }
+
+  if (pendingStart === htmlTagStart) {
+    // Raw HTML can leave the marker at the segment root. Even a hidden inline
+    // marker there changes trailing-block spacing, so omit the unfinished tag.
+    return {
+      content: content.slice(0, pendingStart),
+      marker: null,
+      pendingText: null,
+      hidePendingText: false,
+    };
   }
 
   const marker = getStreamingMarkdownPendingMarker(content);
@@ -1400,11 +1450,17 @@ function isAppendOnlySafeMarkdown(content: string) {
 }
 
 function parseIncompleteStreamingMarkdown(content: string, options: ParseMarkdownOptions) {
-  const prepared = renderIncompleteStreamingMarkdown(content);
+  const prepared = renderIncompleteStreamingMarkdown(content, options.escapeHtml === true);
   const html = parseMarkdown(prepared.content, options);
   if (!prepared.marker || prepared.pendingText === null) return html;
 
-  return html.replace(
+  const blockHtml = prepared.hidePendingText
+    ? html.replace(
+        `<p>${prepared.marker}</p>`,
+        `<p class="streaming-markdown-pending-block">${prepared.marker}</p>`
+      )
+    : html;
+  return blockHtml.replace(
     prepared.marker,
     `<span class="streaming-markdown-pending${prepared.hidePendingText ? ' streaming-markdown-pending-hidden' : ''}"${prepared.hidePendingText ? ' aria-hidden="true"' : ''}>${escapeHtml(prepared.pendingText)}</span>`
   );
@@ -2057,7 +2113,10 @@ export function MarkdownRenderer(props: MarkdownProps) {
   // older Chromium invalidate unrelated transcript content on each append.
   createEffect(() => {
     tailHtml();
-    const tag = tailRef?.firstElementChild?.localName ?? '';
+    const firstTailBlock = tailRef?.firstElementChild;
+    const tag = firstTailBlock?.classList.contains('streaming-markdown-pending-block')
+      ? ''
+      : (firstTailBlock?.localName ?? '');
     if (stableRef && stableRef.dataset.markdownTailTag !== tag) {
       stableRef.dataset.markdownTailTag = tag;
     }

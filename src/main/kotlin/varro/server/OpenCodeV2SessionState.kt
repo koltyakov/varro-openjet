@@ -16,12 +16,14 @@ internal class OpenCodeV2SessionState(private val root: Path = Path.of(
     }
     private fun lock(id: String) = locks.computeIfAbsent(root.resolve(id).toString()) { Any() }
     fun read(id: String): JsonObject = synchronized(lock(id)) { JsonJournal(path(id)).read(Json.obj()) }
-    fun update(id: String, patch: JsonObject) = synchronized(lock(id)) {
+    fun update(id: String, patch: JsonObject, checkCancelled: () -> Unit = {}) = synchronized(lock(id)) {
+        checkCancelled()
         val value = read(id)
         val time = (value.obj("time") ?: Json.obj()).deepCopy()
         patch.obj("time")?.entrySet()?.forEach { time.add(it.key, it.value) }
         patch.entrySet().forEach { value.add(it.key, it.value) }
         value.add("time", time)
+        checkCancelled()
         JsonJournal(path(id)).write(value)
     }
     fun remove(id: String) = synchronized(lock(id)) { java.nio.file.Files.deleteIfExists(path(id)) }

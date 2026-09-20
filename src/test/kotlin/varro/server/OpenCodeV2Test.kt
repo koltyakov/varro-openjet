@@ -119,7 +119,12 @@ class OpenCodeV2Test {
                 else -> error("Unexpected route $path")
             } }
             val methods = native.request("GET", "/provider/auth", null, RequestOptions()).data.asObjectOrNull().arr("opencode")!!
-            assertEquals(listOf("account"), methods[0].asJsonObject.arr("prompts")!!.map { it.asJsonObject.str("key") })
+            val prompts = methods[0].asJsonObject.arr("prompts")!!.map { it.asJsonObject }
+            assertEquals(listOf("server", "account", "inactive"), prompts.map { it.str("key") })
+            assertEquals(true, prompts[0].bool("hidden"))
+            assertEquals("https://console.example", prompts[0].str("default"))
+            assertEquals("true", prompts[2].str("default"))
+            assertEquals("select", prompts[2].str("type"))
             native.request("POST", "/provider/opencode/oauth/authorize", Json.obj("method" to 0, "inputs" to inputs), RequestOptions())
             assertEquals(inputs.str("server") ?: "https://console.example", sent.str("server"))
             assertEquals(inputs.str("account") == "other", sent!!.has("inactive"))
@@ -128,7 +133,7 @@ class OpenCodeV2Test {
 
     @Test fun `native history skips control records and keeps inbox and parent identities`() {
         val native = adapter { _, path, _ -> when {
-            path.endsWith("/inbox") -> Json.obj("data" to listOf(Json.obj("id" to "msg_pending", "type" to "user", "time" to Json.obj("created" to 4), "payload" to Json.obj("text" to "queued"))))
+            path.endsWith("/inbox") -> Json.obj("data" to listOf(Json.obj("id" to "msg_pending", "type" to "user", "delivery" to "steer", "time" to Json.obj("created" to 4), "payload" to Json.obj("text" to "queued"))))
             path.contains("cursor=older") -> Json.obj("data" to listOf(Json.obj("id" to "msg_user", "type" to "user", "time" to Json.obj("created" to 1), "text" to "hello")), "cursor" to Json.obj())
             else -> Json.obj("data" to listOf(
                 Json.obj("id" to "msg_assistant", "type" to "assistant", "agent" to "build", "model" to Json.obj("providerID" to "test", "id" to "model"), "time" to Json.obj("created" to 3),
@@ -144,6 +149,7 @@ class OpenCodeV2Test {
         assertEquals("msg_user", assistant.obj("info").str("parentID"))
         assertEquals("msg_assistant:reasoning:0", assistant.arr("parts")!![0].asJsonObject.str("id"))
         assertEquals("msg_pending", messages[1].asJsonObject.obj("info").str("id"))
+        assertEquals("steer", messages[1].asJsonObject.obj("info").str("pendingDelivery"))
         val event = native.events(Json.obj("id" to "evt_delta", "type" to "session.reasoning.delta", "data" to Json.obj("sessionID" to "ses_test", "assistantMessageID" to "msg_assistant", "ordinal" to 0, "delta" to "thinking"))).single()
         assertEquals("msg_assistant:reasoning:0", event.obj("properties").str("reasoningID"))
     }

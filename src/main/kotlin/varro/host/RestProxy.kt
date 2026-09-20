@@ -58,7 +58,7 @@ class RestProxy(
     private val modelPricing = ModelPricingCatalog()
 
     /** In-flight requests, keyed by the webview's cancel key. */
-    private val activeRequests = ConcurrentHashMap<String, Int>()
+    private val activeRequests = ConcurrentHashMap<String, AtomicBoolean>()
     private val disposed = AtomicBoolean(false)
     private val trash = SessionTrash(store, request = { method, path, body, directory ->
         server.transport.request(method, path, body, RequestOptions(directory = directory)).data
@@ -94,6 +94,7 @@ class RestProxy(
         val method = payload.str("method")?.uppercase() ?: return
         val path = payload.str("path") ?: return
         val cancelKey = payload.text("cancelKey")
+        val cancelled = AtomicBoolean(false)
 
         if (disposed.get()) {
             respond(id, error = "REST proxy disposed")
@@ -107,7 +108,7 @@ class RestProxy(
         }
 
         cancelKey?.let { key ->
-            if (activeRequests.putIfAbsent(key, id) != null) {
+            if (activeRequests.putIfAbsent(key, cancelled) != null) {
                 respond(id, error = "Duplicate API request cancellation key")
                 return
             }
@@ -124,36 +125,34 @@ class RestProxy(
             val data = if (path.startsWith(ApiRoutes.NAMESPACE)) {
                 handleVarroRequest(method, path, payload.get("body"))
             } else {
-                forward(method, path, payload.get("body"), payload.obj("queuedMessageDispatch") != null)
+                forward(method, path, payload.get("body"), payload.obj("queuedMessageDispatch") != null) { cancelled.get() || disposed.get() }
             }
             success = true
             if (admitted) completeQueuedDispatch(payload, true, false)
-            if (cancelKey == null || activeRequests.containsKey(cancelKey)) respond(id, data = data)
+            if (!cancelled.get() && !disposed.get()) respond(id, data = data)
         } catch (failure: Exception) {
             rejected = Regex("^(400|401|403|404|405|413|415|422|429) ").containsMatchIn(failure.message.orEmpty())
             log.warn("api/request failed: $method ${path.substringBefore('?')}: ${failure.message}")
-            if (cancelKey == null || activeRequests.containsKey(cancelKey)) {
+            if (!cancelled.get() && !disposed.get()) {
                 respond(id, error = failure.message ?: "Request failed")
             }
         } finally {
             if (admitted && !success) completeQueuedDispatch(payload, false, rejected)
-            cancelKey?.let(activeRequests::remove)
+            cancelKey?.let { activeRequests.remove(it, cancelled) }
         }
     }
 
     /**
-     * Cancellation is cooperative: the entry is dropped so the response is
-     * suppressed when the request finally settles. The webview has already
-     * rejected its promise by this point, so delivering a late response would
-     * only resolve a request nothing is waiting for.
+     * Cancellation stops subsequent adapter requests and suppresses late responses.
      */
     fun cancelRequest(payload: JsonObject) {
         val cancelKey = payload.text("cancelKey") ?: return
-        activeRequests.remove(cancelKey)
+        activeRequests.remove(cancelKey)?.set(true)
     }
 
     fun dispose() {
         disposed.set(true)
+        activeRequests.values.forEach { it.set(true) }
         activeRequests.clear()
     }
 
@@ -167,12 +166,12 @@ class RestProxy(
 
     // --- OpenCode forwarding --------------------------------------------------
 
-    private fun forward(method: String, path: String, body: JsonElement?, queuedDispatch: Boolean = false): JsonElement? {
+    private fun forward(method: String, path: String, body: JsonElement?, queuedDispatch: Boolean = false, isCancelled: () -> Boolean = { false }): JsonElement? {
         val request = ApiRoutes.parse(method, path)
 
         if (method == "GET" && request != null && Regex("^/session/[^/]+/message$").matches(request.pathname) && request.query.containsKey("limit")) {
             val response = server.transport.request(method, path, options = RequestOptions(
-                directory = body.asObjectOrNull().str("workspaceDirectory"), captureNextCursor = true,
+                directory = body.asObjectOrNull().str("workspaceDirectory"), captureNextCursor = true, isCancelled = isCancelled,
             ))
             return Json.obj("items" to response.data).apply { response.nextCursor?.let { addProperty("nextCursor", it) } }
         }
@@ -183,7 +182,7 @@ class RestProxy(
             return sessionPage(path, request)
         }
 
-        return server.transport.request(method = method, path = path, body = body).data
+        return server.transport.request(method = method, path = path, body = body, options = RequestOptions(isCancelled = isCancelled)).data
     }
 
     /**

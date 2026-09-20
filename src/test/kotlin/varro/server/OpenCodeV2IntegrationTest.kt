@@ -43,7 +43,7 @@ class OpenCodeV2IntegrationTest {
         provider.start()
         Files.writeString(workspace.resolve("opencode.json"), Json.stringify(Json.obj("model" to "fixture/fixture", "provider" to Json.obj("fixture" to Json.obj(
             "npm" to "@ai-sdk/openai-compatible", "name" to "Fixture", "options" to Json.obj("baseURL" to "http://127.0.0.1:${provider.address.port}/v1", "apiKey" to "fixture-only"),
-            "models" to Json.obj("fixture" to Json.obj("name" to "Fixture", "limit" to Json.obj("context" to 32000, "output" to 1000))))))))
+            "models" to Json.obj("fixture" to Json.obj("name" to "Fixture", "cost" to Json.obj("input" to 2, "output" to 8), "limit" to Json.obj("context" to 32000, "output" to 1000))))))))
         val port = ServerSocket(0).use { it.localPort }
         val password = AtomicReference<String?>()
         val parser = OpenCodeStartupOutput { password.set(it) }
@@ -75,6 +75,11 @@ class OpenCodeV2IntegrationTest {
             assertTrue(synchronized(output) { output.toString() }, transport.checkHealth())
             assertEquals(2, transport.apiVersion)
             assertNotNull(password.get())
+            for (name in listOf("日本語 🚀", "literal%2Fdirectory")) {
+                val directory = Files.createDirectory(workspace.resolve(name)).toString()
+                assertEquals(directory, transport.request("GET", "/path", options = RequestOptions(directory = directory)).data.asObjectOrNull().str("directory"))
+            }
+            assertTrue(transport.request("GET", "/session/status").data!!.isJsonObject)
             transport.startEventStream()
             val session = transport.request("POST", "/session", Json.obj("title" to "OpenJet isolated test")).data.asObjectOrNull()!!
             val id = session.str("id")!!
@@ -83,11 +88,16 @@ class OpenCodeV2IntegrationTest {
             assertFalse(session.bool("sharingSupported")!!)
             assertTrue(transport.request("GET", "/agent").data!!.isJsonArray)
             assertTrue(transport.request("GET", "/provider").data.asObjectOrNull().arr("all") != null)
+            val fixture = transport.request("GET", "/config/providers").data.asObjectOrNull().arr("providers")!!.map { it.asJsonObject }.first { it.str("id") == "fixture" }.obj("models").obj("fixture")
+            assertEquals(2.0, fixture.obj("cost").num("input"))
+            assertEquals(8.0, fixture.obj("cost").num("output"))
+            assertEquals(32000, fixture.obj("limit").int("context"))
             transport.request("PATCH", "/session/$id", Json.obj("title" to "Renamed", "permission" to listOf(Json.obj("permission" to "bash", "pattern" to "*", "action" to "ask"))))
             assertEquals("Renamed", transport.request("GET", "/session/$id").data.asObjectOrNull().str("title"))
             transport.request("POST", "/session/$id/prompt_async", Json.obj("noReply" to true, "parts" to listOf(Json.obj("type" to "text", "text" to "Pending input only; no provider request"))))
             val messages = transport.request("GET", "/session/$id/message?limit=10", options = RequestOptions(captureNextCursor = true)).data!!.asJsonArray
             assertTrue(messages.any { it.asObjectOrNull().arr("parts")?.any { it.asObjectOrNull().str("text") == "Pending input only; no provider request" } == true })
+            assertTrue(messages.any { it.asObjectOrNull().obj("info").str("pendingDelivery") == "steer" })
             val eventDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
             while (events.none { it.asObjectOrNull().str("type") == "session.next.prompt.admitted" } && System.nanoTime() < eventDeadline) Thread.sleep(20)
             assertTrue(events.any { it.asObjectOrNull().str("type") == "session.next.prompt.admitted" })

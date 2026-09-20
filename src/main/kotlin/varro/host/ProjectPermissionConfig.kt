@@ -10,8 +10,8 @@ import java.nio.file.Files
 import java.nio.file.Path
 
 /** Replaces the local rule set rather than merging deleted rules back into it. */
-class ProjectPermissionConfig(private val directory: Path) {
-    fun path(): Path = directory.resolve("opencode.jsonc").takeIf(Files::exists) ?: directory.resolve("opencode.json")
+class ProjectPermissionConfig(private val directory: Path, private val native: () -> Boolean = { false }) {
+    fun path(): Path = ProjectConfigPath.resolve(directory, native())
 
     @Synchronized fun read(): JsonArray {
         val document = readDocument()
@@ -21,7 +21,7 @@ class ProjectPermissionConfig(private val directory: Path) {
 
     @Synchronized fun write(rules: JsonArray) {
         val document = readDocument()
-        if (document.has("permissions")) document.add("permissions", OpenCodeV2Projection.rules(rules))
+        if (native() || document.has("permissions")) document.add("permissions", OpenCodeV2Projection.rules(rules))
         else document.add("permission", PermissionService.toConfig(rules))
         JsonJournal(path()).write(document)
     }

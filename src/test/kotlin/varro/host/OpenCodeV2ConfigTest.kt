@@ -25,4 +25,30 @@ class OpenCodeV2ConfigTest {
         assertEquals("small/model", document.obj("agents").obj("title").str("model"))
         assertEquals("keep", document.str("theme"))
     }
+
+    @Test fun `v2 permission overrides use dot opencode precedence while v1 uses direct config`() {
+        val root = temporary.newFolder().toPath()
+        Files.createDirectories(root.resolve(".opencode"))
+        Files.writeString(root.resolve(".opencode/opencode.json"), """{"permissions":[{"action":"shell","resource":"*","effect":"ask"}]}""")
+        val workspace = Files.createDirectories(root.resolve("project"))
+        val native = ProjectPermissionConfig(workspace) { true }
+        val rules = Json.array(listOf(Json.obj("permission" to "bash", "pattern" to "git *", "action" to "ask")))
+        native.write(rules)
+        assertEquals(workspace.resolve(".opencode/opencode.json"), native.path())
+        assertEquals(rules, native.read())
+        assertTrue(Json.parse(Files.readString(native.path())).asJsonObject.has("permissions"))
+        assertEquals(workspace.resolve("opencode.json"), ProjectPermissionConfig(workspace).path())
+    }
+
+    @Test fun `unsetting model routing chooses the field present in mixed config`() {
+        val root = temporary.newFolder().toPath()
+        val path = root.resolve("opencode.json")
+        Files.writeString(path, """{"agents":{"other":{"model":"keep/model"}},"agent":{"review":{"model":"old/model","description":"keep"}},"small_model":"old/small"}""")
+        OpenCodeGlobalConfig(root).patch(Json.obj("agent" to Json.obj("review" to Json.obj("model" to "")), "small_model" to ""))
+        val saved = Json.parse(Files.readString(path)).asJsonObject
+        assertFalse(saved.has("small_model"))
+        assertFalse(saved.obj("agent").obj("review")!!.has("model"))
+        assertEquals("keep", saved.obj("agent").obj("review").str("description"))
+        assertEquals("keep/model", saved.obj("agents").obj("other").str("model"))
+    }
 }

@@ -43,4 +43,20 @@ class ProjectProviderConfigTest {
         assertThrows(IllegalArgumentException::class.java) { config.disable("ollama") }
         assertEquals(raw, Files.readString(path))
     }
+
+    @Test fun `ancestor dot opencode config requires a local dot opencode override`() {
+        val root = temporary.newFolder().toPath()
+        val ancestor = Files.createDirectories(root.resolve(".opencode")).resolve("opencode.jsonc")
+        val inherited = """{"experimental":{"policies":[{"action":"provider.use","resource":"ollama","effect":"allow"}]}}"""
+        Files.writeString(ancestor, inherited)
+        val project = Files.createDirectories(root.resolve("project"))
+        Files.createDirectory(project.resolve(".git"))
+        Files.writeString(project.resolve("opencode.json"), "{}")
+        val config = ProjectProviderConfig(project)
+        config.disable("ollama")
+        assertEquals(project.resolve(".opencode/opencode.json"), config.path())
+        assertEquals("deny", Json.parse(Files.readString(config.path())).asJsonObject.obj("experimental").arr("policies")!![0].asJsonObject.str("effect"))
+        assertEquals(inherited, Files.readString(ancestor))
+        assertEquals("{}", Files.readString(project.resolve("opencode.json")))
+    }
 }

@@ -19,6 +19,8 @@ export type UserMessage = {
   id: string;
   sessionID: string;
   role: 'user';
+  /** The prompt is waiting in OpenCode's inbox, outside the transcript. */
+  pendingDelivery?: 'steer' | 'queue';
   time: { created: number };
   format?: OutputFormat;
   summary?: {
@@ -427,7 +429,7 @@ export type SessionStatus =
       };
       next: number;
     }
-  | { type: 'busy' };
+  | { type: 'busy'; background?: boolean; backgroundStartedAt?: number };
 
 export type FileDiff = {
   file?: string;
@@ -786,7 +788,9 @@ export type ProviderAuthPromptText = {
   key: string;
   message: string;
   placeholder?: string;
+  default?: string;
   required?: boolean;
+  hidden?: boolean;
   when?: ProviderAuthPromptCondition | ProviderAuthPromptCondition[];
 };
 
@@ -800,12 +804,14 @@ export type ProviderAuthPromptSelect = {
   type: 'select';
   key: string;
   message: string;
+  default?: string;
   options: Array<{
     label: string;
     value: string;
     hint?: string;
   }>;
   required?: boolean;
+  hidden?: boolean;
   when?: ProviderAuthPromptCondition | ProviderAuthPromptCondition[];
 };
 
@@ -821,6 +827,7 @@ export type ProviderAuthAuthorization = {
   url: string;
   method: 'auto' | 'code';
   instructions: string;
+  attemptID?: string;
 };
 
 export type ServerEventPropertiesByName = {
