@@ -69,6 +69,11 @@ class OpenCodeHostServices(
     )
 
     private fun requestGlobalConfig(method: String, body: JsonObject? = null): JsonObject {
+        if (server.isAttachOnly()) {
+            if (method != "GET") requireLocalConfig()
+            return server.transport.request("GET", "/config").data.asObjectOrNull()
+                ?: error("OpenCode returned an invalid server configuration")
+        }
         if (method == "PATCH" && server.transport.apiVersion == 2) {
             val environment = server.cli.serverEnvironment()
             val root = Path.of(environment["XDG_CONFIG_HOME"] ?: Path.of(System.getProperty("user.home"), ".config").toString(), "opencode")
@@ -89,6 +94,7 @@ class OpenCodeHostServices(
     ) }
 
     @Synchronized override fun disableProvider(body: JsonElement?): JsonElement {
+        requireLocalConfig()
         require(server.transport.apiVersion == 2) { "Local provider policies require OpenCode V2" }
         val providerID = body.asObjectOrNull()?.get("providerID")
         require(providerID?.isJsonPrimitive == true && providerID.asJsonPrimitive.isString) { "Invalid local provider" }
@@ -103,6 +109,7 @@ class OpenCodeHostServices(
     }
 
     override fun readOpenCodePermissions(): JsonObject {
+        requireLocalConfig()
         val effective = server.transport.request("GET", "/config", options = RequestOptions(directory = project.basePath)).data.asObjectOrNull()
         val inherited = requestGlobalConfig("GET")
         val local = projectPermissions()
@@ -158,7 +165,16 @@ class OpenCodeHostServices(
         Path.of(project.guessProjectDir()?.path ?: project.basePath ?: error("Project has no workspace directory")),
         native = { server.transport.apiVersion == 2 },
     ) }
-    private fun projectPermissions() = projectPermissionConfig
+    private fun requireLocalConfig() {
+        check(!server.isAttachOnly()) {
+            "File-based OpenCode configuration is not supported in attach-only mode. Edit model, provider, and project permission settings on the server host or inside the container. Session permissions remain available through the API."
+        }
+    }
+
+    private fun projectPermissions(): ProjectPermissionConfig {
+        requireLocalConfig()
+        return projectPermissionConfig
+    }
 
     // --- Automatic permission approval ----------------------------------------
 
@@ -208,12 +224,16 @@ class OpenCodeHostServices(
     // --- Provider quotas ------------------------------------------------------
 
     override fun providerLimit(providerId: String, modelId: String?): JsonObject =
-        providerQuotas.get(providerId, modelId, project.guessProjectDir()?.path ?: project.basePath)
+        if (server.isAttachOnly()) Json.obj(
+            "providerID" to providerId, "modelID" to modelId, "status" to "unsupported",
+            "source" to "provider", "checkedAt" to System.currentTimeMillis(),
+            "note" to "Provider quota checks need server-side credentials and are not supported in attach-only mode. Check usage with your provider or on the OpenCode server host.",
+        ) else providerQuotas.get(providerId, modelId, project.guessProjectDir()?.path ?: project.basePath)
 
     // --- Session diff summary -------------------------------------------------
 
     private val sessionSummaries = SessionSummaryService(
-        readLocal = { id -> if (server.transport.apiVersion == 2) null else LocalSessionSummary(LocalUsageDatabase.defaultPath(EnvironmentUtil.getEnvironmentMap())).read(id) },
+        readLocal = { id -> if (server.isAttachOnly() || server.transport.apiVersion == 2) null else LocalSessionSummary(LocalUsageDatabase.defaultPath(EnvironmentUtil.getEnvironmentMap())).read(id) },
         request = { path, directory ->
             server.transport.request("GET", path, options = RequestOptions(directory = directory)).data
         },

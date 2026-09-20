@@ -52,6 +52,12 @@
     ]]></description>
 
     <change-notes><![CDATA[
+        <h3>0.3.6</h3>
+        <p>Synced the latest Varro UI, fixing scroll position after short replies and showing
+            permission approval failures inline. Aligned attach-only connections with upstream:
+            external servers use the configured port without ownership takeover or local maintenance,
+            usage reports read server history, and unsupported local configuration, quota, CLI and
+            history-import actions explain where to run them.</p>
         <h3>0.3.5</h3>
         <p>Updated the Varro chat UI and aligned the OpenCode V2 backend. Background shell work now
             keeps sessions busy through follow-up turns and stops when cancelled. Queued and steering

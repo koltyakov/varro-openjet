@@ -99,12 +99,15 @@ class OpenCodeServer(
 
     fun isManaged(): Boolean = process.isManaged
 
+    fun isAttachOnly(): Boolean = !settings.serverAutoStart && !process.isManaged
+
     /** Serialize config changes with startup/restart, then refresh agents after OpenCode reloads. */
     fun updateAskAgentEnabled(onUpdated: () -> Unit, onFailure: (String) -> Unit) {
         if (scheduler.isShutdown) return
         scheduler.execute {
             if (phase.get() == Phase.DISPOSING) return@execute
             try {
+                check(!isAttachOnly()) { "The Ask agent cannot be injected in attach-only mode. Configure it on the OpenCode server host or inside the container." }
                 if (status.get() is ServerStatus.Running && process.updateAskAgent()) {
                     transport.request("POST", "/global/dispose", options = RequestOptions(unscoped = true))
                 }
@@ -151,9 +154,9 @@ class OpenCodeServer(
         setStatus(ServerStatus.Starting)
 
         try {
-            process.restoreConnection()
+            if (!isAttachOnly()) process.restoreConnection()
             // Validate the registered service identity before adopting its port.
-            if (settings.serverCommand.isBlank()) {
+            if (!isAttachOnly() && settings.serverCommand.isBlank()) {
                 OpenCodeConnection.registration(cli.serverEnvironment())?.let { registration ->
                     process.adoptPort(java.net.URI(registration.url).port)
                     val health = transport.readHealthInfo()
@@ -167,7 +170,7 @@ class OpenCodeServer(
             val existing = transport.readHealthInfo()
             if (existing.healthy) {
                 log.info("Adopting the OpenCode server already listening on ${url()}")
-                process.refreshOwnership()
+                if (!isAttachOnly()) process.refreshOwnership()
                 serverVersion.set(existing.version)
                 val compatibility = checkCompatibility(existing.version)
                 if (compatibility != null) {
@@ -324,6 +327,7 @@ class OpenCodeServer(
         setStatus(ServerStatus.Running(url(), EventStreamState.DEGRADED))
         transport.startEventStream(OpenCodeRequestScope.normalizeDirectory(workspaceCwd()))
         if (maintenanceStarted.compareAndSet(false, true)) scheduler.scheduleWithFixedDelay({
+            if (isAttachOnly()) return@scheduleWithFixedDelay
             runCatching { process.refreshOwnership() }.onFailure { log.info("OpenCode ownership check failed", it) }
             runCatching { maintenance.tick() }.onFailure { log.info("OpenCode maintenance check failed", it) }
         }, 60, 60, TimeUnit.SECONDS)
@@ -365,6 +369,10 @@ class OpenCodeServer(
         val required = if (version.startsWith("2.")) "2.0.5" else OpenCodeCli.MINIMUM_SUPPORTED_VERSION
         if (version.substringBefore('.') !in setOf("1", "2")) return ServerStatus.Error("Unsupported OpenCode API version: $version")
         if (OpenCodeCli.compareVersions(version, required) >= 0) return null
+        if (isAttachOnly()) return ServerStatus.Error(
+            "OpenCode update required. Varro needs $required or newer, but found $version. " +
+                "Update OpenCode on the server host or rebuild the container, then reconnect. Local updates are not supported in attach-only mode.",
+        )
         val info = cli.resolve()
         return ServerStatus.Error(
             message = "OpenCode update required. Varro needs $required or newer, " +
@@ -387,6 +395,11 @@ class OpenCodeServer(
      * too - and the caller is told so it can say that in the UI.
      */
     fun restart(force: Boolean): RestartOutcome {
+        if (isAttachOnly()) {
+            if (status.get() is ServerStatus.Running) return RestartOutcome.NOT_MANAGED
+            ensureStarted()
+            return RestartOutcome.RESTARTED
+        }
         if (!phase.compareAndSet(Phase.IDLE, Phase.RESTARTING)) return RestartOutcome.BUSY
         try {
             if (status.get() is ServerStatus.Running) {

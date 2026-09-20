@@ -60,6 +60,8 @@ src/main/kotlin/varro/
 
 Server startup is lazy. Several projects can connect to one server. Automatic startup can be disabled while still allowing connection to an existing server.
 
+With automatic startup disabled and no managed process, the connection is attach-only. It uses the configured port and skips local service discovery, ownership recovery and CLI maintenance. Model routing reads the server's configuration, and summaries and usage reports use API history rather than local databases. Usage reports support up to 250 sessions through the API. File-based configuration, quota polling with local credentials, local CLI actions and local history import report that the action must run on the server host. Session permissions and API-backed Markdown transcript export remain available.
+
 ## Component map
 
 | Upstream | This port |

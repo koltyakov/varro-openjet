@@ -14,6 +14,7 @@ import java.util.Locale
 class UsageReport(
     private val databasePath: Path = LocalUsageDatabase.defaultPath(),
     private val ensureServerStarted: () -> Unit = {},
+    private val attachOnly: Boolean = false,
     private val request: (String, RequestOptions) -> OpenCodeResponse,
 ) {
     fun build(includeAllTime: Boolean, now: Long = System.currentTimeMillis(), checkCancelled: () -> Unit = {}): String {
@@ -37,7 +38,7 @@ class UsageReport(
                 }
             }
         }
-        val localCount = LocalUsageDatabase(databasePath).read(
+        val localCount = if (attachOnly) null else LocalUsageDatabase(databasePath).read(
             if (includeAllTime) null else now - 30 * DAY, checkCancelled, ::addUsage,
         )
         val sessions = linkedMapOf<String, JsonObject>()
@@ -68,7 +69,10 @@ class UsageReport(
             page.forEach { value -> value.asObjectOrNull()?.let { session ->
                 session.str("id")?.let { sessions[it] = session }
             } }
-            check(sessions.size <= 250) { "The local OpenCode usage database is unavailable. Refusing to fetch full history for more than 250 sessions." }
+            check(sessions.size <= 250) {
+                if (attachOnly) "Usage reports in attach-only mode support up to 250 sessions through the API. Run usage reporting on the server host for larger histories."
+                else "The local OpenCode usage database is unavailable. Refusing to fetch full history for more than 250 sessions."
+            }
             cursor = response.nextCursor
             check(cursor == null || cursors.add(cursor)) { "OpenCode repeated a session pagination cursor" }
         } while (cursor != null)

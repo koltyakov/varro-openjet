@@ -57,6 +57,31 @@ class UsageReportTest {
     }
 
     @Test
+    fun `attach only report ignores unrelated local history`() {
+        var starts = 0
+        var calls = 0
+        val report = UsageReport(fixture(), { starts++ }, attachOnly = true) { route, options ->
+            calls++
+            assertTrue(route.startsWith("/experimental/session"))
+            assertTrue(options.unscoped)
+            OpenCodeResponse(Json.array(emptyList<Any>()))
+        }.build(true, now)
+        assertEquals(1, starts)
+        assertEquals(1, calls)
+        assertTrue(report.contains("0 sessions scanned"))
+        assertFalse(report.contains("| provider | model |"))
+    }
+
+    @Test
+    fun `attach only report explains API history limit`() {
+        val report = UsageReport(fixture(), attachOnly = true) { _, _ ->
+            OpenCodeResponse(Json.array((1..251).map { Json.obj("id" to "remote-$it") }))
+        }
+        val failure = assertThrows(IllegalStateException::class.java) { report.build(true, now) }
+        assertTrue(failure.message!!.contains("attach-only mode support up to 250 sessions"))
+    }
+
+    @Test
     fun `recent report excludes stale sessions and all time includes them`() {
         val path = fixture(now - 40 * 86_400_000L)
         val report = UsageReport(path) { _, _ -> error("API must not be called") }

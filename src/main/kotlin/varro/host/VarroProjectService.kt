@@ -582,13 +582,13 @@ class VarroProjectService(private val project: Project) : Disposable {
 
                 // --- Terminal ---------------------------------------------------
                 "terminal/run" -> payload.str("command")?.let { command ->
-                    terminal.run(command, payload.str("title") ?: "OpenCode")
+                    if (!explainAttachOnly("Local OpenCode setup commands")) terminal.run(command, payload.str("title") ?: "OpenCode")
                 }
                 "terminal-selection/clear" -> broadcast("terminal-selection/update", null)
 
                 // --- Server -----------------------------------------------------
                 "server/restart" -> restartServer(payload.bool("force") == true)
-                "server/restart/check" -> broadcast(
+                "server/restart/check" -> if (server.isAttachOnly()) restartServer(false) else broadcast(
                     "server/restart-blocked",
                     server.readRestartBlockers().apply { addProperty("checkId", payload.int("checkId") ?: 0) },
                 )
@@ -707,7 +707,7 @@ class VarroProjectService(private val project: Project) : Disposable {
                     // outside OpenCode's own id alphabet is rejected rather than quoted.
                     ?.takeIf { SESSION_ID.matches(it) }
                     ?.let { sessionId ->
-                        terminal.runTrusted("opencode --session $sessionId", "OpenCode")
+                        if (!explainAttachOnly("Opening a session with the local CLI")) terminal.runTrusted("opencode --session $sessionId", "OpenCode")
                     }
 
                 "session/open-in-editor" -> payload?.let { openEditor(it, inWindow = it.bool("inWindow") == true) }
@@ -738,7 +738,10 @@ class VarroProjectService(private val project: Project) : Disposable {
 
                 "providers/refresh", "providers/auth-changed" -> {
                     hostServices.clearProviderQuotaCache()
-                    broadcast("providers/refresh")
+                    broadcast("providers/refresh", Json.obj("revalidateAuth" to (type == "providers/auth-changed")))
+                    if (type == "providers/auth-changed" && server.isAttachOnly() && server.transport.apiVersion == 1) {
+                        notify("Provider credentials changed on the external OpenCode v1 server. If the provider list has not updated, restart OpenCode on its server host or inside the container, then refresh providers.", NotificationType.INFORMATION)
+                    }
                 }
 
                 "session/export" -> exportSession(payload.str("sessionId"))
@@ -786,6 +789,10 @@ class VarroProjectService(private val project: Project) : Disposable {
     // --- Commands the IDE side triggers ---------------------------------------
 
     fun restartServer(force: Boolean) {
+        if (server.isAttachOnly() && server.currentStatus() is ServerStatus.Running) {
+            explainAttachOnly("Restarting OpenCode")
+            return
+        }
         when (server.restart(force)) {
             OpenCodeServer.RestartOutcome.BLOCKED -> broadcast("server/restart-blocked", server.readRestartBlockers())
             OpenCodeServer.RestartOutcome.NOT_MANAGED -> notify(
@@ -918,6 +925,7 @@ class VarroProjectService(private val project: Project) : Disposable {
     }
 
     fun importLegacySession(sessionID: String? = null, requestedDirectory: String? = null) {
+        if (explainAttachOnly("Importing local v1 history")) return
         ApplicationManager.getApplication().executeOnPooledThread {
             try {
                 check(lastStatus.get() is ServerStatus.Running && server.transport.apiVersion == 2) { "Connect to OpenCode v2 before importing v1 history" }
@@ -953,7 +961,7 @@ class VarroProjectService(private val project: Project) : Disposable {
             object : com.intellij.openapi.progress.Task.Backgroundable(project, "Building OpenCode usage report", true) {
                 override fun run(indicator: com.intellij.openapi.progress.ProgressIndicator) {
                     try {
-                        val report = UsageReport(ensureServerStarted = {
+                        val report = UsageReport(attachOnly = server.isAttachOnly(), ensureServerStarted = {
                             ensureServerStarted()
                             val deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(30)
                             while (lastStatus.get() !is ServerStatus.Running) {
@@ -1002,6 +1010,12 @@ class VarroProjectService(private val project: Project) : Disposable {
             "About Varro OpenJet.md", "markdown",
             previewOnly = true,
         )
+    }
+
+    private fun explainAttachOnly(action: String): Boolean {
+        if (!server.isAttachOnly()) return false
+        notify("$action is not supported in attach-only mode. Run this action on the OpenCode server host or inside the container.", NotificationType.INFORMATION)
+        return true
     }
 
     fun setShowFileDiffs(enabled: Boolean) {
