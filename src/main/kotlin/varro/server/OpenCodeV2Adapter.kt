@@ -372,18 +372,38 @@ internal class OpenCodeV2Adapter(
         val suffix = directory?.let { "?location%5Bdirectory%5D=${encode(it)}" }.orEmpty()
         fun catalog(path: String) = objects(wire("GET", path + suffix, null, options.copy(unscoped = true)).data.asObjectOrNull()?.get("data"))
         val models = catalog("/api/model")
+        val integrations = catalog("/api/integration")
+        fun connectionInfo(target: JsonObject, integration: JsonObject?) {
+            val connections = objects(integration?.get("connections") ?: JsonArray())
+            target.add("env", Json.array(connections.filter { it.str("type") == "env" }.mapNotNull { it.str("name") }))
+            target.addProperty("source", when {
+                connections.any { it.str("type") == "credential" } -> "api"
+                connections.any { it.str("type") == "env" } -> "env"
+                else -> "custom"
+            })
+        }
         val all = catalog("/api/provider").map { provider -> provider.deepCopy().apply {
-            add("env", JsonArray()); addProperty("source", "config"); add("options", provider.obj("settings") ?: Json.obj())
+            if (provider.str("integrationID").isNullOrEmpty() && provider.str("id") in setOf("ollama", "lmstudio", "vllm")) addProperty("disconnectMode", "disable")
+            connectionInfo(this, integrations.firstOrNull { it.str("id") == (provider.str("integrationID") ?: provider.str("id")) })
+            add("options", provider.obj("settings") ?: Json.obj())
             add("models", Json.obj().apply { models.filter { it.str("providerID") == provider.str("id") }.forEach { add(it.str("id"), OpenCodeV2Projection.model(it)) } })
         } }.toMutableList()
-        catalog("/api/integration").forEach { integration ->
+        integrations.forEach { integration ->
             if (all.none { it.str("id") == integration.str("id") || it.str("integrationID") == integration.str("id") }) all.add(Json.obj(
-                "id" to integration.get("id"), "integrationID" to integration.get("id"), "name" to integration.get("name"), "env" to JsonArray(), "source" to "api", "options" to Json.obj(), "models" to Json.obj()))
+                "id" to integration.get("id"), "integrationID" to integration.get("id"), "name" to integration.get("name"), "options" to Json.obj(), "models" to Json.obj()).apply { connectionInfo(this, integration) })
         }
         val config = request("GET", "/config", null, options.copy(directory = directory)).data.asObjectOrNull()
         config.obj("providers")?.entrySet()?.forEach { (id, entry) -> entry.asObjectOrNull()?.let { provider ->
+            val policy = config.obj("experimental").arr("policies")?.lastOrNull {
+                it.asObjectOrNull().str("action") == "provider.use" && it.asObjectOrNull().str("resource") == id
+            }
+            if (policy.asObjectOrNull().str("effect") == "deny") return@forEach
             val target = all.firstOrNull { it.str("id") == id } ?: Json.obj("id" to id, "name" to (provider.str("name") ?: id), "env" to JsonArray(),
-                "source" to "config", "options" to Json.obj(), "models" to Json.obj()).also(all::add)
+                "source" to "config", "options" to Json.obj(), "models" to Json.obj()).also {
+                    if (id in setOf("ollama", "lmstudio", "vllm")) it.addProperty("disconnectMode", "disable")
+                    all.add(it)
+                }
+            if (target.str("source") == "custom") target.addProperty("source", "config")
             provider.obj("models")?.entrySet()?.forEach { (modelID, definition) -> definition.asObjectOrNull()?.let { model ->
                 val normalized = Json.obj("id" to modelID, "providerID" to id, "name" to (model.str("name") ?: modelID),
                     "api" to Json.obj("id" to (model.str("modelID") ?: modelID), "npm" to provider.str("package").orEmpty(), "url" to ""),

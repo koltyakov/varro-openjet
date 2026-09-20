@@ -12,6 +12,14 @@ import org.junit.Test
  */
 class ApiRoutesTest {
 
+    @Test fun `provider disabling accepts only POST without query parameters`() {
+        val path = ApiRoutes.Endpoints.OPENCODE_CONFIG_DISABLE_PROVIDER
+        assertTrue(ApiRoutes.isAllowed("POST", path))
+        assertFalse(ApiRoutes.isAllowed("GET", path))
+        assertFalse(ApiRoutes.isAllowed("DELETE", path))
+        assertFalse(ApiRoutes.isAllowed("POST", "$path?directory=/other"))
+    }
+
     @Test
     fun `allows the core read endpoints`() {
         assertTrue(ApiRoutes.isAllowed("GET", "/global/health"))

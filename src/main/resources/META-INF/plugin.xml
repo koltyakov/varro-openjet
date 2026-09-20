@@ -52,6 +52,12 @@
     ]]></description>
 
     <change-notes><![CDATA[
+        <h3>0.3.4</h3>
+        <p>Added workspace disabling for automatically discovered Ollama, LM Studio and vLLM providers
+            in OpenCode V2. Disabled providers' configured models now stay hidden. Fixed provider
+            credential and environment status using V2 integration data. Updated provider reconnection
+            and retry recovery notices, corrected the provider logout command, and fixed file-edit card
+            cleanup during chat updates.</p>
         <h3>0.3.3</h3>
         <p>Added TypeSafe Jev as an optional reviewer for Auto-mode permission requests, connected from
             the Models view menu and stored in the IDE password safe, or read from

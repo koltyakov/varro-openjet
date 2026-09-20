@@ -77,6 +77,7 @@ class RestProxy(
         fun resolveWorkspacePath(path: String): JsonObject?
         fun readOpenCodeConfig(): JsonObject
         fun updateModelRouting(body: JsonElement?): JsonObject
+        fun disableProvider(body: JsonElement?): JsonElement
         fun readOpenCodePermissions(): JsonObject
         fun updateOpenCodePermissions(body: JsonElement?): JsonObject
         fun judgePermission(body: JsonElement?): JsonObject
@@ -260,6 +261,9 @@ class RestProxy(
 
             pathname == ApiRoutes.Endpoints.OPENCODE_CONFIG_MODEL_ROUTING ->
                 services.updateModelRouting(body)
+
+            pathname == ApiRoutes.Endpoints.OPENCODE_CONFIG_DISABLE_PROVIDER ->
+                services.disableProvider(body)
 
             pathname == ApiRoutes.Endpoints.OPENCODE_CONFIG_PERMISSIONS ->
                 if (method == "GET") services.readOpenCodePermissions()

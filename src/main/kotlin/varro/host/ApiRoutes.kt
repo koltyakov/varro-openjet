@@ -26,6 +26,7 @@ object ApiRoutes {
         const val PLAN_OPEN = "$NAMESPACE/plan/open"
         const val OPENCODE_CONFIG = "$NAMESPACE/opencode-config"
         const val OPENCODE_CONFIG_MODEL_ROUTING = "$NAMESPACE/opencode-config/model-routing"
+        const val OPENCODE_CONFIG_DISABLE_PROVIDER = "$NAMESPACE/opencode-config/disable-provider"
         const val OPENCODE_CONFIG_PERMISSIONS = "$NAMESPACE/opencode-config/permissions"
         const val SESSION = "$NAMESPACE/session"
         const val SESSION_TRASH = "$NAMESPACE/session-trash"
@@ -250,6 +251,7 @@ object ApiRoutes {
         },
         route(Endpoints.OPENCODE_CONFIG, methodsNoQuery("GET")),
         route(Endpoints.OPENCODE_CONFIG_MODEL_ROUTING, methodsNoQuery("POST")),
+        route(Endpoints.OPENCODE_CONFIG_DISABLE_PROVIDER, methodsNoQuery("POST")),
         route(Endpoints.OPENCODE_CONFIG_PERMISSIONS, methodsNoQuery("GET", "POST")),
         route(Endpoints.PERMISSION_JUDGE, methodsNoQuery("POST")),
         route(Endpoints.DECISION_PROVIDERS, methodsNoQuery("GET", "POST")),

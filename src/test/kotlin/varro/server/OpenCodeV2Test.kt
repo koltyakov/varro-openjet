@@ -15,6 +15,37 @@ class OpenCodeV2Test {
         OpenCodeV2SessionState(temporary.newFolder().toPath()),
     )
 
+    @Test fun `provider catalog uses integration connections and respects workspace deny policies`() {
+        for (effect in listOf("deny", "allow")) {
+            val native = adapter { _, path, _ -> when (path) {
+                "/api/model" -> Json.obj("data" to emptyList<Any>())
+                "/api/provider" -> Json.obj("data" to listOf(
+                    Json.obj("id" to "lmstudio"), Json.obj("id" to "cloud", "integrationID" to "login")))
+                "/api/integration" -> Json.obj("data" to listOf(
+                    Json.obj("id" to "login", "connections" to listOf(Json.obj("type" to "credential"))),
+                    Json.obj("id" to "environment", "connections" to listOf(Json.obj("type" to "env", "name" to "API_KEY")))))
+                "/api/config" -> Json.obj("data" to listOf(Json.obj("info" to Json.obj(
+                    "providers" to Json.obj("ollama" to Json.obj("models" to Json.obj("local" to Json.obj()))),
+                    "experimental" to Json.obj("policies" to listOf(
+                        Json.obj("action" to "provider.use", "resource" to "ollama", "effect" to "deny"),
+                        Json.obj("action" to "provider.use", "resource" to "ollama", "effect" to effect)))))))
+                else -> error("Unexpected request $path")
+            } }
+            val catalog = native.request("GET", "/provider", null, RequestOptions()).data!!.asJsonObject
+            val providers = catalog.arr("all")!!.map { it.asJsonObject }.associateBy { it.str("id") }
+            assertEquals("disable", providers["lmstudio"].str("disconnectMode"))
+            assertEquals("api", providers["cloud"].str("source"))
+            assertNull(providers["cloud"].str("disconnectMode"))
+            assertEquals("env", providers["environment"].str("source"))
+            assertEquals("API_KEY", providers["environment"].arr("env")!![0].asString)
+            assertEquals(effect == "allow", providers.containsKey("ollama"))
+            if (effect == "allow") {
+                assertEquals("disable", providers["ollama"].str("disconnectMode"))
+                assertTrue(providers["ollama"].obj("models")!!.has("local"))
+            } else assertFalse(catalog.arr("connected")!!.any { it.asString == "ollama" })
+        }
+    }
+
     @Test fun `startup credentials are redacted across every chunk boundary`() {
         val text = "server listening on http://127.0.0.1:1234\nserver password secret-value\nready\n"
         for (split in 0..text.length) {

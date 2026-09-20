@@ -84,6 +84,24 @@ class OpenCodeHostServices(
 
     override fun updateModelRouting(body: JsonElement?): JsonObject = modelRouting.update(body)
 
+    private val projectProviderConfig by lazy { ProjectProviderConfig(
+        Path.of(project.guessProjectDir()?.path ?: project.basePath ?: error("Project has no workspace directory")),
+    ) }
+
+    @Synchronized override fun disableProvider(body: JsonElement?): JsonElement {
+        require(server.transport.apiVersion == 2) { "Local provider policies require OpenCode V2" }
+        val providerID = body.asObjectOrNull()?.get("providerID")
+        require(providerID?.isJsonPrimitive == true && providerID.asJsonPrimitive.isString) { "Invalid local provider" }
+        val file = projectProviderConfig.path()
+        val documents = com.intellij.openapi.fileEditor.FileDocumentManager.getInstance()
+        require(documents.unsavedDocuments.none { documents.getFile(it)?.path == file.toString() }) {
+            "$file has unsaved changes; save or revert before disabling a provider"
+        }
+        projectProviderConfig.disable(providerID.asString)
+        server.transport.request("POST", "/global/dispose", options = RequestOptions(directory = project.basePath))
+        return com.google.gson.JsonPrimitive(true)
+    }
+
     override fun readOpenCodePermissions(): JsonObject {
         val effective = server.transport.request("GET", "/config", options = RequestOptions(directory = project.basePath)).data.asObjectOrNull()
         val inherited = requestGlobalConfig("GET")
