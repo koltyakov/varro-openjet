@@ -5,6 +5,7 @@ import com.google.gson.JsonElement
 import com.google.gson.JsonObject
 import varro.protocol.*
 import varro.store.VarroStore
+import varro.server.WorkspacePaths
 
 /** Saves standing rules; the webview owns the subsequent pending-request reply. */
 class PermissionService(
@@ -32,6 +33,15 @@ class PermissionService(
     fun allow(body: JsonObject, project: Boolean, directory: String?): JsonArray {
         val sessionId = body.text("sessionId") ?: error("Missing session id")
         val permissionId = body.text("permissionId") ?: error("Missing permission id")
+        require(sessionId.matches(Regex("[A-Za-z0-9_-]+"))) { "Invalid session id" }
+        val session = request("GET", "/session/$sessionId", null, directory).asObjectOrNull()
+        val owningDirectory = session.text("directory") ?: error("404 Session not found")
+        require(session.text("id") == sessionId &&
+            (directory == null || WorkspacePaths.isSame(owningDirectory, directory))) { "404 Session not found" }
+        return allowInDirectory(sessionId, permissionId, project, owningDirectory)
+    }
+
+    private fun allowInDirectory(sessionId: String, permissionId: String, project: Boolean, directory: String): JsonArray {
         val pending = request("GET", "/permission", null, directory).asArrayOrNull()
             ?.mapNotNull { it.asObjectOrNull()?.let { record -> record.obj("info") ?: record } }?.firstOrNull {
                 (it.text("id") ?: it.text("permissionID") ?: it.text("requestID")) == permissionId && it.str("sessionID") == sessionId

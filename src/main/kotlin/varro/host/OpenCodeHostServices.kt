@@ -131,12 +131,9 @@ class OpenCodeHostServices(
     }
 
     private val permissions = PermissionService(varro.store.VarroStore.getInstance(project), projectRules = { directory ->
-        require(directory == null || project.basePath?.let { varro.server.WorkspacePaths.isSame(it, directory) } == true) {
-            "Project permission rules must be saved in this project's workspace"
-        }
-        projectPermissions().read()
-    }, saveProjectRules = { rules, _ ->
-        projectPermissions().write(rules)
+        projectPermissions(directory).read()
+    }, saveProjectRules = { rules, directory ->
+        projectPermissions(directory).write(rules)
         // Reloading config can dispose the instance that owns the pending request.
         // The webview's next `always` reply applies the rule to the current runtime.
     }) { method, path, body, directory ->
@@ -171,8 +168,9 @@ class OpenCodeHostServices(
         }
     }
 
-    private fun projectPermissions(): ProjectPermissionConfig {
+    private fun projectPermissions(directory: String? = null): ProjectPermissionConfig {
         requireLocalConfig()
+        if (directory != null) return ProjectPermissionConfig(Path.of(directory), native = { server.transport.apiVersion == 2 })
         return projectPermissionConfig
     }
 

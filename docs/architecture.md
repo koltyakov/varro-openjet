@@ -148,6 +148,8 @@ Session reads and events restore valid nested metadata into the local stores and
 
 `PermissionService` applies session rules to OpenCode before acknowledging a save. `ProjectPermissionConfig` writes project rules to an existing `opencode.jsonc`, otherwise `opencode.json`. It preserves other configuration fields but rewrites the document as JSON, so JSONC comments and formatting are not retained.
 
+Scoped Always Allow approvals resolve the owning session before reading pending permissions. An explicit directory must match the session's directory, and the pending permission must belong to that session. Session rules and project configuration writes use that owning directory, including sessions in other content roots or repository subdirectories. Attach-only connections support session approvals but cannot write project configuration files.
+
 `PermissionJudge` handles known read-only tools locally and can review other requests through a hidden child session with tools denied except structured output. It asks on invalid responses or review failures. The model selection checks the configured judge model, OpenCode's `small_model`, then a supplied fallback.
 
 ## Session summaries and usage

@@ -208,7 +208,7 @@ class MissedPortsTest {
             calls.add("$method $path")
             when (path) {
                 "/permission" -> Json.array(listOf(Json.obj("id" to "p", "sessionID" to "s", "permission" to "bash", "always" to listOf("npm test"))))
-                "/session/s" -> Json.obj("permission" to JsonArray())
+                "/session/s" -> Json.obj("id" to "s", "directory" to "/workspace", "permission" to JsonArray())
                 else -> Json.toElement(true)
             }
         }

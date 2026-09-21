@@ -10,6 +10,7 @@ import varro.store.VarroStore
 class PermissionServiceTest {
     private val body = Json.obj("sessionId" to "s", "permissionId" to "p")
     private fun pending() = Json.obj("id" to "p", "sessionID" to "s", "permission" to "bash", "always" to listOf("npm *"))
+    private fun session(directory: String = "/workspace") = Json.obj("id" to "s", "directory" to directory)
 
     @Test fun `session approval saves rules exactly once and never replies or reloads config`() {
         val calls = mutableListOf<String>()
@@ -20,13 +21,13 @@ class PermissionServiceTest {
             calls.add("$method $path")
             when ("$method $path") {
                 "GET /permission" -> Json.array(listOf(pending()))
-                "GET /session/s" -> Json.obj("permission" to existing)
+                "GET /session/s" -> session().apply { add("permission", existing) }
                 "PATCH /session/s" -> Json.obj("permission" to payload.asObjectOrNull().arr("permission"))
                 else -> error("Unexpected request: $method $path")
             }
         }
         val rules = service.allow(body, false, "/workspace")
-        assertEquals(listOf("GET /permission", "GET /session/s", "PATCH /session/s"), calls)
+        assertEquals(listOf("GET /session/s", "GET /permission", "GET /session/s", "PATCH /session/s"), calls)
         assertEquals("ask", rules[0].asJsonObject.str("action"))
         assertEquals("npm *", rules[1].asJsonObject.str("pattern"))
         assertEquals(rules, store.permissionRules.arr("s"))
@@ -61,7 +62,7 @@ class PermissionServiceTest {
             val service = PermissionService(VarroStore()) { method, path, _, _ ->
                 when ("$method $path") {
                     "GET /permission" -> Json.array(listOf(Json.obj("info" to permission)))
-                    "GET /session/s", "PATCH /session/s" -> Json.obj("permission" to JsonArray())
+                    "GET /session/s", "PATCH /session/s" -> session().apply { add("permission", JsonArray()) }
                     else -> error("Unexpected request")
                 }
             }
@@ -78,6 +79,7 @@ class PermissionServiceTest {
             }
             val service = PermissionService(VarroStore()) { method, path, _, _ ->
                 assertEquals("GET", method)
+                if (path == "/session/s") return@PermissionService session()
                 assertEquals("/permission", path)
                 Json.array(listOf(permission))
             }
@@ -89,6 +91,7 @@ class PermissionServiceTest {
         val service = PermissionService(VarroStore(), { JsonArray() }, { _, _ -> error("disk full") }) { method, path, _, _ ->
             assertEquals("GET", method)
             when (path) {
+                "/session/s" -> session()
                 "/permission" -> Json.array(listOf(pending()))
                 "/config" -> Json.obj()
                 else -> error("Unexpected request: $path")
@@ -106,9 +109,10 @@ class PermissionServiceTest {
             saved = rules
         }) { method, path, _, directory ->
             assertEquals("/workspace", directory)
-            // Any reply, config PATCH, or session operation violates the webview contract.
+            // Standing approvals do not reply or reload the runtime.
             assertEquals("GET", method)
             when (path) {
+                "/session/s" -> session()
                 "/permission" -> Json.array(listOf(pending()))
                 "/config" -> Json.obj("permission" to effective)
                 else -> error("Unexpected request: $path")
@@ -117,5 +121,55 @@ class PermissionServiceTest {
         assertEquals(service.allow(body, true, "/workspace"), saved)
         assertEquals(0, store.permissionRules.size())
         return PermissionService.toConfig(saved!!)
+    }
+
+    @Test fun `scoped approvals use the owning directory for all reads and writes`() {
+        for (project in listOf(false, true)) for (directory in listOf("/repo-b", "/repo/packages/other")) {
+            var saved = false
+            val service = PermissionService(VarroStore(), {
+                assertEquals(directory, it)
+                JsonArray()
+            }, { _, target ->
+                assertEquals(directory, target)
+                saved = true
+            }) { method, path, _, target ->
+                assertEquals(directory, target)
+                when ("$method $path") {
+                    "GET /session/s" -> session(directory)
+                    "GET /permission" -> Json.array(listOf(pending()))
+                    "GET /config" -> Json.obj()
+                    "PATCH /session/s" -> { saved = true; session(directory) }
+                    else -> error("Unexpected request: $method $path")
+                }
+            }
+            service.allow(body, project, directory)
+            assertTrue(saved)
+        }
+    }
+
+    @Test fun `scoped approvals reject mismatched session directories before reading permissions`() {
+        for (project in listOf(false, true)) {
+            val service = PermissionService(VarroStore()) { method, path, _, directory ->
+                assertEquals("GET", method)
+                assertEquals("/session/s", path)
+                assertEquals("/repo-b", directory)
+                session("/repo")
+            }
+            assertThrows(IllegalArgumentException::class.java) { service.allow(body, project, "/repo-b") }
+        }
+    }
+
+    @Test fun `scoped approvals reject a pending permission owned by another session`() {
+        for (project in listOf(false, true)) {
+            val service = PermissionService(VarroStore()) { method, path, _, _ ->
+                assertEquals("GET", method)
+                when (path) {
+                    "/session/s" -> session()
+                    "/permission" -> Json.array(listOf(pending().apply { addProperty("sessionID", "other") }))
+                    else -> error("Unexpected request: $path")
+                }
+            }
+            assertThrows(IllegalStateException::class.java) { service.allow(body, project, "/workspace") }
+        }
     }
 }
