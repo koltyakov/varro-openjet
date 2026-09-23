@@ -10,6 +10,19 @@ import varro.protocol.*
 
 class OpenCodeV2Test {
     @JvmField @Rule val temporary = TemporaryFolder()
+
+    @Test fun `synthetic transcript text remains automatic rather than an editable user prompt`() {
+        val record = Json.obj("id" to "automatic", "type" to "synthetic", "text" to "Continue with the next task.",
+            "time" to Json.obj("created" to 1000))
+        assertTrue(OpenCodeV2Projection.transcript(record))
+        val projected = OpenCodeV2Projection.message(record, "session")
+        assertEquals("user", projected.obj("info").str("role"))
+        val part = projected.arr("parts")!!.single().asJsonObject
+        assertEquals(true, part.bool("synthetic"))
+        assertEquals("automatic:content:0", part.str("id"))
+        assertEquals(record.str("text"), part.str("text"))
+    }
+
     private fun adapter(wire: (String, String, JsonElement?) -> JsonElement?) = OpenCodeV2Adapter(
         { method, path, body, options -> assertTrue(options.unscoped); OpenCodeResponse(wire(method, path, body)) },
         OpenCodeV2SessionState(temporary.newFolder().toPath()),

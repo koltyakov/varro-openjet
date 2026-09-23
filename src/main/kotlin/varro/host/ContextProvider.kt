@@ -139,6 +139,32 @@ class ContextProvider(private val project: Project) : Disposable {
     /** Re-sends the current snapshot without recomputing, for `context/request`. */
     fun replay() = notifyListeners(current.get())
 
+    /** Match existing editor state without changing the clipboard or saving a buffer. */
+    fun matchCopiedSelection(text: String, plainTextOnly: Boolean): JsonObject? {
+        var result: JsonObject? = null
+        ApplicationManager.getApplication().invokeAndWait {
+            if (project.isDisposed) return@invokeAndWait
+            val editor = selectedTextEditor()
+            val documents = FileDocumentManager.getInstance()
+            val selected = editor?.selectionModel?.selectedText
+            if (editor != null && selected != null && selected.replace("\r\n", "\n") == text.replace("\r\n", "\n")) {
+                if (documents.isDocumentUnsaved(editor.document)) return@invokeAndWait
+                val file = documents.getFile(editor.document)
+                val root = workspaceFolders().mapNotNull { it.asJsonObject.get("path")?.asString }
+                    .firstOrNull { WorkspacePaths.relativeWithin(file?.path, it) != null }
+                if (file?.isInLocalFileSystem == true && root != null) {
+                    result = Json.obj("type" to "file", "file" to Json.obj(
+                        "path" to file.path, "relativePath" to WorkspacePaths.relativeWithin(file.path, root),
+                        "type" to "file", "lineRanges" to listOf(selection(editor)),
+                    ))
+                    return@invokeAndWait
+                }
+            }
+            if (plainTextOnly) result = TerminalService(project).matchCopiedText(text)
+        }
+        return result
+    }
+
     // --- Snapshot construction ------------------------------------------------
 
     private fun buildContext(): JsonObject = ApplicationManager.getApplication().runReadAction<JsonObject> {

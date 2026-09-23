@@ -100,7 +100,8 @@ input:focus-visible {
   position: relative;
 }
 
-.chat-main-shell.active-session-reselected::after {
+.chat-main-shell.active-session-reselected::after,
+.models-panel.models-list-refreshed::after {
   /* Tint opaque tool and composer surfaces along with the shared chat background. */
   content: '';
   position: absolute;
@@ -880,6 +881,15 @@ input:focus-visible {
 
 .user-message-card-editable:hover {
   border-color: color-mix(in srgb, var(--color-vscode-accent) 50%, transparent);
+}
+
+.automated-message {
+  align-self: flex-start;
+  max-width: 100%;
+  padding: 4px 0;
+  color: var(--color-vscode-muted);
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 .composer-edit-banner {

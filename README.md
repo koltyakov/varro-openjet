@@ -29,6 +29,8 @@ Varro discovers a registered local V2 service when no explicit CLI command is co
 
 Background CLI updates are enabled by default and run only for a managed server while sessions and host work are idle. The updated CLI takes effect on the next server start. Varro only stops servers it started.
 
+If a server rejects authentication, Varro retries credentials saved for that server URL, then asks for a username and password. It saves verified credentials in the IDE password safe for future connections.
+
 ### Installing from a checkout
 
 The install script can build the plugin and install it into your detected JetBrains IDEs:
@@ -52,6 +54,8 @@ Model preferences are shared across projects in the same IDE and can sync across
 Wide editor and window chats have a light/dark toggle in the upper-right gutter. It switches that chat to Varro's opposite light or dark palette and follows subsequent IDE theme changes. Each open chat keeps its own toggle; new chats restore the last saved preference. Click again to return to the IDE palette. The control hides when the gutter is too narrow.
 
 To add context, drop files or directories into the composer, or choose **Add to Varro Context** from the editor or Project view. The current-document chip toggles automatic context and remembers your choice per project. Switching to a chat tab keeps the last source editor as context, including unsaved edits.
+
+Pasting text that matches the current selection in a saved workspace file creates a line-range attachment. Unsaved selections stay as text. Plain-text pastes matching an open terminal's available output become terminal attachments; terminal engines that do not expose their output leave the paste as text.
 
 | Action | Shortcut |
 | --- | --- |

@@ -37,6 +37,18 @@ class TerminalService(private val project: Project) {
 
     fun clearSelection() = selection.set(null)
 
+    /** Read open terminal buffers on the EDT. Unsupported terminal engines leave the paste as text. */
+    fun matchCopiedText(text: String): JsonObject? = runCatching {
+        val manager = org.jetbrains.plugins.terminal.TerminalToolWindowManager.getInstance(project)
+        manager.terminalWidgets.sortedByDescending { it.hasFocus() }.firstOrNull { widget ->
+            runCatching { matchesOutput(text, widget.getText().takeLast(256 * 1024).toString()) }.getOrDefault(false)
+        }?.let { widget ->
+            Json.obj("type" to "terminal", "selection" to Json.obj(
+                "text" to text, "terminalName" to widget.terminalTitle.buildTitle(),
+            ))
+        }
+    }.getOrNull()
+
     /**
      * Runs a command the *webview* asked for. Only the allowlist below is
      * accepted, so a compromised webview cannot put arbitrary shell text in front
@@ -93,6 +105,14 @@ class TerminalService(private val project: Project) {
     }
 
     companion object {
+        internal fun matchesOutput(text: String, output: String): Boolean {
+            val lines = text.split(Regex("\r\n|\r|\n")).map(String::trim).filter(String::isNotEmpty)
+            if (lines.isEmpty()) return false
+            val normalized = output.split(Regex("\r\n|\r|\n")).map(String::trimEnd)
+            return if (lines.size == 1) normalized.any { it.trim() == lines.single() }
+            else lines.all { line -> normalized.any { it.contains(line) } }
+        }
+
         /**
          * Commands the webview may ask for. Mirrors upstream's
          * `ALLOWED_TERMINAL_COMMANDS`: provider authentication plus the documented

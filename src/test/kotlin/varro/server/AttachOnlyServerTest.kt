@@ -1,6 +1,7 @@
 package varro.server
 
 import com.sun.net.httpserver.HttpServer
+import com.intellij.credentialStore.Credentials
 import org.junit.Assert.*
 import org.junit.Test
 import varro.settings.VarroSettings
@@ -31,9 +32,32 @@ class AttachOnlyServerTest {
         }
     }
 
-    private fun withServer(version: String, check: (OpenCodeServer) -> Unit) {
+    @Test
+    fun `authentication failure retries prompted credentials before attaching`() {
+        for (version in listOf("1.18.31", "2.0.10")) {
+            var prompts = 0
+            var saved = false
+            val credentials = OpenCodeServerAuthentication(read = { null }, save = { _, value ->
+                assertEquals("password", value.getPasswordAsString())
+                saved = true
+            }, prompt = { _, _ -> prompts++; Credentials("user", "password") })
+            withServer(version, credentials) { server ->
+                assertTrue(server.currentStatus().toString(), server.currentStatus() is ServerStatus.Running)
+                assertEquals(1, prompts)
+                assertTrue(saved)
+                assertTrue(server.isAttachOnly())
+            }
+        }
+    }
+
+    private fun withServer(version: String, authentication: OpenCodeServerAuthentication? = null, check: (OpenCodeServer) -> Unit) {
         val endpoint = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
         endpoint.createContext("/") { exchange ->
+            if (authentication != null && exchange.requestHeaders.getFirst("Authorization") != OpenCodeConnection.authorization("password", "user")) {
+                exchange.sendResponseHeaders(401, -1)
+                exchange.close()
+                return@createContext
+            }
             val bytes = """{"healthy":true,"version":"$version","pid":12345}""".toByteArray()
             exchange.responseHeaders.add("Content-Type", "application/json")
             exchange.sendResponseHeaders(200, bytes.size.toLong())
@@ -45,6 +69,7 @@ class AttachOnlyServerTest {
             serverPort = endpoint.address.port
             serverCommand = "/missing/attach-only-opencode"
         }) { null }
+        if (authentication != null) server.authentication = authentication
         try {
             val ready = CountDownLatch(1)
             server.onStatus { if (it is ServerStatus.Running || it is ServerStatus.Error) ready.countDown() }

@@ -648,7 +648,7 @@ class VarroProjectService(private val project: Project) : Disposable {
                 }
 
                 "model-preferences/update" -> payload.obj("preferences")?.let {
-                    modelStore.modelPreferences = it
+                    modelStore.update(payload.obj("base"), it)
                     broadcastModelPreferences()
                 }
                 "model-preferences/migrate" -> payload?.let {

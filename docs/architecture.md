@@ -116,6 +116,8 @@ The synthetic origin gives dynamic `import()` a resolvable base URL. `webview.ve
 
 `project-storage.ts` serves synchronous reads from the boot snapshot and mirrors writes through `host/storage`. The host broadcasts changes to other views. `VarroStore` broadcasts session model and permission-mode changes through selection listeners. `VarroModelStore` uses an application message-bus topic to sync model preferences across projects.
 
+Model preference updates merge each view's changes against its base snapshot. Explicit catalog removals persist in `removedModels`, so refreshes and stale chat views do not restore models the user removed.
+
 Legacy browser session selections migrate into the project store before boot snapshots are built. Legacy project model preferences migrate into the application store only if shared preferences have not been established.
 
 `SessionSelections` persists access mode, agent, model and reasoning under OpenCode's `metadata.varro` object. Writes set `schemaVersion: 1` and merge `permissionMode`, `agent` and `model`, preserving workspace scope and unrelated metadata at both levels. The stored model uses `provider`, `model` and an optional reasoning `variant`. The bridge and local stores still use `providerID` and `modelID`. Replacing a model without a variant clears the previous reasoning selection.
@@ -142,6 +144,8 @@ Session reads and events restore valid nested metadata into the local stores and
 
 `QueuedDispatches` journals admission before sending and reconciles dispatches with OpenCode history after reconnecting. It does not automatically retry ambiguous sends. `RalphRunner` journals orchestration state and reattaches when the server becomes available. `SessionTrash` records a session tree before archiving it; restore unarchives it, while permanent deletion removes it from OpenCode. Recycle-bin retention is 7 days, with expiry processed when the bin is listed.
 
+Permanent deletion and expiry retain the recycle entry until OpenCode returns `true` or a follow-up session read returns 404.
+
 ## Model and permission controls
 
 `ModelRoutingService` writes small-model and agent-model assignments through OpenCode's global configuration API. Commit-message and auto-approve model assignments update `VarroSettings`.
@@ -163,6 +167,8 @@ Scoped Always Allow approvals resolve the owning session before reading pending 
 Two request kinds share the channel:
 
 - Paths under `/varro` are the host's namespace. Handlers use IDE state, stores, local history and OpenCode requests as needed.
+
+`POST /varro/copied-selection/match` matches pasted text against the selected saved workspace editor or, for plain-text clipboard content, available open-terminal output. Reads run on the EDT and do not change the clipboard. Matching files return line-range attachments; unsaved selections remain plain text.
 
 `GET /varro/model-pricing` requires `providerID` and `modelID`. `ModelPricingCatalog` fetches public API rates from models.dev through the IDE HTTP client and caches the catalog for one hour. The model picker uses these rates when available and falls back to OpenCode's model costs if the catalog request fails. These are per-token API prices, not subscription charges.
 - Everything else is forwarded to OpenCode after the allowlist approves it.

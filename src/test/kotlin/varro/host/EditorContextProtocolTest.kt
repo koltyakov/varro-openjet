@@ -5,6 +5,21 @@ import org.junit.Test
 import varro.protocol.Json
 
 class EditorContextProtocolTest {
+    @Test fun `copied selection endpoint accepts only a queryless POST`() {
+        org.junit.Assert.assertTrue(ApiRoutes.isAllowed("POST", "/varro/copied-selection/match"))
+        org.junit.Assert.assertFalse(ApiRoutes.isAllowed("GET", "/varro/copied-selection/match"))
+        org.junit.Assert.assertFalse(ApiRoutes.isAllowed("POST", "/varro/copied-selection/match?text=hello"))
+    }
+
+    @Test fun `terminal paste matches whole single lines and multiline selections`() {
+        val output = "user@host $ build\r\n  Build succeeded  \r\n2 files written\r\n"
+        org.junit.Assert.assertTrue(TerminalService.matchesOutput("Build succeeded", output))
+        org.junit.Assert.assertTrue(TerminalService.matchesOutput("Build succeeded\n2 files", output))
+        org.junit.Assert.assertFalse(TerminalService.matchesOutput("succeeded", output))
+        org.junit.Assert.assertFalse(TerminalService.matchesOutput("Build succeeded\nmissing output", output))
+        org.junit.Assert.assertFalse(TerminalService.matchesOutput(" \n", output))
+    }
+
     @Test fun `context updates preserve full snapshots when opening switching and closing files`() {
         val first = Json.obj("path" to "/project/.gitattributes", "relativePath" to ".gitattributes", "language" to "text")
         val second = Json.obj("path" to "/project/Dockerfile", "relativePath" to "Dockerfile", "language" to "dockerfile")

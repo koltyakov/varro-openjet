@@ -148,6 +148,23 @@ class MissedPortsTest {
         assertTrue(removed)
     }
 
+    @Test fun `unconfirmed deletion keeps the recycle entry until absence is confirmed`() {
+        val store = VarroStore().apply { recycleBin = Json.array(listOf(Json.obj("rootID" to "root",
+            "root" to Json.obj("directory" to "/owner"), "sessions" to JsonArray()))) }
+        var absent = false
+        val trash = SessionTrash(store, { method, path, _, directory ->
+            assertEquals("/session/root", path)
+            assertEquals("/owner", directory)
+            if (method == "DELETE") Json.toElement(false)
+            else if (absent) error("404 Not Found") else Json.obj("id" to "root")
+        })
+        assertThrows(IllegalStateException::class.java) { trash.empty() }
+        assertEquals(1, store.recycleBin.size())
+        absent = true
+        trash.empty()
+        assertEquals(0, store.recycleBin.size())
+    }
+
     @Test fun `judge uses deny-all helper permissions and cleans up after failure`() {
         val calls = mutableListOf<String>()
         val hidden = mutableListOf<String>()

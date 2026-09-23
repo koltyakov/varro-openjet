@@ -52,6 +52,13 @@
     ]]></description>
 
     <change-notes><![CDATA[
+        <h3>0.3.7</h3>
+        <p>Synced Varro through 45eedb25d62c. Pasted saved-editor selections and matching terminal
+            output become context attachments. Improved attachment editing, queued context and composer
+            completion placement. Model refreshes show progress and discover new models while retaining
+            explicit removals across chat views. V2 synthetic messages appear as automatic-action notices.
+            Authenticated servers now prompt for credentials and save verified passwords in the IDE password
+            safe. Corrected migrated usage timing and retained recycle-bin entries until deletion is confirmed.</p>
         <h3>0.3.6</h3>
         <p>Synced the latest Varro UI, fixing scroll position after short replies and showing
             permission approval failures inline. Aligned attach-only connections with upstream:

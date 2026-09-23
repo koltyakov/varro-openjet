@@ -90,7 +90,7 @@ internal object OpenCodeV2Projection {
                     ?: if (field.str("type") == "boolean") listOf(Json.obj("label" to "Yes", "description" to ""), Json.obj("label" to "No", "description" to "")) else emptyList()))
         })
 
-    fun transcript(message: JsonObject) = message.str("type") in setOf("user", "assistant", "compaction", "skill", "shell") ||
+    fun transcript(message: JsonObject) = message.str("type") in setOf("user", "synthetic", "assistant", "compaction", "skill", "shell") ||
         (message.str("type") == "idle" && message.str("outcome") == "failed")
 
     fun toolOutput(value: JsonElement?) = value.asArrayOrNull().orEmpty().mapNotNull { it.asObjectOrNull() }
@@ -188,7 +188,8 @@ internal object OpenCodeV2Projection {
                     val reference = "$[${java.net.URLEncoder.encode(name, Charsets.UTF_8).replace("+", "%20").replace("%21", "!").replace("%27", "'").replace("%28", "(").replace("%29", ")").replace("%7E", "~")}]"
                     parts.add(part(parts.size, "text", Json.obj("text" to "[Attached skill: $reference]\nUse the skill tool to load ${Json.stringify(name)} before responding. $reference in the prompt refers to this skill.", "synthetic" to true)))
                 }
-            } else if (type == "compaction") parts.add(part(0, "compaction", Json.obj("auto" to (value.str("reason") == "auto"),
+            } else if (type == "synthetic") parts.add(part(0, "text", Json.obj("text" to value.str("text").orEmpty(), "synthetic" to true)))
+            else if (type == "compaction") parts.add(part(0, "compaction", Json.obj("auto" to (value.str("reason") == "auto"),
                 "status" to value.get("status"), "error" to value.obj("error").str("message"))))
         }
         return Json.obj("info" to info, "parts" to parts)

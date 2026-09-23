@@ -36,12 +36,22 @@ internal class LocalUsageDatabase(private val path: Path) {
             val messages = mutableListOf<String>()
             if (tables.containsAll(listOf("session", "message"))) {
                 sources.add("SELECT id,id AS identity,time_updated,1 AS version FROM session")
-                messages.add("SELECT m.session_id,m.data,json_extract(m.data,'$.parentID') AS parentID FROM selected s CROSS JOIN message m ON s.id=m.session_id " +
+                messages.add("SELECT m.session_id,m.data,NULL AS originalCompleted,json_extract(m.data,'$.parentID') AS parentID FROM selected s CROSS JOIN message m ON s.id=m.session_id " +
                     "WHERE s.version=1 AND length(m.data)<=1048576 AND json_extract(m.data,'$.role')='assistant'")
             }
             if (tables.containsAll(listOf("session_v2", "session_message"))) {
                 sources.add("SELECT id,coalesce(json_extract(metadata,'$.varroLegacyImport.sourceSessionID'),id) AS identity,time_updated,2 AS version FROM session_v2")
-                messages.add("SELECT m.session_id,m.data,coalesce(json_extract(m.data,'$.parentID'),(SELECT u.id FROM session_message u WHERE u.session_id=m.session_id " +
+                // Imports can replace completion times. Recover timing only when the original message identity matches.
+                val originalCompleted = if ("message" in tables) "(SELECT CASE WHEN json_valid(original.data) THEN CASE WHEN " +
+                    "json_extract(original.data,'$.role')='assistant' AND " +
+                    "json_extract(original.data,'$.time.created')=json_extract(m.data,'$.time.created') AND " +
+                    "json_extract(original.data,'$.providerID')=coalesce(json_extract(m.data,'$.providerID'),json_extract(m.data,'$.model.providerID')) AND " +
+                    "json_extract(original.data,'$.modelID')=coalesce(json_extract(m.data,'$.modelID'),json_extract(m.data,'$.model.id'),json_extract(m.data,'$.model.modelID')) AND " +
+                    "json_type(original.data,'$.time.completed') IN ('integer','real') AND " +
+                    "json_extract(original.data,'$.time.completed')>=json_extract(original.data,'$.time.created') " +
+                    "THEN json_extract(original.data,'$.time.completed') END END FROM message original WHERE original.id=m.id AND original.session_id=s.identity)"
+                    else "NULL"
+                messages.add("SELECT m.session_id,m.data,$originalCompleted AS originalCompleted,coalesce(json_extract(m.data,'$.parentID'),(SELECT u.id FROM session_message u WHERE u.session_id=m.session_id " +
                     "AND u.type='user' AND u.seq<m.seq ORDER BY u.seq DESC LIMIT 1)) AS parentID FROM selected s CROSS JOIN session_message m ON s.id=m.session_id " +
                     "WHERE s.version=2 AND m.type='assistant' AND length(m.data)<=1048576")
             }
@@ -52,9 +62,10 @@ internal class LocalUsageDatabase(private val path: Path) {
                 if (start != null) statement.setLong(1, start)
                 statement.executeQuery().use { rows -> rows.next(); rows.getLong(1) }
             }
-            val fields = listOf("providerID", "modelID", "model", "time", "tokens")
+            val fields = listOf("providerID", "modelID", "model", "tokens")
                 .joinToString(", ") { "'$it', json_extract(m.data, '$.$it')" }
-            val query = selected + "SELECT m.session_id, json_object($fields, 'parentID',m.parentID) FROM (" + messages.joinToString(" UNION ALL ") + ") m LIMIT 1000001"
+            val time = "json_object('created',json_extract(m.data,'$.time.created'),'completed',coalesce(m.originalCompleted,json_extract(m.data,'$.time.completed')))"
+            val query = selected + "SELECT m.session_id, json_object($fields, 'time',$time, 'parentID',m.parentID) FROM (" + messages.joinToString(" UNION ALL ") + ") m LIMIT 1000001"
             database.prepareStatement(query).use { statement ->
                 if (start != null) statement.setLong(1, start)
                 statement.executeQuery().use { rows ->

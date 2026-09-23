@@ -165,6 +165,35 @@ class UsageReportTest {
         assertFalse(report.contains("| provider | model |"))
     }
 
+    @Test fun `migrated completion time uses matching original identity without reverting token usage`() {
+        val path = fixture()
+        DriverManager.getConnection("jdbc:sqlite:$path").use { database ->
+            database.createStatement().use {
+                it.execute("CREATE TABLE session_v2(id TEXT PRIMARY KEY,metadata TEXT,time_updated INTEGER)")
+                it.execute("CREATE TABLE session_message(id TEXT PRIMARY KEY,session_id TEXT,type TEXT,seq INTEGER,data TEXT)")
+                it.execute("INSERT INTO session_v2 VALUES('copy','{\"varroLegacyImport\":{\"sourceSessionID\":\"s\"}}',$now)")
+            }
+            val native = message().apply {
+                remove("providerID"); remove("modelID")
+                add("model", Json.obj("providerID" to "provider", "id" to "model"))
+                getAsJsonObject("time").addProperty("completed", now + 86_400_000)
+                getAsJsonObject("tokens").addProperty("input", 200)
+            }
+            database.prepareStatement("INSERT INTO session_message VALUES('m','copy','assistant',1,?)").use {
+                it.setString(1, native.toString()); it.executeUpdate()
+            }
+            val report = UsageReport(path) { _, _ -> error("No REST requests expected") }.build(true, now)
+            assertTrue(report, report.contains("| provider | model | 1 | 268 | 1s | 200 |"))
+            // An unrelated message with the same ID must not supply the completion time.
+            database.createStatement().use {
+                it.execute("UPDATE message SET data=json_set(data,'$.providerID','different')")
+            }
+            val records = mutableListOf<com.google.gson.JsonObject>()
+            LocalUsageDatabase(path).read(null, {}) { _, value -> records.add(value) }
+            assertEquals(now + 86_400_000, records.single().getAsJsonObject("time").get("completed").asLong)
+        }
+    }
+
     private fun message() = Json.obj(
         "id" to "m", "role" to "assistant", "providerID" to "provider", "modelID" to "model", "parentID" to "p",
         "time" to Json.obj("created" to now - 1000, "completed" to now),

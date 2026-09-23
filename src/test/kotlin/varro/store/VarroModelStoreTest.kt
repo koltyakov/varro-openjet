@@ -5,7 +5,7 @@ import com.intellij.openapi.components.Service
 import com.intellij.util.xmlb.XmlSerializer
 import org.junit.Assert.*
 import org.junit.Test
-import varro.protocol.Json
+import varro.protocol.*
 
 class VarroModelStoreTest {
     @Test
@@ -53,6 +53,27 @@ class VarroModelStoreTest {
         preferences.addProperty("custom", "changed")
         global.modelPreferences.addProperty("custom", "also changed")
         assertEquals(Json.obj("custom" to "saved"), global.modelPreferences)
+    }
+
+    @Test fun `stale views preserve explicit removals while changing other model preferences`() {
+        val base = Json.obj("addedModels" to listOf("provider:one", "provider:two"),
+            "removedModels" to emptyList<String>(), "pinnedModels" to emptyList<String>())
+        val store = VarroModelStore().apply { modelPreferences = base }
+        store.update(base, base.deepCopy().apply {
+            add("addedModels", Json.array(listOf("provider:two")))
+            add("removedModels", Json.array(listOf("provider:one")))
+        })
+        store.update(base, base.deepCopy().apply { add("pinnedModels", Json.array(listOf("provider:two"))) })
+        val restored = VarroModelStore().apply { loadState(store.getState()) }.modelPreferences
+        assertEquals(listOf("provider:one"), restored.arr("removedModels")!!.strings())
+        assertEquals(listOf("provider:two"), restored.arr("addedModels")!!.strings())
+        assertEquals(listOf("provider:two"), restored.arr("pinnedModels")!!.strings())
+        store.update(restored, restored.deepCopy().apply {
+            add("removedModels", Json.array(emptyList<String>()))
+            add("addedModels", base.get("addedModels"))
+        })
+        assertTrue(store.modelPreferences.arr("removedModels")!!.isEmpty)
+        assertEquals(setOf("provider:one", "provider:two"), store.modelPreferences.arr("addedModels")!!.strings().toSet())
     }
 
     private fun restore(store: VarroModelStore): VarroModelStore = VarroModelStore().apply {

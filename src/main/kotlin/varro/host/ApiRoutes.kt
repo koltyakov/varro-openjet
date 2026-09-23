@@ -34,6 +34,7 @@ object ApiRoutes {
         const val WORKSPACE_FILE = "$NAMESPACE/workspace-file"
         const val WORKSPACE_PROBLEMS = "$NAMESPACE/workspace-problems"
         const val WORKSPACE_FILE_PICK = "$NAMESPACE/workspace-file/pick"
+        const val COPIED_SELECTION_MATCH = "$NAMESPACE/copied-selection/match"
         const val WORKSPACE_PATH_RESOLVE = "$NAMESPACE/workspace-path/resolve"
         const val PERMISSION_JUDGE = "$NAMESPACE/permission/judge"
         const val PERMISSION_JUDGE_MODEL = "$NAMESPACE/permission/judge/model"
@@ -243,6 +244,7 @@ object ApiRoutes {
             request.method == "GET" && request.onlyQuery("path") && request.required("path")
         },
         route(Endpoints.WORKSPACE_FILE_PICK, methodsNoQuery("GET")),
+        route(Endpoints.COPIED_SELECTION_MATCH, methodsNoQuery("POST")),
         route(Endpoints.WORKSPACE_PROBLEMS, methodsNoQuery("GET")),
         route(Endpoints.SESSION_HISTORY_SCOPE) { request, _ ->
             (request.method == "GET" || request.method == "POST") &&

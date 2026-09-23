@@ -81,7 +81,13 @@ class SessionTrash(
         } else {
             // Deleting a root recursively removes its children on OpenCode.
             try {
-                request("DELETE", "/session/${encode(id)}", null, entry.obj("root").str("directory"))
+                val path = "/session/${encode(id)}"
+                val directory = entry.obj("root").str("directory")
+                val deleted = request("DELETE", path, null, directory)
+                if (deleted?.isJsonPrimitive != true || !deleted.asJsonPrimitive.isBoolean || !deleted.asBoolean) {
+                    request("GET", path, null, directory)
+                    error("OpenCode did not confirm session deletion: $id")
+                }
             } catch (failure: Exception) {
                 if (failure.message?.startsWith("404 ") != true) throw failure
             }

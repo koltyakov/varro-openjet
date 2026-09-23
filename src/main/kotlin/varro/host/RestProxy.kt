@@ -235,6 +235,13 @@ class RestProxy(
 
             pathname == ApiRoutes.Endpoints.WORKSPACE_PROBLEMS -> WorkspaceProblems.snapshot(project)
 
+            pathname == ApiRoutes.Endpoints.COPIED_SELECTION_MATCH -> {
+                val record = body.asObjectOrNull()
+                val text = record.str("text")
+                require(text != null && text.isNotBlank() && text.length <= 256 * 1024) { "Invalid copied selection text" }
+                context.matchCopiedSelection(text, record.bool("plainTextOnly") == true)
+            }
+
             pathname == ApiRoutes.Endpoints.PROVIDER_LIMIT ->
                 services.providerLimit(q("providerID")!!, q("modelID"))
 

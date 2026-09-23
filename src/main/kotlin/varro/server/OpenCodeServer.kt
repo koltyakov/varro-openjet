@@ -59,6 +59,7 @@ class OpenCodeServer(
     private val disposeGeneration = AtomicInteger(0)
     private val startInFlight = AtomicBoolean(false)
     private val serverVersion = AtomicReference<String?>(null)
+    internal var authentication = OpenCodeServerAuthentication()
     @Volatile var hasHostWork: () -> Boolean = { false }
     private val maintenance = IdleMaintenance(
         enabled = { settings.serverAutoUpdate && process.isManaged && status.get() is ServerStatus.Running && phase.get() == Phase.IDLE },
@@ -86,7 +87,7 @@ class OpenCodeServer(
         isDisposing = { phase.get() == Phase.DISPOSING || phase.get() == Phase.RESTARTING },
         updateEventStreamState = ::applyEventStreamState,
         emitEvent = { event -> eventListeners.forEach { runCatching { it(event) } } },
-        getAuthorization = process::authorization,
+        getAuthorization = { authentication.authorization(url()) ?: process.authorization() },
     )
 
     fun url(): String = "http://127.0.0.1:${process.port}"
@@ -167,7 +168,17 @@ class OpenCodeServer(
                 }
             }
             // 1. Adopt a healthy server rather than fighting it for the port.
-            val existing = transport.readHealthInfo()
+            var existing = transport.readHealthInfo()
+            if (!existing.healthy && transport.healthFailure?.contains("authentication") == true) {
+                val endpoint = url()
+                existing = authentication.recover(endpoint, checkCurrent = {
+                    check(disposeGeneration.get() == generation && url() == endpoint) { "OpenCode connection changed during authentication" }
+                }, health = transport::readHealthInfo, rejected = { transport.healthFailure?.contains("authentication") == true })
+                if (!existing.healthy) {
+                    setStatus(ServerStatus.Error(transport.healthFailure ?: "Could not verify OpenCode server credentials."))
+                    return
+                }
+            }
             if (existing.healthy) {
                 log.info("Adopting the OpenCode server already listening on ${url()}")
                 if (!isAttachOnly()) process.refreshOwnership()

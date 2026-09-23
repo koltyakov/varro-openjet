@@ -2008,8 +2008,17 @@ export function createOpenCodeRuntime(): OpenCodeRuntime {
     }
   }
 
+  let pendingRoutingRefreshes = 0;
+
   async function refreshRoutingState() {
-    await Promise.all([dataLoaders.refreshRoutingState(), loadCompatibilityState()]);
+    pendingRoutingRefreshes += 1;
+    appStore.setState('providersRefreshing', true);
+    try {
+      await Promise.all([dataLoaders.refreshRoutingState(), loadCompatibilityState()]);
+    } finally {
+      pendingRoutingRefreshes -= 1;
+      appStore.setState('providersRefreshing', pendingRoutingRefreshes > 0);
+    }
   }
 
   function removeUnavailableSession(sessionId: string) {

@@ -33,6 +33,7 @@ import {
   getFirstContextLine,
   mergeContextFile,
   parseSelectionReference,
+  TERMINAL_SELECTION_MARKER,
 } from '../../../shared/context-files';
 import { AttachmentLabel } from '../AttachmentLabel';
 import { ImagePreviewOverlay, createImagePreviewEffect } from '../ImagePreview';
@@ -111,6 +112,7 @@ export type UserMessageMarkupSuffix = {
 
 export type ParsedUserMessageContent = {
   messageTexts: string[];
+  automaticActions: string[];
   attachments: MessageAttachment[];
   fileParts: FilePart[];
   agentParts: AgentPart[];
@@ -263,6 +265,7 @@ export function getUserMessageMarkupSuffix(text: string): UserMessageMarkupSuffi
 
 export function parseUserMessageContent(parts: Part[]): ParsedUserMessageContent {
   const messageTexts: string[] = [];
+  const automaticActions = new Set<string>();
   const attachments: MessageAttachment[] = [];
   const fileParts: FilePart[] = [];
   const agentParts: AgentPart[] = [];
@@ -288,11 +291,6 @@ export function parseUserMessageContent(parts: Part[]): ParsedUserMessageContent
       attachments.push({ type: 'problem-reference', reference: problemReference });
       continue;
     }
-    const issues = parseIssueAttachment(text);
-    if (issues) {
-      attachments.push({ type: 'issues', ...issues });
-      continue;
-    }
     const skill = parseSkillAttachment(text);
     if (skill) {
       if (
@@ -305,10 +303,93 @@ export function parseUserMessageContent(parts: Part[]): ParsedUserMessageContent
 
     const parsedText = parseUserMessageText(text);
     attachments.push(...parsedText.attachments);
+    if (part.synthetic) {
+      if (parsedText.messageTexts.some((value) => value.trim())) {
+        automaticActions.add(getAutomaticAction(part));
+      }
+      continue;
+    }
     messageTexts.push(...parsedText.messageTexts);
   }
 
-  return { messageTexts, attachments, fileParts, agentParts };
+  // A file/resource read emits both a descriptive part and an arbitrary content part.
+  if (
+    automaticActions.has('Added file context') ||
+    automaticActions.has('Added MCP resource context')
+  ) {
+    automaticActions.delete('Added automatic context');
+  }
+  return {
+    messageTexts,
+    automaticActions: [...automaticActions],
+    attachments,
+    fileParts,
+    agentParts,
+  };
+}
+
+function getAutomaticAction(part: TextPart): string {
+  const text = part.text.trim();
+  if (
+    part.metadata?.compaction_continue === true ||
+    text.endsWith(
+      'Continue if you have next steps, or stop and ask for clarification if you are unsure how to proceed.'
+    )
+  )
+    return 'Continued after context compaction';
+  if (text === 'Summarize the task tool output above and continue with your task.') {
+    return 'Continued after subagent task';
+  }
+  if (text === 'The following tool was executed by the user') return 'Ran a shell command';
+  if (
+    text.startsWith('The server restarted while you were working.') ||
+    text.startsWith('The previous response was interrupted.') ||
+    text.startsWith(
+      'Continue from where you were interrupted by the server restart or extension reload.'
+    )
+  ) {
+    return 'Resumed after interruption';
+  }
+  if (text.startsWith('Instructions from:')) return 'Loaded agent instructions';
+  if (text.startsWith('<shell ')) {
+    const header = text.slice(0, text.indexOf('>'));
+    if (header.includes('state="failed"')) return 'Background command failed';
+    return 'Background command finished';
+  }
+  if (/^The plan at .+ has been approved, you can now edit files\. Execute the plan$/s.test(text)) {
+    return 'Started approved plan';
+  }
+  if (text.startsWith('<system-reminder>')) {
+    if (text.includes('Your operational mode has changed from plan to build.'))
+      return 'Switched to build mode';
+    if (text.includes('Plan mode is active') || text.includes('Plan Mode'))
+      return 'Entered plan mode';
+    return 'Updated session instructions';
+  }
+  if (/^The user explicitly (?:mentioned these skills|invoked .+ skill)/s.test(text)) {
+    return 'Added skill instructions';
+  }
+  if (
+    text.startsWith('Use the above message and context to generate a prompt and call the task tool')
+  ) {
+    return 'Requested subagent task';
+  }
+  if (text.startsWith('Read tool failed to read ')) return 'Could not read attached file';
+  if (
+    text.startsWith('Called the Read tool with the following input:') ||
+    text.startsWith('<path>')
+  ) {
+    return 'Added file context';
+  }
+  if (text.startsWith('Failed to read MCP resource ')) return 'Could not read MCP resource';
+  if (text.startsWith('[Binary MCP resource omitted:')) return 'Skipped unsupported MCP attachment';
+  if (
+    text.startsWith('Reading MCP resource:') ||
+    text.startsWith('[Binary MCP resource attached:')
+  ) {
+    return 'Added MCP resource context';
+  }
+  return 'Added automatic context';
 }
 
 export function hasUserMessageContent(parsed: ParsedUserMessageContent): boolean {
@@ -373,6 +454,30 @@ function parseUserMessageText(text: string): ParsedUserMessageText {
     const trimmedLine = line.trim();
 
     if (!inCodeFence) {
+      // Some backends join prompt and context parts into one text part.
+      if (parseIssueAttachment(`${line}\n`)) {
+        let end = index + 1;
+        while (end < lines.length) {
+          const candidate = lines[end]!.trim();
+          if (
+            parseIssueAttachment(`${candidate}\n`) ||
+            parseUserMessageAttachmentLine(candidate, false) ||
+            /^\[(?:Working directory:|Database context\]|Selection from terminal |Unsaved (?:selection|buffer) from |Problem [\w-]+\])/.test(
+              candidate
+            )
+          )
+            break;
+          end += 1;
+        }
+        const issues = parseIssueAttachment(lines.slice(index, end).join('\n').trimEnd());
+        if (issues) {
+          flushTextBuffer();
+          attachments.push({ type: 'issues', ...issues });
+          index = end - 1;
+          continue;
+        }
+      }
+
       if (trimmedLine.startsWith('[Working directory:')) {
         flushTextBuffer();
         continue;
@@ -1406,7 +1511,9 @@ function getAttachmentTextMarker(attachment: MessageAttachment): string | null {
     case 'file-selection':
       return `@${attachment.filename}`;
     case 'editor-text':
+      return null;
     case 'terminal-selection':
+      return TERMINAL_SELECTION_MARKER;
     case 'database':
       return null;
     case 'issues':
@@ -1795,6 +1902,10 @@ function InlineMessageAttachmentChip(props: { attachment: MessageAttachment }) {
     attachment().type === 'file-reference' &&
     // SAFETY: The surrounding shape or discriminator check establishes the Extract<MessageAttachment, { type: 'file-reference' }> contract used below.
     (attachment() as Extract<MessageAttachment, { type: 'file-reference' }>).isDirectory;
+  const terminal = () => {
+    const value = attachment();
+    return value.type === 'terminal-selection' ? value : null;
+  };
   const fileSelection = () =>
     // SAFETY: The surrounding shape or discriminator check establishes the Extract<MessageAttachment, { type: 'file-selection' }> contract used below.
     attachment().type === 'file-selection'
@@ -1822,7 +1933,14 @@ function InlineMessageAttachmentChip(props: { attachment: MessageAttachment }) {
         fallback={
           <Show
             when={database()}
-            fallback={<FileTypeIcon path={filePath()} class="inline-chip-icon" />}
+            fallback={
+              <Show
+                when={terminal()}
+                fallback={<FileTypeIcon path={filePath()} class="inline-chip-icon" />}
+              >
+                <MaterialChipIcon kind="terminal" class="inline-chip-icon" />
+              </Show>
+            }
           >
             <MaterialChipIcon kind="table" class="inline-chip-icon" />
           </Show>
@@ -1837,6 +1955,11 @@ function InlineMessageAttachmentChip(props: { attachment: MessageAttachment }) {
       <Show when={fileSelection()}>
         {(selection) => (
           <span class="inline-chip-detail">{formatContextLineRanges(selection().lineRanges)}</span>
+        )}
+      </Show>
+      <Show when={terminal()}>
+        {(selection) => (
+          <span class="inline-chip-detail">{getTerminalLineCountLabel(selection().text)}</span>
         )}
       </Show>
     </button>

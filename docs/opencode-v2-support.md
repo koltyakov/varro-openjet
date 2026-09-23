@@ -1,12 +1,14 @@
 # OpenCode V2 support
 
-OpenJet supports V1 from 1.16.0 and V2 from 2.0.5. The webview and shared sources were synced from Varro's `main` branch at `e5cdda0477f9`. The Kotlin adapter follows that revision's released-server contracts, including its generated skill and shell transcript records. Pending and running V2 patch calls render as active edits. Assistant history preserves automatic retry metadata for recovery notices.
+OpenJet supports V1 from 1.16.0 and V2 from 2.0.5. The webview and shared sources were synced from Varro's `main` branch at `45eedb25d62c`. The Kotlin adapter follows that revision's released-server contracts, including its generated skill, shell and synthetic transcript records. Synthetic text appears as automatic-action notices. Pending and running V2 patch calls render as active edits. Assistant history preserves automatic retry metadata for recovery notices.
 
 ## Connection and startup
 
 `OpenCodeTransport` validates JSON health responses before selecting the protocol. V2 uses `/api/info`, with `/api/status` for 2.0.5. V1 uses `/global/health`. An HTML fallback page is not a healthy API response.
 
 With no explicit command, OpenJet can adopt a live service registered in `$XDG_STATE_HOME/opencode/service.json`. It checks the loopback URL, PID and server version. Managed launches capture the generated password before retaining startup output. HTTP requests and SSE use the same host-only authorization, including `OPENCODE_SERVER_PASSWORD` and `OPENCODE_SERVER_USERNAME` for external servers. Startup output redaction handles split chunks.
+
+After an authentication failure, OpenJet retries credentials stored for the server URL in the IDE password safe, then prompts for a username and password if needed. It saves credentials only after a successful health check. Cancellation and failed verification leave the server disconnected.
 
 The default CLI search prefers `opencode2` over `opencode`. An explicit command takes precedence. Package-manager updates use `@opencode/cli` for V2 and `opencode-ai` for V1.
 
@@ -39,6 +41,8 @@ The importer copies the selected conversation and same-workspace descendants wit
 Limits are 100 sessions, 10,000 messages and 100,000 parts per session, 32 MiB of history, and a ten-second SQLite query deadline. If a tree import fails, OpenJet deletes copies already created by that import and reports cleanup failures.
 
 Usage reports read both V1 and V2 tables. For an imported conversation and its original, the report selects the newer complete session rather than counting both copies.
+
+When migration preserves a message ID but replaces its completion time, reports recover the original completion time only if the session identity, creation time, provider and model match. Token counts still come from the selected session.
 
 ## Verification
 
