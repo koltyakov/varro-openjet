@@ -73,6 +73,7 @@ internal class OpenCodeV2Adapter(
             return result?.get("data") ?: error("Invalid OpenCode v2 response for ${target.substringBefore('?')}")
         }
         fun result(value: Any?) = OpenCodeResponse(Json.toElement(value))
+        if (method == "GET" && route == "/openapi.json") return result(raw("GET", "/openapi.json"))
         if (route.startsWith("/api/")) return result(raw(method, scoped(path), body))
         when (route) {
             "/global/health" -> return result(Json.obj("healthy" to true, "version" to raw("GET", "/api/info").asObjectOrNull().str("version")))
@@ -237,7 +238,7 @@ internal class OpenCodeV2Adapter(
                         backgroundWork.shellIDs(id).forEach { raw("DELETE", scoped("/api/shell/${encode(it)}")) }
                         backgroundWork.clearSession(id)
                     }
-                    raw("POST", "$endpoint/${if (action == "abort") "interrupt" else "compact"}", Json.obj()); return result(true)
+                    raw("POST", "$endpoint/${if (action == "abort") "interrupt?resume=false" else "compact"}", Json.obj()); return result(true)
                 }
                 "fork" -> return result(session(data("POST", "$endpoint/fork", Json.obj("before" to input.get("messageID"))).asJsonObject))
                 "revert" -> { raw("POST", "$endpoint/revert/stage", Json.obj("messageID" to input.get("messageID"), "files" to true)); return result(session(data("GET", endpoint).asJsonObject)) }

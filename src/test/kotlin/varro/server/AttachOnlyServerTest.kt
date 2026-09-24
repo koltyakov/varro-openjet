@@ -17,6 +17,8 @@ class AttachOnlyServerTest {
             assertTrue(server.isAttachOnly())
             assertFalse(server.isManaged())
             assertEquals(version, server.version())
+            assertEquals(version.substringBefore('.').toInt(), (server.currentStatus() as ServerStatus.Running).apiVersion)
+            assertEquals(version.substringBefore('.').toInt(), server.currentStatus().toJson().get("apiVersion").asInt)
             assertEquals(OpenCodeServer.RestartOutcome.NOT_MANAGED, server.restart(force = true))
             assertTrue(server.currentStatus() is ServerStatus.Running)
         }

@@ -160,6 +160,10 @@ Scoped Always Allow approvals resolve the owning session before reading pending 
 
 `SessionSummaryService` tries local SQLite history through `LocalSessionSummary` and can fall back to REST. `SessionSummary` computes session-tree token totals, duration and file changes. `UsageReport` reads retained cross-project history through `LocalUsageDatabase` without starting OpenCode, with a bounded REST fallback when local history is unavailable.
 
+V2 pause markers live in `metadata.varro.pauses`, backed by the shared per-session annotation files. `SessionPauses` caps work periods at these markers in summaries and usage reports. REST summaries read current session metadata, and local usage reads V2 annotations alongside database records.
+
+`CommitMessageService` probes `/openapi.json` on V2 before using `/api/experimental/generate`. It uses the existing helper-session flow when the operation is absent or the server rejects the selected model before generation. Provider errors, malformed replies and ambiguous failures do not trigger a second generation.
+
 ## Authorization boundary
 
 `ApiRoutes` implements the route allowlist corresponding to upstream's `isAllowedApiRequest`. Each route states its methods and accepted query keys, because several OpenCode endpoints change scope based on query parameters. Validation checks encoded path segments, so `%2f` cannot insert a separator into a captured ID.

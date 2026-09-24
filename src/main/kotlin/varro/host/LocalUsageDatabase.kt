@@ -2,16 +2,21 @@ package varro.host
 
 import com.google.gson.JsonObject
 import org.sqlite.SQLiteConfig
-import varro.protocol.Json
+import varro.protocol.*
+import varro.server.OpenCodeV2SessionState
 import java.nio.file.Files
 import java.nio.file.Path
 import java.sql.DriverManager
 import java.util.concurrent.TimeUnit
 
 /** Projects message metadata only. Message parts never cross the database boundary. */
-internal class LocalUsageDatabase(private val path: Path) {
+internal class LocalUsageDatabase(
+    private val path: Path,
+    private val readAnnotations: (String) -> JsonObject = OpenCodeV2SessionState()::read,
+) {
     fun read(start: Long?, checkCancelled: () -> Unit, consume: (String, JsonObject) -> Unit): Long? {
         if (!Files.exists(path)) return null
+        val pauses = mutableMapOf<String, Map<String, Long>>()
         checkCancelled()
         val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30)
         fun checkProgress() {
@@ -36,7 +41,7 @@ internal class LocalUsageDatabase(private val path: Path) {
             val messages = mutableListOf<String>()
             if (tables.containsAll(listOf("session", "message"))) {
                 sources.add("SELECT id,id AS identity,time_updated,1 AS version FROM session")
-                messages.add("SELECT m.session_id,m.data,NULL AS originalCompleted,json_extract(m.data,'$.parentID') AS parentID FROM selected s CROSS JOIN message m ON s.id=m.session_id " +
+                messages.add("SELECT m.id,1 AS version,m.session_id,m.data,NULL AS originalCompleted,json_extract(m.data,'$.parentID') AS parentID FROM selected s CROSS JOIN message m ON s.id=m.session_id " +
                     "WHERE s.version=1 AND length(m.data)<=1048576 AND json_extract(m.data,'$.role')='assistant'")
             }
             if (tables.containsAll(listOf("session_v2", "session_message"))) {
@@ -51,7 +56,7 @@ internal class LocalUsageDatabase(private val path: Path) {
                     "json_extract(original.data,'$.time.completed')>=json_extract(original.data,'$.time.created') " +
                     "THEN json_extract(original.data,'$.time.completed') END END FROM message original WHERE original.id=m.id AND original.session_id=s.identity)"
                     else "NULL"
-                messages.add("SELECT m.session_id,m.data,$originalCompleted AS originalCompleted,coalesce(json_extract(m.data,'$.parentID'),(SELECT u.id FROM session_message u WHERE u.session_id=m.session_id " +
+                messages.add("SELECT m.id,2 AS version,m.session_id,m.data,$originalCompleted AS originalCompleted,coalesce(json_extract(m.data,'$.parentID'),(SELECT u.id FROM session_message u WHERE u.session_id=m.session_id " +
                     "AND u.type='user' AND u.seq<m.seq ORDER BY u.seq DESC LIMIT 1)) AS parentID FROM selected s CROSS JOIN session_message m ON s.id=m.session_id " +
                     "WHERE s.version=2 AND m.type='assistant' AND length(m.data)<=1048576")
             }
@@ -65,7 +70,7 @@ internal class LocalUsageDatabase(private val path: Path) {
             val fields = listOf("providerID", "modelID", "model", "tokens")
                 .joinToString(", ") { "'$it', json_extract(m.data, '$.$it')" }
             val time = "json_object('created',json_extract(m.data,'$.time.created'),'completed',coalesce(m.originalCompleted,json_extract(m.data,'$.time.completed')))"
-            val query = selected + "SELECT m.session_id, json_object($fields, 'time',$time, 'parentID',m.parentID) FROM (" + messages.joinToString(" UNION ALL ") + ") m LIMIT 1000001"
+            val query = selected + "SELECT m.session_id, json_object($fields, 'id',m.id, 'time',$time, 'parentID',m.parentID), m.version FROM (" + messages.joinToString(" UNION ALL ") + ") m LIMIT 1000001"
             database.prepareStatement(query).use { statement ->
                 if (start != null) statement.setLong(1, start)
                 statement.executeQuery().use { rows ->
@@ -73,7 +78,12 @@ internal class LocalUsageDatabase(private val path: Path) {
                     while (rows.next()) {
                         checkProgress()
                         check(++scanned <= 1_000_000) { "Usage report exceeds the 1,000,000-message local scan limit" }
-                        consume(rows.getString(1), Json.parse(rows.getString(2)).asJsonObject)
+                        val sessionId = rows.getString(1)
+                        val info = Json.parse(rows.getString(2)).asJsonObject
+                        val boundaries = if (rows.getInt(3) == 2) pauses.getOrPut(sessionId) {
+                            SessionPauses.read(readAnnotations(sessionId).obj("metadata"))
+                        } else emptyMap()
+                        consume(sessionId, SessionPauses.capUsage(info, boundaries))
                     }
                 }
             }

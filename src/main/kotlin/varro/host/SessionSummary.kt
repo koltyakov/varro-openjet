@@ -25,7 +25,7 @@ internal object SessionSummary {
     )
     private val generated = Regex("(?:^|/)(?:node_modules|\\.venv|venv|\\.tox|__pycache__)(?:/|$)")
 
-    fun summarize(history: History, diffs: JsonElement? = null): JsonObject {
+    fun summarize(history: History, diffs: JsonElement? = null, metadata: JsonObject? = null): JsonObject {
         val remoteEdits = summarizeDiffs(diffRecords(diffs))
         val edits = if (listOf("files", "additions", "deletions").any { remoteEdits.long(it) != 0L }) {
             remoteEdits
@@ -40,7 +40,7 @@ internal object SessionSummary {
         edits.add("tokenBreakdown", Json.obj(
             "session" to session, "subagents" to subagents, "subagentCount" to history.descendants.size,
         ))
-        duration(history.messages).entrySet().forEach { (key, value) -> edits.add(key, value) }
+        duration(history.messages, SessionPauses.read(metadata)).entrySet().forEach { (key, value) -> edits.add(key, value) }
         history.messages.mapNotNull { it.obj("info") }.lastOrNull {
             it.str("role") == "assistant" && it.str("mode") != "subagent" &&
                 it.str("providerID") != null && it.str("modelID") != null
@@ -161,7 +161,7 @@ internal object SessionSummary {
 
     private fun spent(usage: Map<String, Long>) = (usage.getValue("total") - usage.getValue("cacheRead")).coerceAtLeast(0)
 
-    private fun duration(messages: List<JsonObject>): JsonObject {
+    private fun duration(messages: List<JsonObject>, pauses: Map<String, Long>): JsonObject {
         var total = 0L
         var prompt: Long? = null
         var firstAssistant: Long? = null
@@ -174,9 +174,14 @@ internal object SessionSummary {
         }
         for (message in messages) {
             val info = message.obj("info")
+            val pausedAt = pauses[info.str("id")]
             if (info.str("role") != "assistant") {
                 flush()
                 if (info.str("role") == "user") prompt = info.obj("time").long("created")
+                if (pausedAt != null && prompt != null) {
+                    total += (pausedAt - prompt!!).coerceAtLeast(0)
+                    flush()
+                }
                 continue
             }
             if (info.str("mode") == "subagent") continue
@@ -184,6 +189,12 @@ internal object SessionSummary {
             val end = info.obj("time").long("completed")
             lastCompleted = end != null
             if (end != null) completed = maxOf(completed ?: end, end)
+            if (pausedAt != null) {
+                completed = SessionPauses.completedAt(prompt ?: firstAssistant ?: pausedAt,
+                    if (lastCompleted) completed else null, pausedAt)
+                lastCompleted = true
+                flush()
+            }
         }
         val active = if (lastCompleted) null else prompt ?: firstAssistant
         flush()

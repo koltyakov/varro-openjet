@@ -206,9 +206,11 @@ class OpenCodeV2Test {
         val root = temporary.newFolder().toPath()
         val value = Json.obj("id" to "ses_test", "title" to "test", "location" to Json.obj("directory" to "/project"), "time" to Json.obj("created" to 1, "updated" to 2))
         fun create() = OpenCodeV2Adapter({ method, _, _, _ -> assertEquals("GET", method); OpenCodeResponse(Json.obj("data" to value)) }, OpenCodeV2SessionState(root))
-        create().request("PATCH", "/session/ses_test", Json.obj("metadata" to Json.obj("varro" to Json.obj("permissionMode" to "auto")), "time" to Json.obj("archived" to 3)), RequestOptions())
+        create().request("PATCH", "/session/ses_test", Json.obj("metadata" to Json.obj("varro" to Json.obj("permissionMode" to "auto",
+            "pauses" to listOf(Json.obj("messageId" to "msg_paused", "pausedAt" to 1000)))), "time" to Json.obj("archived" to 3)), RequestOptions())
         val restored = create().request("GET", "/session/ses_test", null, RequestOptions()).data.asObjectOrNull()
         assertEquals("auto", restored.obj("metadata").obj("varro").str("permissionMode"))
+        assertEquals(1000L, restored.obj("metadata").obj("varro").arr("pauses")!![0].asJsonObject.long("pausedAt"))
         assertEquals(1L, restored.obj("time").long("created"))
         assertEquals(3L, restored.obj("time").long("archived"))
         assertEquals("2", restored.str("version"))

@@ -52,6 +52,13 @@
     ]]></description>
 
     <change-notes><![CDATA[
+        <h3>0.3.8</h3>
+        <p>Synced Varro through a061cf7d4a3e. Added OpenCode V2 session pause and resume, with
+            parked queued messages and pause-aware session and usage durations. Large text pastes
+            become previewable attachments that survive draft and queue restoration. Improved
+            streaming activity, attachment display and scrolling as the composer collapses.
+            V2 commit-message generation uses the stateless endpoint when available, with
+            helper-session fallback for older servers and unsupported models. Updated DOMPurify.</p>
         <h3>0.3.7</h3>
         <p>Synced Varro through 45eedb25d62c. Pasted saved-editor selections and matching terminal
             output become context attachments. Improved attachment editing, queued context and composer

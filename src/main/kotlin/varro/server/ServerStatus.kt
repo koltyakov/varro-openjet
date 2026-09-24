@@ -75,10 +75,12 @@ sealed interface ServerStatus {
     data class Running(
         val url: String,
         val eventStream: EventStreamState = EventStreamState.HEALTHY,
+        val apiVersion: Int = 1,
     ) : ServerStatus {
         override fun toJson(): JsonObject = Json.obj(
             "state" to "running",
             "url" to url,
+            "apiVersion" to apiVersion,
             "eventStream" to eventStream.id,
         )
     }

@@ -10,11 +10,13 @@ import java.net.URLEncoder
 
 internal class SessionSummaryService(
     private val readLocal: (String) -> SessionSummary.History?,
+    private val apiVersion: () -> Int = { 1 },
     private val request: (String, String?) -> JsonElement?,
 ) {
     fun read(sessionId: String, directory: String?): JsonObject {
-        readLocal(sessionId)?.let { return SessionSummary.summarize(it) }
         fun encoded(id: String) = URLEncoder.encode(id, Charsets.UTF_8).replace("+", "%20")
+        val metadata = if (apiVersion() == 2) request("/session/${encoded(sessionId)}", directory).asObjectOrNull().obj("metadata") else null
+        readLocal(sessionId)?.let { return SessionSummary.summarize(it, metadata = metadata) }
         fun records(path: String) = request(path, directory).asArrayOrNull()
             ?.mapNotNull { it.asObjectOrNull() } ?: error("OpenCode returned invalid session history: $path")
         val diffs = request("/session/${encoded(sessionId)}/diff", directory)
@@ -32,6 +34,6 @@ internal class SessionSummaryService(
                 descendants.add(SessionSummary.Descendant(child.obj("tokens"), records("/session/${encoded(id)}/message")))
             }
         }
-        return SessionSummary.summarize(SessionSummary.History(messages, descendants), diffs)
+        return SessionSummary.summarize(SessionSummary.History(messages, descendants), diffs, metadata)
     }
 }

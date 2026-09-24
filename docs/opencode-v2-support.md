@@ -1,6 +1,8 @@
 # OpenCode V2 support
 
-OpenJet supports V1 from 1.16.0 and V2 from 2.0.5. The webview and shared sources were synced from Varro's `main` branch at `45eedb25d62c`. The Kotlin adapter follows that revision's released-server contracts, including its generated skill, shell and synthetic transcript records. Synthetic text appears as automatic-action notices. Pending and running V2 patch calls render as active edits. Assistant history preserves automatic retry metadata for recovery notices.
+OpenJet supports V1 from 1.16.0 and V2 from 2.0.5. The webview and shared sources were synced from Varro's `main` branch at `a061cf7d4a3e`. The Kotlin adapter follows that revision's released-server contracts, including its generated skill, shell and synthetic transcript records. Synthetic text appears as automatic-action notices. Pending and running V2 patch calls render as active edits. Assistant history preserves automatic retry metadata for recovery notices.
+
+V2 sessions support `/pause` and a Resume action in the transcript. Pausing parks queued messages and interrupts with `resume=false`. Pause markers persist in the shared Varro session annotations, and session summaries and usage reports exclude paused time. Commit-message generation uses the stateless endpoint when the server advertises it, falling back to a helper session when the endpoint or selected model is unavailable before generation starts.
 
 ## Connection and startup
 

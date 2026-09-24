@@ -335,7 +335,7 @@ class OpenCodeServer(
         if (disposeGeneration.get() != generation) return
         // `degraded` until the stream actually connects; the transport promotes it
         // to healthy, so the UI never claims live updates it does not have.
-        setStatus(ServerStatus.Running(url(), EventStreamState.DEGRADED))
+        setStatus(ServerStatus.Running(url(), EventStreamState.DEGRADED, transport.apiVersion))
         transport.startEventStream(OpenCodeRequestScope.normalizeDirectory(workspaceCwd()))
         if (maintenanceStarted.compareAndSet(false, true)) scheduler.scheduleWithFixedDelay({
             if (isAttachOnly()) return@scheduleWithFixedDelay

@@ -1,5 +1,7 @@
 import { For, Show, createEffect, createMemo, createSignal, onCleanup } from 'solid-js';
 import { Portal } from 'solid-js/web';
+import { createPastedText, readPastedTextDataUrl } from '../../../shared/pasted-text';
+import { SESSION_RESUME_PROMPT } from '../../../shared/session-pauses';
 import type {
   DatabaseContext,
   DatabaseAttachment,
@@ -26,7 +28,15 @@ import { rememberDirectSessionReturn } from '../../lib/session-navigation';
 import { state } from '../../lib/state';
 import { observeSettledResize } from '../../lib/settled-resize-observer';
 import { selectSession } from '../../hooks/useOpenCode';
-import type { AgentPart, FilePart, Part, TextPart } from '../../types';
+import type {
+  AgentPart,
+  AssistantMessage,
+  FilePart,
+  MessageEntry,
+  Part,
+  TextPart,
+  ToolPart,
+} from '../../types';
 import {
   formatContextLineRanges,
   formatSelectionReference,
@@ -113,6 +123,7 @@ export type UserMessageMarkupSuffix = {
 export type ParsedUserMessageContent = {
   messageTexts: string[];
   automaticActions: string[];
+  automaticParts: ToolPart[];
   attachments: MessageAttachment[];
   fileParts: FilePart[];
   agentParts: AgentPart[];
@@ -131,6 +142,7 @@ type DisplayMessageAttachment =
 
 type InlineRenderableAttachment =
   | { type: 'message-attachment'; attachment: MessageAttachment }
+  | { type: 'file-part'; part: FilePart; marker: string }
   | { type: 'image-file'; part: FilePart; index: number; marker?: string; label?: string }
   | { type: 'agent'; part: AgentPart; marker: string };
 
@@ -266,14 +278,16 @@ export function getUserMessageMarkupSuffix(text: string): UserMessageMarkupSuffi
 export function parseUserMessageContent(parts: Part[]): ParsedUserMessageContent {
   const messageTexts: string[] = [];
   const automaticActions = new Set<string>();
+  const automaticParts: ToolPart[] = [];
   const attachments: MessageAttachment[] = [];
   const fileParts: FilePart[] = [];
   const agentParts: AgentPart[] = [];
 
   for (const part of parts) {
     if (part.type === 'file') {
-      // SAFETY: The surrounding shape or discriminator check establishes the FilePart contract used below.
-      fileParts.push(part as FilePart);
+      if (!fileParts.some((file) => file.url === part.url && file.mime === part.mime)) {
+        fileParts.push(part);
+      }
       continue;
     }
 
@@ -285,7 +299,7 @@ export function parseUserMessageContent(parts: Part[]): ParsedUserMessageContent
     if (part.type !== 'text') continue;
     // SAFETY: The surrounding shape or discriminator check establishes the TextPart contract used below.
     const text = (part as TextPart).text;
-    if (!text || isVisionDelegationContextText(text)) continue;
+    if (!text || text === SESSION_RESUME_PROMPT || isVisionDelegationContextText(text)) continue;
     const problemReference = parseInlineProblem(text);
     if (problemReference) {
       attachments.push({ type: 'problem-reference', reference: problemReference });
@@ -306,6 +320,7 @@ export function parseUserMessageContent(parts: Part[]): ParsedUserMessageContent
     if (part.synthetic) {
       if (parsedText.messageTexts.some((value) => value.trim())) {
         automaticActions.add(getAutomaticAction(part));
+        automaticParts.push(automaticActionPart(part));
       }
       continue;
     }
@@ -322,10 +337,91 @@ export function parseUserMessageContent(parts: Part[]): ParsedUserMessageContent
   return {
     messageTexts,
     automaticActions: [...automaticActions],
-    attachments,
+    automaticParts,
+    attachments: attachments.filter(
+      (attachment, index) =>
+        attachments.findIndex(
+          (candidate) => JSON.stringify(candidate) === JSON.stringify(attachment)
+        ) === index &&
+        !(
+          attachment.type === 'file-reference' &&
+          fileParts.some(
+            (part) => part.filename === attachment.path || part.source?.path === attachment.path
+          )
+        )
+    ),
     fileParts,
     agentParts,
   };
+}
+
+const SHELL_HEADER_RE = /^<shell\s+((?:"[^"]*"|'[^']*'|[^'">])*)>/;
+
+function automaticActionPart(part: TextPart): ToolPart {
+  const title = getAutomaticAction(part);
+  const text = part.text.trim();
+  const shell = text.startsWith('<shell ') ? SHELL_HEADER_RE.exec(text) : null;
+  const input: Record<string, string> = {};
+  if (shell) {
+    for (const match of shell[1]!.matchAll(/([\w-]+)=(?:"([^"]*)"|'([^']*)')/g)) {
+      input[match[1]!] = match[2] ?? match[3]!;
+    }
+  }
+  const output = shell
+    ? text
+        .slice(shell[0].length)
+        .replace(/<\/shell>\s*$/, '')
+        .trim()
+    : part.text;
+  const time = { start: part.time?.start ?? 0, end: part.time?.end ?? part.time?.start ?? 0 };
+  return {
+    id: part.id,
+    messageID: part.messageID,
+    sessionID: part.sessionID,
+    type: 'tool',
+    tool: 'automatic_action',
+    callID: `automatic:${part.id}`,
+    state:
+      input.state === 'failed'
+        ? {
+            status: 'error',
+            input: { ...input, description: title },
+            error: output || title,
+            metadata: {},
+            time,
+          }
+        : { status: 'completed', input, output, title, metadata: {}, time },
+  };
+}
+
+// Presentation only: retain server message/part identities without changing canonical history.
+export function getAutomaticActionInfo(info: MessageEntry['info']): AssistantMessage {
+  return {
+    id: info.id,
+    sessionID: info.sessionID,
+    role: 'assistant',
+    time: { created: info.time.created, completed: info.time.created },
+    parentID: '',
+    modelID: '',
+    providerID: '',
+    mode: 'automatic',
+    path: { cwd: '', root: '' },
+    cost: 0,
+    tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+  };
+}
+
+export function projectAutomaticActionMessage(message: MessageEntry): MessageEntry {
+  if (message.info.role !== 'user') return message;
+  const parsed = parseUserMessageContent(message.parts);
+  if (
+    !parsed.automaticParts.length ||
+    hasUserMessageContent(parsed) ||
+    message.info.summary?.diffsOmitted ||
+    message.parts.some((part) => part.type === 'compaction')
+  )
+    return message;
+  return { info: getAutomaticActionInfo(message.info), parts: parsed.automaticParts };
 }
 
 function getAutomaticAction(part: TextPart): string {
@@ -352,8 +448,8 @@ function getAutomaticAction(part: TextPart): string {
   }
   if (text.startsWith('Instructions from:')) return 'Loaded agent instructions';
   if (text.startsWith('<shell ')) {
-    const header = text.slice(0, text.indexOf('>'));
-    if (header.includes('state="failed"')) return 'Background command failed';
+    const header = SHELL_HEADER_RE.exec(text)?.[1] ?? '';
+    if (/\bstate=(?:"failed"|'failed')/.test(header)) return 'Background command failed';
     return 'Background command finished';
   }
   if (/^The plan at .+ has been approved, you can now edit files\. Execute the plan$/s.test(text)) {
@@ -417,7 +513,8 @@ export function isWrapperlessUserMessageContent(parsed: ParsedUserMessageContent
     parsed.messageTexts[0]!,
     indexedAttachments,
     parsed.fileParts.filter((part) => part.mime.startsWith('image/')),
-    parsed.agentParts
+    parsed.agentParts,
+    parsed.fileParts
   ).filter((segment) => segment.type !== 'text' || segment.content.trim().length > 0);
 
   return segments.length === 1 && segments[0]?.type === 'attachment';
@@ -439,6 +536,14 @@ function parseUserMessageText(text: string): ParsedUserMessageText {
   const attachments: MessageAttachment[] = [];
   const textBuffer: string[] = [];
   const standaloneReference = isStandaloneFileReference(normalized.trim());
+  // Older sends could append bare absolute attachment paths before V2 joined the parts.
+  // Recover only a trailing path block; inline prose and fenced examples stay text.
+  let trailingPathStart = lines.length;
+  while (trailingPathStart > 0) {
+    const line = lines[trailingPathStart - 1]!.trim();
+    if (line && !(isAbsolutePath(normalizePath(line)) && isStandaloneFileReference(line))) break;
+    trailingPathStart -= 1;
+  }
   let inCodeFence = false;
 
   const flushTextBuffer = () => {
@@ -567,7 +672,7 @@ function parseUserMessageText(text: string): ParsedUserMessageText {
 
       const attachment = parseUserMessageAttachmentLine(
         trimmedLine,
-        standaloneReference && trimmedLine === normalized.trim()
+        (standaloneReference && trimmedLine === normalized.trim()) || index >= trailingPathStart
       );
       if (attachment) {
         flushTextBuffer();
@@ -629,7 +734,7 @@ function parseUserMessageAttachmentLine(
       return {
         type: 'file-reference',
         path: match[1]!,
-        isDirectory: false,
+        isDirectory: /[/\\]$/.test(match[1]!),
       };
     }
   }
@@ -689,6 +794,12 @@ export function getUserMessageEditContext(parts: Part[]): MessageEditContext {
     filesByPath.set(key, mergeContextFile(filesByPath.get(key), file));
   }
   const files = [...filesByPath.values()];
+  for (const part of parsed.fileParts) {
+    if (part.mime !== 'text/plain') continue;
+    const text = readPastedTextDataUrl(part.url);
+    if (text === null) continue;
+    files.push({ ...createPastedText(text), relativePath: part.filename || 'pasted-text.txt' });
+  }
   const images = parsed.fileParts
     .filter((part) => part.mime.startsWith('image/'))
     .map((part, index) => ({
@@ -870,7 +981,14 @@ export function UserMessageContent(props: {
     parsed().fileParts.filter((part) => part.mime.startsWith('image/'))
   );
   const otherFileParts = createMemo(() =>
-    parsed().fileParts.filter((part) => !part.mime.startsWith('image/'))
+    parsed().fileParts.filter(
+      (part) =>
+        !part.mime.startsWith('image/') &&
+        !parsed().messageTexts.some((text) => {
+          const marker = getInlineFileMarker(part);
+          return marker && text.includes(marker);
+        })
+    )
   );
   const displayAttachments = createMemo<DisplayMessageAttachment[]>(() => [
     ...(leadingAgentPart() ? [{ type: 'agent' as const, part: leadingAgentPart()! }] : []),
@@ -1028,6 +1146,7 @@ export function UserMessageContent(props: {
               messageTexts={parsed().messageTexts}
               attachments={indexedAttachments()}
               imageParts={imageParts()}
+              fileParts={parsed().fileParts}
               agentParts={inlineAgentParts()}
               onOpenImagePreview={openImagePreview}
             />
@@ -1048,6 +1167,7 @@ export function UserMessageContent(props: {
               messageTexts={parsed().messageTexts}
               attachments={indexedAttachments()}
               imageParts={imageParts()}
+              fileParts={parsed().fileParts}
               agentParts={inlineAgentParts()}
               onOpenImagePreview={openImagePreview}
             />
@@ -1088,6 +1208,7 @@ export function UserMessageContent(props: {
 function UserMessageTextList(props: {
   messageTexts: string[];
   attachments: IndexedMessageAttachment[];
+  fileParts: FilePart[];
   imageParts: FilePart[];
   agentParts: AgentPart[];
   onOpenImagePreview: (index: number) => void;
@@ -1102,6 +1223,7 @@ function UserMessageTextList(props: {
           <UserMessageTextContent
             text={text}
             attachments={props.attachments}
+            fileParts={props.fileParts}
             imageParts={props.imageParts}
             agentParts={props.agentParts}
             onOpenImagePreview={props.onOpenImagePreview}
@@ -1138,6 +1260,7 @@ export function UserMessagePreviewContent(props: {
           <InlineAttachmentText
             content={value()}
             attachments={attachments()}
+            fileParts={parsed().fileParts}
             imageParts={imageParts()}
             agentParts={agentParts()}
             onOpenImagePreview={(index) => props.onOpenImagePreview?.(index)}
@@ -1176,6 +1299,7 @@ function getDisplayAgentParts(parsed: ParsedUserMessageContent): AgentPart[] {
 function UserMessageTextContent(props: {
   text: string;
   attachments: IndexedMessageAttachment[];
+  fileParts: FilePart[];
   imageParts: FilePart[];
   agentParts: AgentPart[];
   onOpenImagePreview: (index: number) => void;
@@ -1187,7 +1311,8 @@ function UserMessageTextContent(props: {
       props.text,
       props.attachments,
       props.imageParts,
-      props.agentParts
+      props.agentParts,
+      props.fileParts
     )) {
       if (segment.type === 'session' || segment.type === 'text') continue;
       if (segment.type === 'external-link') {
@@ -1201,7 +1326,7 @@ function UserMessageTextContent(props: {
 
       const attachment = segment.attachment;
       const marker =
-        attachment.type === 'agent'
+        attachment.type === 'agent' || attachment.type === 'file-part'
           ? attachment.marker
           : attachment.type === 'image-file'
             ? attachment.marker || attachment.label || getInlineImageLabel(attachment.part)
@@ -1209,7 +1334,9 @@ function UserMessageTextContent(props: {
       slots.set(marker, {
         marker,
         render: () =>
-          attachment.type === 'agent' ? (
+          attachment.type === 'file-part' ? (
+            <MessageFileAttachment part={attachment.part} inline marker={attachment.marker} />
+          ) : attachment.type === 'agent' ? (
             <InlineAgentChip part={attachment.part} marker={attachment.marker} />
           ) : attachment.type === 'image-file' ? (
             <InlineImageAttachmentChip
@@ -1253,6 +1380,7 @@ function UserMessageTextContent(props: {
               <InlineAttachmentText
                 content={segment.content}
                 attachments={props.attachments}
+                fileParts={props.fileParts}
                 imageParts={props.imageParts}
                 agentParts={props.agentParts}
                 onOpenImagePreview={props.onOpenImagePreview}
@@ -1280,12 +1408,19 @@ function UserMessageCodeBlock(props: { content: string; language?: string }) {
 function InlineAttachmentText(props: {
   content: string;
   attachments: IndexedMessageAttachment[];
+  fileParts: FilePart[];
   imageParts: FilePart[];
   agentParts: AgentPart[];
   onOpenImagePreview: (index: number) => void;
 }) {
   const segments = createMemo(() =>
-    buildInlineTextSegments(props.content, props.attachments, props.imageParts, props.agentParts)
+    buildInlineTextSegments(
+      props.content,
+      props.attachments,
+      props.imageParts,
+      props.agentParts,
+      props.fileParts
+    )
   );
 
   return (
@@ -1301,6 +1436,15 @@ function InlineAttachmentText(props: {
         if (segment.attachment.type === 'agent') {
           return (
             <InlineAgentChip part={segment.attachment.part} marker={segment.attachment.marker} />
+          );
+        }
+        if (segment.attachment.type === 'file-part') {
+          return (
+            <MessageFileAttachment
+              part={segment.attachment.part}
+              inline
+              marker={segment.attachment.marker}
+            />
           );
         }
         if (segment.attachment.type === 'image-file') {
@@ -1548,9 +1692,15 @@ function buildInlineTextSegments(
   content: string,
   attachments: IndexedMessageAttachment[],
   imageParts: FilePart[],
-  agentParts: AgentPart[]
+  agentParts: AgentPart[],
+  fileParts: FilePart[] = []
 ): InlineTextSegment[] {
   const attachmentByMarker = new Map<string, InlineRenderableAttachment>();
+
+  for (const part of fileParts) {
+    const marker = getInlineFileMarker(part);
+    if (marker) attachmentByMarker.set(marker, { type: 'file-part', part, marker });
+  }
 
   for (const attachment of attachments) {
     if (!attachment.marker) continue;
@@ -2425,12 +2575,42 @@ function getDisplayMessageAttachmentPath(attachment: DisplayMessageAttachment): 
   return attachment.part.source?.path || attachment.part.filename;
 }
 
-function MessageFileAttachment(props: { part: FilePart }) {
+function getInlineFileMarker(part: FilePart): string | null {
+  if (part.mime.startsWith('image/')) return null;
+  return part.filename ? `@${part.filename}` : null;
+}
+
+function MessageFileAttachment(props: { part: FilePart; inline?: boolean; marker?: string }) {
   const label = () => getMessageFileAttachmentLabel(props.part);
   const path = () => props.part.source?.path || props.part.filename;
+  const text = () => readPastedTextDataUrl(props.part.url);
 
   return (
-    <span class="chat-attachment-chip message-attachment-chip" title={label()}>
+    <span
+      class={
+        props.inline
+          ? 'inline-chip inline-chip-clickable'
+          : 'chat-attachment-chip message-attachment-chip'
+      }
+      data-copy-marker={props.marker}
+      title={label()}
+      role={text() !== null ? 'button' : undefined}
+      tabIndex={text() !== null ? 0 : undefined}
+      onClick={() => {
+        const content = text();
+        if (content !== null)
+          postMessage({
+            type: 'vscode/open-text',
+            payload: { content, title: label(), language: 'plaintext' },
+          });
+      }}
+      onKeyDown={(event) => {
+        if (text() !== null && (event.key === 'Enter' || event.key === ' ')) {
+          event.preventDefault();
+          event.currentTarget.click();
+        }
+      }}
+    >
       <FileTypeIcon path={path()} class="chip-icon" />
       <AttachmentLabel label={label()} preserveExtension />
     </span>

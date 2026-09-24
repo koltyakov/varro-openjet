@@ -231,6 +231,7 @@ class OpenCodeHostServices(
     // --- Session diff summary -------------------------------------------------
 
     private val sessionSummaries = SessionSummaryService(
+        apiVersion = { server.transport.apiVersion },
         readLocal = { id -> if (server.isAttachOnly() || server.transport.apiVersion == 2) null else LocalSessionSummary(LocalUsageDatabase.defaultPath(EnvironmentUtil.getEnvironmentMap())).read(id) },
         request = { path, directory ->
             server.transport.request("GET", path, options = RequestOptions(directory = directory)).data

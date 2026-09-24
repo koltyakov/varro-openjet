@@ -4,6 +4,7 @@ import com.google.gson.JsonObject
 import varro.protocol.*
 import varro.server.OpenCodeResponse
 import varro.server.RequestOptions
+import varro.server.OpenCodeV2SessionState
 import java.net.URLEncoder
 import java.nio.file.Path
 import java.time.Instant
@@ -15,6 +16,7 @@ class UsageReport(
     private val databasePath: Path = LocalUsageDatabase.defaultPath(),
     private val ensureServerStarted: () -> Unit = {},
     private val attachOnly: Boolean = false,
+    private val readAnnotations: (String) -> JsonObject = OpenCodeV2SessionState()::read,
     private val request: (String, RequestOptions) -> OpenCodeResponse,
 ) {
     fun build(includeAllTime: Boolean, now: Long = System.currentTimeMillis(), checkCancelled: () -> Unit = {}): String {
@@ -38,7 +40,7 @@ class UsageReport(
                 }
             }
         }
-        val localCount = if (attachOnly) null else LocalUsageDatabase(databasePath).read(
+        val localCount = if (attachOnly) null else LocalUsageDatabase(databasePath, readAnnotations).read(
             if (includeAllTime) null else now - 30 * DAY, checkCancelled, ::addUsage,
         )
         val sessions = linkedMapOf<String, JsonObject>()
@@ -90,12 +92,13 @@ class UsageReport(
                 continue
             }
             val seen = mutableSetOf<String>()
+            val pauses = SessionPauses.read(session.obj("metadata"))
             messages.forEach { value ->
                 val info = value.asObjectOrNull().obj("info") ?: value.asObjectOrNull() ?: return@forEach
                 if (info.str("role") != "assistant") return@forEach
                 val messageId = info.str("id") ?: return@forEach
                 if (!seen.add(messageId)) return@forEach
-                addUsage(id, info)
+                addUsage(id, SessionPauses.capUsage(info, pauses))
             }
         }
     }

@@ -11,6 +11,46 @@ class SessionSummaryTest {
     private fun messages(json: String) = Json.parse(json).asJsonArray.map { it.asJsonObject }
 
     @Test
+    fun `pause closes live duration and resumed work excludes the idle gap`() {
+        val metadata = Json.parse("""{"varro":{"pauses":[{"messageId":"paused","pausedAt":11000}]}}""").asJsonObject
+        val history = messages("""[
+            {"info":{"id":"prompt","role":"user","time":{"created":1000}}},
+            {"info":{"id":"paused","role":"assistant","time":{"created":2000}}}
+        ]""")
+        val paused = SessionSummary.summarize(SessionSummary.History(history), metadata = metadata)
+        assertEquals(10000L, paused.long("durationMs"))
+        assertTrue(paused.get("activeStartedAt").isJsonNull)
+        assertFalse(history.last().obj("info").obj("time")!!.has("completed"))
+        for (newPrompt in listOf(true, false)) {
+            val resumed = history + (if (newPrompt) messages("""[{"info":{"role":"user","time":{"created":3611000}}}]""") else emptyList()) +
+                messages("""[{"info":{"role":"assistant","time":{"created":3611000,"completed":3616000}}}]""")
+            assertEquals(15000L, SessionSummary.summarize(SessionSummary.History(resumed), metadata = metadata).long("durationMs"))
+        }
+        history.last().obj("info").obj("time")!!.addProperty("completed", 3600000)
+        val live = SessionSummary.summarize(SessionSummary.History(history + messages("""[
+            {"info":{"role":"user","time":{"created":3611000}}},
+            {"info":{"role":"assistant","time":{"created":3612000}}}
+        ]""")), metadata = metadata)
+        assertEquals(10000L, live.long("durationMs"))
+        assertEquals(3611000L, live.long("activeStartedAt"))
+    }
+
+    @Test
+    fun `v2 summary reads pause metadata even with local history`() {
+        val service = SessionSummaryService(
+            readLocal = { SessionSummary.History(messages("""[{"info":{"id":"prompt","role":"user","time":{"created":1000}}}]""")) },
+            apiVersion = { 2 },
+        ) { path, directory ->
+            assertEquals("/session/root", path)
+            assertEquals("/workspace", directory)
+            Json.parse("""{"metadata":{"varro":{"pauses":[{"messageId":"prompt","pausedAt":2000}]}}}""")
+        }
+        val result = service.read("root", "/workspace")
+        assertEquals(1000L, result.long("durationMs"))
+        assertTrue(result.get("activeStartedAt").isJsonNull)
+    }
+
+    @Test
     fun `empty diff endpoint falls back to message edits and actual token usage`() {
         val history = SessionSummary.History(messages("""[
           {"info":{"role":"user","time":{"created":1000}},"parts":[]},

@@ -61,21 +61,24 @@ class CommitMessageService(
         }
 
         return runCatching {
-            val sessionId = createHelperSession() ?: return Result.Failed("Could not start a helper session.")
-            try {
-                val reply = prompt(sessionId, buildPrompt(bounded, recentMessages), model)
-                val message = extractMessage(reply)
-                if (message.isNullOrBlank()) {
-                    Result.Failed("The model did not return a commit message.")
-                } else {
-                    Result.Generated(message)
-                }
-            } finally {
-                // The helper session exists only for this request.
-                runCatching {
-                    server.transport.request("DELETE", "/session/${encode(sessionId)}")
+            val text = buildPrompt(bounded, recentMessages)
+            val generated = OneShotGeneration(server.transport::request).generate(
+                server.transport.apiVersion, text,
+                Json.obj("providerID" to model.first, "modelID" to model.second),
+                RequestOptions(directory = project.basePath, isCancelled = { Thread.currentThread().isInterrupted }),
+            )
+            val reply = generated ?: run {
+                val sessionId = createHelperSession() ?: return Result.Failed("Could not start a helper session.")
+                try {
+                    prompt(sessionId, text, model)
+                } finally {
+                    // The helper session exists only for this request.
+                    runCatching { server.transport.request("DELETE", "/session/${encode(sessionId)}") }
                 }
             }
+            val message = extractMessage(reply)
+            if (message.isNullOrBlank()) Result.Failed("The model did not return a commit message.")
+            else Result.Generated(message)
         }.getOrElse { failure ->
             log.warn("Commit message generation failed", failure)
             Result.Failed(failure.message ?: "Commit message generation failed.")

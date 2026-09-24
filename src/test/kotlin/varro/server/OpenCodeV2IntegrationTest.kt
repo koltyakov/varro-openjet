@@ -21,8 +21,10 @@ class OpenCodeV2IntegrationTest {
         assumeTrue("Set VARRO_OPENCODE_TEST_BINARY to a released v2 CLI", !binary.isNullOrBlank())
         val root = temporary.newFolder().toPath()
         val workspace = Files.createDirectory(root.resolve("workspace"))
+        val providerRequests = java.util.concurrent.atomic.AtomicInteger()
         val provider = com.sun.net.httpserver.HttpServer.create(java.net.InetSocketAddress("127.0.0.1", 0), 0)
         provider.createContext("/") { exchange ->
+            providerRequests.incrementAndGet()
             val input = Json.parse(exchange.requestBody.bufferedReader().readText()).asJsonObject
             val usage = Json.obj("prompt_tokens" to 10, "completion_tokens" to 3, "total_tokens" to 13)
             val response = if (input.bool("stream") == true) {
@@ -75,6 +77,12 @@ class OpenCodeV2IntegrationTest {
             assertTrue(synchronized(output) { output.toString() }, transport.checkHealth())
             assertEquals(2, transport.apiVersion)
             assertNotNull(password.get())
+            val beforeGeneration = transport.request("GET", "/session").data
+            val oneShot = varro.host.OneShotGeneration(transport::request)
+            assertNull(oneShot.generate(2, "Return a short summary",
+                Json.obj("providerID" to "fixture", "modelID" to "fixture"), RequestOptions(directory = workspace.toString())))
+            assertEquals(0, providerRequests.get())
+            assertEquals(beforeGeneration, transport.request("GET", "/session").data)
             for (name in listOf("日本語 🚀", "literal%2Fdirectory")) {
                 val directory = Files.createDirectory(workspace.resolve(name)).toString()
                 assertEquals(directory, transport.request("GET", "/path", options = RequestOptions(directory = directory)).data.asObjectOrNull().str("directory"))
@@ -109,6 +117,11 @@ class OpenCodeV2IntegrationTest {
             assertTrue(reopened.any { it.asObjectOrNull().obj("info").str("id") == answer.obj("info").str("id") })
             val helper = transport.request("POST", "/session/$id/message", Json.obj("system" to "Generate a short summary", "parts" to listOf(Json.obj("type" to "text", "text" to "Summarize")))).data.asObjectOrNull()
             assertEquals("OpenJet stream verified.", helper.arr("parts")!![0].asJsonObject.str("text"))
+            transport.request("POST", "/session/$id/abort", Json.obj())
+            val pausedMessage = transport.request("GET", "/session/$id/message?limit=1").data!!.asJsonArray.last().asJsonObject.obj("info").str("id")!!
+            val pauseMetadata = Json.obj("varro" to Json.obj("pauses" to listOf(Json.obj("messageId" to pausedMessage, "pausedAt" to System.currentTimeMillis()))))
+            transport.request("PATCH", "/session/$id", Json.obj("metadata" to pauseMetadata))
+            assertEquals(pauseMetadata, transport.request("GET", "/session/$id").data.asObjectOrNull().obj("metadata"))
             val waiting = java.util.concurrent.CompletableFuture.supplyAsync {
                 transport.request("POST", "/api/session/$id/permission", Json.obj("action" to "shell", "resources" to listOf("fixture permission only"), "save" to listOf("fixture permission only"), "metadata" to Json.obj()))
             }

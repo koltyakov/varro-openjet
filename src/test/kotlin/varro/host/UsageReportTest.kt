@@ -14,6 +14,43 @@ class UsageReportTest {
     private val now = 1_800_000_000_000L
 
     @Test
+    fun `local and remote v2 usage cap paused responses and retain resumed work`() {
+        val path = temporary.newFile("paused.db").toPath()
+        val metadata = Json.obj("varro" to Json.obj("pauses" to listOf(Json.obj("messageId" to "m", "pausedAt" to now - 3_600_000))))
+        val state = varro.server.OpenCodeV2SessionState(temporary.newFolder("annotations").toPath())
+        state.update("s", Json.obj("metadata" to metadata))
+        val paused = message().apply { getAsJsonObject("time").addProperty("created", now - 3_610_000) }
+        val resumed = message().apply {
+            addProperty("id", "resumed"); addProperty("parentID", "new-prompt")
+            getAsJsonObject("time").addProperty("created", now - 5_000)
+        }
+        Class.forName("org.sqlite.JDBC")
+        DriverManager.getConnection("jdbc:sqlite:$path").use { database ->
+            database.createStatement().use {
+                it.execute("CREATE TABLE session_v2(id TEXT PRIMARY KEY,metadata TEXT,time_updated INTEGER)")
+                it.execute("CREATE TABLE session_message(id TEXT PRIMARY KEY,session_id TEXT,type TEXT,seq INTEGER,data TEXT)")
+                it.execute("INSERT INTO session_v2 VALUES('s','{}',$now)")
+            }
+            database.prepareStatement("INSERT INTO session_message VALUES(?,'s','assistant',?,?)").use { statement ->
+                listOf(paused, resumed).forEachIndexed { index, info ->
+                    statement.setString(1, info.get("id").asString)
+                    statement.setInt(2, index)
+                    statement.setString(3, info.toString())
+                    statement.executeUpdate()
+                }
+            }
+        }
+        val local = UsageReport(path, readAnnotations = state::read) { _, _ -> error("No API requests expected") }.build(true, now)
+        val remote = UsageReport(path, attachOnly = true, readAnnotations = { error("No local annotations expected") }) { route, _ ->
+            OpenCodeResponse(if (route.startsWith("/experimental")) Json.array(listOf(Json.obj("id" to "s", "metadata" to metadata)))
+                else Json.array(listOf(Json.obj("info" to paused), Json.obj("info" to resumed))))
+        }.build(true, now)
+        assertEquals(remote, local)
+        assertTrue(local, local.contains("| provider | model | 2 | 336 | 15s |"))
+        assertEquals(now, paused.getAsJsonObject("time").get("completed").asLong)
+    }
+
+    @Test
     fun `totals use recorded token total and sum durations while deduplicating prompts`() {
         val first = message().apply {
             getAsJsonObject("tokens").addProperty("total", 12_345)

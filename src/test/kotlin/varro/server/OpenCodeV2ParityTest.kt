@@ -60,7 +60,7 @@ class OpenCodeV2ParityTest {
         assertEquals(true, status.bool("background"))
         assertEquals(1000L, status.long("backgroundStartedAt"))
         native.request("POST", "/session/ses_one/abort", null, RequestOptions(directory = "/one"))
-        assertTrue(calls.indexOf("DELETE /api/shell/shell_one?location%5Bdirectory%5D=%2Fone") < calls.indexOf("POST /api/session/ses_one/interrupt"))
+        assertTrue(calls.indexOf("DELETE /api/shell/shell_one?location%5Bdirectory%5D=%2Fone") < calls.indexOf("POST /api/session/ses_one/interrupt?resume=false"))
         assertFalse(native.request("GET", "/session/status", null, RequestOptions(directory = "/one")).data.asObjectOrNull()!!.has("ses_one"))
         event("session.execution.started", Json.obj("sessionID" to "ses_one"))
         event("session.step.ended", Json.obj("sessionID" to "ses_one", "finish" to "stop"))
