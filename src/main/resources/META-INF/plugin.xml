@@ -52,6 +52,12 @@
     ]]></description>
 
     <change-notes><![CDATA[
+        <h3>0.3.9</h3>
+        <p>Synced Varro through b7c80c9717af. Fixed return-to-bottom scrolling and preserved the
+            visible response position after keyboard navigation. Pasted-text attachments now preview
+            base64-encoded content, and attachment-only messages display without an extra wrapper.
+            Inline attachments stay in place while sending. Pastes shorter than 10 lines remain
+            editable text instead of becoming editor or terminal context attachments. Updated Vite.</p>
         <h3>0.3.8</h3>
         <p>Synced Varro through a061cf7d4a3e. Added OpenCode V2 session pause and resume, with
             parked queued messages and pause-aware session and usage durations. Large text pastes

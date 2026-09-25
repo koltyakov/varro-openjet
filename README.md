@@ -55,7 +55,7 @@ Wide editor and window chats have a light/dark toggle in the upper-right gutter.
 
 To add context, drop files or directories into the composer, or choose **Add to Varro Context** from the editor or Project view. The current-document chip toggles automatic context and remembers your choice per project. Switching to a chat tab keeps the last source editor as context, including unsaved edits.
 
-Pasting text that matches the current selection in a saved workspace file creates a line-range attachment. Unsaved selections stay as text. Plain-text pastes matching an open terminal's available output become terminal attachments; terminal engines that do not expose their output leave the paste as text.
+Pasting 10 or more lines that match the current selection in a saved workspace file creates a line-range attachment. Shorter pastes and unsaved selections stay as text. Plain-text pastes of 10 or more lines matching an open terminal's available output become terminal attachments; terminal engines that do not expose their output leave the paste as text.
 
 | Action | Shortcut |
 | --- | --- |
