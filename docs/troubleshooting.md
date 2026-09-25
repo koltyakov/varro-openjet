@@ -94,6 +94,24 @@ After reconnecting, queued sends are reconciled with OpenCode history. If a send
 
 Before resetting state, identify the affected store in [persistence and recovery](architecture.md#persistence-and-recovery). Clearing JCEF's browser cache does not reset project-backed preferences. Varro state includes drafts, queue recovery, and recycle-bin records; deleting all of it is not a targeted fix for a display problem. If a specific store needs repair, close the IDE and keep a backup before editing it.
 
+## Docker build runs out of space
+
+If Gradle fails to create a directory while extracting an IntelliJ archive, check
+Docker's disk usage with `docker system df`. On Docker Desktop, the VM disk can be
+full even when the host has free space. Check it with:
+
+```bash
+docker run --rm --entrypoint sh varro-openjet-build -c 'df -h /; df -i /'
+```
+
+Increase Docker Desktop's disk allocation or remove unused images and build cache
+through Docker Desktop. Keep the project's `gradle-cache` and `npm-cache` volumes
+to avoid downloading dependencies again. Then retry `./scripts/build.sh clean`.
+
+Plugin compilation runs at container startup so it can use those cache volumes.
+Older build images also contain a full Gradle cache and extracted IntelliJ platform;
+removing unused older images can recover that duplicated space.
+
 ## Logs and bug reports
 
 Use the IDE's Help menu or Find Action to locate **Show Log in Finder** on macOS or **Show Log in Explorer** on Windows. On Linux, look for **Show Log in Files**. Inspect `idea.log` near the time of the failure for `varro`, OpenCode startup, or JCEF messages.

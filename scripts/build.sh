@@ -31,15 +31,18 @@ else
   VARRO_UID=1000
   VARRO_GID=1000
 fi
-# Rebuild only when inputs to the image's toolchain/dependency layer change.
-# Source-only changes stay on the fast bind-mounted incremental path.
-BUILD_ENV_INPUTS="$(cksum Dockerfile webview/package.json webview/package-lock.json)"
+command="${1:-dev}"
+shift || true
+
+# Bind-mounted builds only need a refreshed image when the toolchain changes.
+# Clean builds also refresh the image's source snapshot on every invocation.
+BUILD_ENV_INPUTS="$(cksum Dockerfile .dockerignore webview/package.json webview/package-lock.json)"
 VARRO_BUILD_ENV_HASH="$(printf '%s\n%s:%s\n' "$BUILD_ENV_INPUTS" "$VARRO_UID" "$VARRO_GID" | cksum | cut -d ' ' -f 1)"
 export VARRO_UID VARRO_GID VARRO_BUILD_ENV_HASH
 
 IMAGE_BUILD_ENV_HASH="$(docker image inspect varro-openjet-build \
   --format '{{ index .Config.Labels "io.varro.build-env-hash" }}' 2>/dev/null || true)"
-if [ "$IMAGE_BUILD_ENV_HASH" != "$VARRO_BUILD_ENV_HASH" ]; then
+if [ "$command" = "clean" ] || [ "$IMAGE_BUILD_ENV_HASH" != "$VARRO_BUILD_ENV_HASH" ]; then
   echo "==> Refreshing build image"
   docker compose --progress plain build shell
 fi
@@ -53,9 +56,6 @@ if [ ! -d webview/vendor/webview ]; then
   echo "       Run: docker compose run --rm shell -lc 'cd webview && npm run sync'" >&2
   exit 1
 fi
-
-command="${1:-dev}"
-shift || true
 
 case "${command}" in
   dev)

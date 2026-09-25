@@ -1,4 +1,4 @@
-# Builds the Varro OpenJet plugin distribution (.zip) inside a container, so no
+# Provides the build environment and sources for the plugin distribution, so no
 # JDK, Gradle or Node installation is needed on the host.
 #
 # The usual entry point is `./scripts/build.sh`, which wires up the cache volumes
@@ -9,7 +9,8 @@
 #
 # Gradle has to download the IntelliJ Platform (>1 GB) on a cold build. Mount a
 # named volume at /home/builder/.gradle to keep it across runs - docker-compose.yml
-# and scripts/build.sh already do.
+# and scripts/build.sh already do. Compilation runs at container startup, when
+# those volumes are mounted, rather than storing the platform in image layers.
 
 FROM eclipse-temurin:26-jdk-jammy AS build
 
@@ -77,7 +78,7 @@ RUN chmod +x gradlew
 RUN test -d webview/vendor/webview \
  || (echo "ERROR: webview/vendor is missing. Run 'cd webview && npm run sync' before building." && exit 1)
 
-RUN ./gradlew --no-daemon clean buildPlugin
-
-# Copy the artifact to a bind-mounted /out by default.
-CMD ["bash", "-lc", "mkdir -p /out && cp build/distributions/*.zip /out/ && ls -lh /out/"]
+# Compose cache volumes are unavailable during `docker build`. Downloading and
+# extracting IntelliJ here would duplicate gigabytes whenever this image changes.
+# Build at runtime, then copy the artifact to a bind-mounted /out.
+CMD ["bash", "-lc", "./gradlew --no-daemon clean buildPlugin && mkdir -p /out && cp build/distributions/*.zip /out/ && ls -lh /out/"]

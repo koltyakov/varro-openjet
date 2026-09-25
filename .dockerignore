@@ -2,6 +2,9 @@
 # generated on the host is rebuilt inside the image.
 .git
 .gradle
+.intellijPlatform
+.kotlin
+.opencode
 build
 out
 dist
