@@ -6,6 +6,7 @@
   "repository": "https://github.com/koltyakov/varro-openjet",
   "scripts": {
     "sync": "node scripts/sync-upstream.mjs",
+    "sync:check": "node scripts/vendor-integrity.mjs",
     "build": "vite build",
     "benchmark": "node scripts/scroll-benchmark.mjs",
     "test:host": "vitest run --config vitest.host.config.mts",

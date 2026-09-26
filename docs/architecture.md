@@ -26,6 +26,17 @@ Upstream host-to-webview traffic uses `window.postMessage`, which `src/webview/l
 
 `webview/upstream.json` selects the sync source and excludes upstream test files. Its current ref is `main`; `webview/vendor/UPSTREAM.json` records the commit copied by the last sync. Normal builds use that committed snapshot. JetBrains adaptations belong in the host and bridge; syncing replaces the vendored directories.
 
+The bridge registers Varro host API version 1 before importing the UI. Metadata, detached-editor
+capability, storage, native file paths, drag previews, and attachment presentation use typed adapter
+options. `src/database-extension.ts` supplies the namespaced `openjet.database` context provider.
+It translates native database updates and restored queues into Varro's generic context envelopes,
+and reads the older database transcript format. Unknown captured envelopes remain readable without
+the provider. No vendored files are rewritten during sync or transformed for host wording in Vite.
+
+`npm run sync:check` verifies the vendored content hash recorded in `vendor/UPSTREAM.json`.
+Until the host API revision is published upstream, sync with `VARRO_SOURCE=/path/to/varro npm run sync`.
+The upstream contract is documented in Varro's `docs/host-extensions.md`.
+
 ## Layout
 
 ```

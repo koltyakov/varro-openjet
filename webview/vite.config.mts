@@ -34,20 +34,10 @@ const assetVersionPlugin: Plugin = {
   },
 };
 
-// Keep host-specific wording out of the upstream snapshot so syncs retain it.
-const hostWordingPlugin: Plugin = {
-  name: 'varro-jetbrains-wording',
-  enforce: 'pre',
-  transform(code, id) {
-    if (!id.endsWith('/components/ProviderDisconnectionDialog.tsx')) return;
-    return code.replace('in VS Code', 'in IDE');
-  },
-};
-
 export default defineConfig({
   base: './',
   define: { __VARRO_PLUGIN_VERSION__: JSON.stringify(pluginVersion) },
-  plugins: [hostWordingPlugin, solid(), tailwindcss(), assetVersionPlugin],
+  plugins: [solid(), tailwindcss(), assetVersionPlugin],
   build: {
     // Emitted straight into the plugin's resources; `processResources` then
     // packages it like any other static asset.

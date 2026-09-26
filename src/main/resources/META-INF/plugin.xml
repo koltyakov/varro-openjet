@@ -52,6 +52,11 @@
     ]]></description>
 
     <change-notes><![CDATA[
+        <h3>0.4.0</h3>
+        <p>Expanded DataGrip context with active datasources, SQL and object metadata, including
+            datasource awareness with no editor open. Compacted database chips and hid automatic
+            context from prompt history. Fixed macOS editing shortcuts. Synced Varro through
+            33ca48c5b500 and moved JetBrains customizations to host extension hooks.</p>
         <h3>0.3.10</h3>
         <p>Synced Varro through bdae3be07121. Added overall session cost including subagents,
             with cost details restored from local history. Added send animations and fixed attachment

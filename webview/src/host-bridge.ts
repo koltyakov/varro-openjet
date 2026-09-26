@@ -19,13 +19,18 @@
  *   `window.__varroHostSend(json)` - a `JBCefJSQuery` injection that hands a
  *   string to the Kotlin side.
  *
- * Everything above that primitive is implemented here so the vendored webview
- * stays byte-identical to upstream.
+ * The host extension API registers transport, persistence, capabilities and
+ * context providers before the UI loads. Vendored sources stay byte-identical
+ * to upstream; the legacy globals remain the native page-shell boundary.
  */
 
 import './host-theme.css';
 import { installProjectStorage } from './project-storage';
 import { installViewStateChannel } from './view-state';
+import { registerHostExtension } from '../vendor/webview/host/extensions';
+import { adaptHostContext, databaseProvider } from './database-extension';
+import pluginMetadata from './plugin-metadata';
+import { supportsDetachedEditors } from './host-capabilities';
 
 type HostWindow = Window & {
   __varroHostSend?: (json: string) => void;
@@ -42,6 +47,12 @@ type HostWindow = Window & {
 };
 
 const hostWindow = window as HostWindow;
+const nativeFilePaths = new WeakMap<File, string>();
+const internalTransfers = new WeakSet<DataTransfer>();
+const dragImages = new WeakMap<
+  DataTransfer,
+  { element: Element; offsetX: number; offsetY: number }
+>();
 
 /**
  * The host sends JSON strings, one message per call. Serializing here rather
@@ -64,7 +75,7 @@ function installSendChannel() {
  */
 function installReceiveChannel() {
   hostWindow.__varroReceive = (payload: unknown) => {
-    window.dispatchEvent(new MessageEvent('message', { data: payload }));
+    window.dispatchEvent(new MessageEvent('message', { data: adaptHostContext(payload) }));
   };
 }
 
@@ -90,29 +101,35 @@ function guardNavigation() {
         });
       }
     },
-    true,
+    true
   );
 
   window.addEventListener('dragover', (event) => event.preventDefault());
-  document.addEventListener('drop', (event) => {
-    if (!event.isTrusted) return;
-    event.preventDefault();
-    const paths = hostWindow.__varroNativeDropPaths ?? [];
-    hostWindow.__varroNativeDropPaths = [];
-    if (!paths.length) return;
-    const files = Array.from(event.dataTransfer?.files ?? []);
-    if (files.length) {
-      // Chromium hides File.path. JCEF supplies the original local paths without
-      // copying project files to temporary attachments. Keep PDF handling upstream.
-      files.forEach((file) => {
-        const path = paths.find((path) => path.replace(/\\/g, '/').split('/').pop() === file.name);
-        if (path) Object.defineProperty(file, 'path', { value: path, configurable: true });
-      });
-    } else {
-      event.stopImmediatePropagation();
-      hostWindow.__sendToExtension?.({ type: 'files/drop', payload: { paths } });
-    }
-  }, true);
+  document.addEventListener(
+    'drop',
+    (event) => {
+      if (!event.isTrusted) return;
+      event.preventDefault();
+      const paths = hostWindow.__varroNativeDropPaths ?? [];
+      hostWindow.__varroNativeDropPaths = [];
+      if (!paths.length) return;
+      const files = Array.from(event.dataTransfer?.files ?? []);
+      if (files.length) {
+        // Chromium hides File.path. JCEF supplies the original local paths without
+        // copying project files to temporary attachments. Keep PDF handling upstream.
+        files.forEach((file) => {
+          const path = paths.find(
+            (path) => path.replace(/\\/g, '/').split('/').pop() === file.name
+          );
+          if (path) nativeFilePaths.set(file, path);
+        });
+      } else {
+        event.stopImmediatePropagation();
+        hostWindow.__sendToExtension?.({ type: 'files/drop', payload: { paths } });
+      }
+    },
+    true
+  );
   document.addEventListener('submit', (event) => event.preventDefault(), true);
 }
 
@@ -138,7 +155,7 @@ function installInternalDragBridge() {
     target: EventTarget,
     type: string,
     event: PointerEvent,
-    relatedTarget: EventTarget | null = null,
+    relatedTarget: EventTarget | null = null
   ) {
     return target.dispatchEvent(
       new DragEvent(type, {
@@ -148,7 +165,7 @@ function installInternalDragBridge() {
         clientY: event.clientY,
         dataTransfer: transfer,
         relatedTarget,
-      }),
+      })
     );
   }
 
@@ -218,7 +235,7 @@ function installInternalDragBridge() {
       // Prevent JCEF from starting a late native session alongside the bridge.
       source.draggable = false;
     },
-    true,
+    true
   );
 
   window.addEventListener(
@@ -228,12 +245,9 @@ function installInternalDragBridge() {
       if (!dragging) {
         if (Math.hypot(event.clientX - originX, event.clientY - originY) < DRAG_THRESHOLD) return;
         transfer = new DataTransfer();
-        const setDragImage = transfer.setDragImage.bind(transfer);
-        transfer.setDragImage = (element, offsetX, offsetY) => {
-          dragImage = { element, offsetX, offsetY };
-          setDragImage(element, offsetX, offsetY);
-        };
+        internalTransfers.add(transfer);
         dragging = dispatch(source, 'dragstart', event);
+        dragImage = dragImages.get(transfer) ?? null;
         if (!dragging) {
           clear();
           return;
@@ -252,7 +266,7 @@ function installInternalDragBridge() {
       }
       if (hovered) dispatch(hovered, 'dragover', event);
     },
-    true,
+    true
   );
 
   window.addEventListener(
@@ -269,7 +283,7 @@ function installInternalDragBridge() {
         suppressClick = false;
       }, 0);
     },
-    true,
+    true
   );
 
   window.addEventListener(
@@ -280,7 +294,7 @@ function installInternalDragBridge() {
       suppressClick = false;
       clear();
     },
-    true,
+    true
   );
 
   document.addEventListener(
@@ -291,7 +305,7 @@ function installInternalDragBridge() {
       event.preventDefault();
       event.stopImmediatePropagation();
     },
-    true,
+    true
   );
 }
 
@@ -309,7 +323,7 @@ function forwardHostShortcuts() {
         hostWindow.__sendToExtension?.({ type: 'host/hide-panel' });
       }
     },
-    true,
+    true
   );
 }
 
@@ -325,7 +339,8 @@ function installMacLineNavigation() {
       event.altKey ||
       event.isComposing ||
       (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight')
-    ) return;
+    )
+      return;
 
     const target = event.target;
     if (!(target instanceof HTMLElement) || !target.isContentEditable) return;
@@ -336,15 +351,18 @@ function installMacLineNavigation() {
     selection.modify(
       event.shiftKey ? 'extend' : 'move',
       event.key === 'ArrowLeft' ? 'left' : 'right',
-      'lineboundary',
+      'lineboundary'
     );
     event.preventDefault();
   });
 }
 
 installSendChannel();
+hostWindow.__varroInitialViewState = adaptHostContext(hostWindow.__varroInitialViewState) as
+  | Record<string, unknown>
+  | undefined;
 installViewStateChannel(hostWindow);
-installProjectStorage(hostWindow);
+const projectStorage = installProjectStorage(hostWindow);
 installReceiveChannel();
 guardNavigation();
 installInternalDragBridge();
@@ -352,6 +370,29 @@ forwardHostShortcuts();
 installMacLineNavigation();
 
 hostWindow.__initialTheme = hostWindow.__initialWebviewState?.theme;
+hostWindow.__initialWebviewState = adaptHostContext(
+  hostWindow.__initialWebviewState
+) as HostWindow['__initialWebviewState'];
+registerHostExtension({
+  apiVersion: 1,
+  id: 'openjet.host',
+  requires: ['context-providers', 'project-storage', 'file-paths'],
+  metadata: { name: 'Varro OpenJet', ...pluginMetadata, ideName: 'JetBrains' },
+  capabilities: { detachedEditors: supportsDetachedEditors() },
+  presentation: { attachmentDetails: 'tooltip' },
+  services: {
+    projectStorage,
+    viewState: hostWindow.__vscodeWebviewState,
+    send: (message) => hostWindow.__sendToExtension!(message),
+    filePath: (file) => nativeFilePaths.get(file),
+    setDragImage: (transfer, element, offsetX, offsetY) => {
+      if (!internalTransfers.has(transfer)) return false;
+      dragImages.set(transfer, { element, offsetX, offsetY });
+      return true;
+    },
+  },
+  contexts: [databaseProvider],
+});
 
 // The vendored entry point mounts the app and sends `ready`, which makes the
 // host replay context, config, status and recovery state. Importing it last

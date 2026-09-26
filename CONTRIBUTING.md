@@ -102,6 +102,11 @@ npm run sync
 
 The script reads [`webview/upstream.json`](webview/upstream.json), fetches its configured ref, and replaces the configured vendor directories. The current ref is `main`. It excludes upstream test files and records the resolved commit in `webview/vendor/UPSTREAM.json`.
 
+The source must support Varro host API version 1. Sync copies sources without adaptations and records
+a content hash. Run `npm run sync:check` in `webview/` after syncing or before packaging. Add host
+features through `src/host-bridge.ts` and context providers, never by editing vendor files or adding
+source transforms. While the API is unpublished, use a compatible local `VARRO_SOURCE` checkout.
+
 To copy from a local Varro checkout instead:
 
 ```bash

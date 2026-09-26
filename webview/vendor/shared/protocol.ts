@@ -1,4 +1,5 @@
 import type { OpenCodeInstallMethod } from './opencode-install';
+import type { ExtensionContext } from './extension-context';
 import type { ContextBreakdownSegment } from './context-breakdown';
 import type { NativePdfAttachment } from './native-pdf';
 import type { ServerEventPropertiesByName, WorkspaceStatusEntry } from './opencode-types';
@@ -53,10 +54,8 @@ export interface InlineProblemAttachment {
   group?: EditorDiagnostic[];
 }
 
-import type { DatabaseContextDetails } from '../../src/database-context';
-
-/** A detached snapshot of the active database surface. Values preserve SQL precision. */
-export interface DatabaseContext extends DatabaseContextDetails {
+/** A detached snapshot of a loaded database grid. Values use strings to preserve SQL precision. */
+export interface DatabaseContext {
   name: string;
   dataSource: string | null;
   dialect: string | null;
@@ -64,7 +63,7 @@ export interface DatabaseContext extends DatabaseContextDetails {
   columns: Array<{ name: string; type: string }>;
   rows: Array<Array<string | null>>;
   selectedRowCount: number;
-  scope: 'table' | 'selected-rows' | 'ddl' | 'console' | 'object' | 'datasource';
+  scope: 'table' | 'selected-rows' | 'ddl';
   ddl?: string;
   pendingChanges: boolean;
   cellEditing: boolean;
@@ -88,7 +87,7 @@ export interface EditorContext {
   } | null;
   editorText?: EditorTextContext | null;
   databaseContext?: DatabaseContext | null;
-  databaseEnvironment?: DatabaseContext | null;
+  extensionContexts?: ExtensionContext[];
   diagnostics: EditorDiagnostic[];
   diagnosticsTotal?: number;
   diagnosticCounts?: { errors: number; warnings: number };

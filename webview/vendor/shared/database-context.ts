@@ -1,6 +1,5 @@
 import type { DatabaseAttachment, DatabaseContext, DatabaseTableReference } from './protocol';
 import { asRecord, isString, isBoolean, isNumber } from './type-utils';
-import { cloneDatabaseDetails, databaseDetailsLabel, isDatabaseContextDetails, isDatabaseScope } from '../../src/database-context';
 
 function isBoundedText<T>(value: T, max: number): boolean {
   return isString(value) && value.length <= max;
@@ -24,7 +23,7 @@ export function isDatabaseContext(value: unknown): value is DatabaseContext {
   if (!isBoundedText(record.name, 1_000) || !isBoundedText(record.filter, 4_000)) return false;
   if (record.dataSource !== null && !isBoundedText(record.dataSource, 1_000)) return false;
   if (record.dialect !== null && !isBoundedText(record.dialect, 1_000)) return false;
-  if (!isDatabaseScope(record.scope))
+  if (record.scope !== 'table' && record.scope !== 'selected-rows' && record.scope !== 'ddl')
     return false;
   if (record.ddl !== undefined && !isBoundedText(record.ddl, 40_000)) return false;
   if (record.scope === 'ddl' && !isString(record.ddl)) return false;
@@ -64,7 +63,7 @@ export function isDatabaseContext(value: unknown): value is DatabaseContext {
   )
     return false;
   if ((record.scope !== 'selected-rows') !== (record.selectedRowCount === 0)) return false;
-  return JSON.stringify(record.rows).length <= 81_000 && isDatabaseContextDetails(record);
+  return JSON.stringify(record.rows).length <= 81_000;
 }
 
 export function cloneDatabaseContext(
@@ -73,7 +72,6 @@ export function cloneDatabaseContext(
   return context
     ? {
         ...context,
-        ...cloneDatabaseDetails(context),
         columns: context.columns.map((column) => ({ ...column })),
         rows: context.rows.map((row) => [...row]),
       }
@@ -81,14 +79,12 @@ export function cloneDatabaseContext(
 }
 
 export function databaseContextDetail(context: DatabaseContext): string {
-  return databaseDetailsLabel(context, databaseAttachmentDetail({ ...context, rowCount: context.rows.length }));
+  return databaseAttachmentDetail({ ...context, rowCount: context.rows.length });
 }
 
 export function databaseAttachmentDetail(context: DatabaseAttachment): string {
   const scope =
-    context.scope === 'console' || context.scope === 'object' || context.scope === 'datasource'
-      ? context.scope
-      : context.scope === 'ddl'
+    context.scope === 'ddl'
       ? 'DDL'
       : context.scope === 'table'
         ? 'table'
@@ -104,7 +100,7 @@ export function isDatabaseAttachment(value: unknown): value is DatabaseAttachmen
     (record.dataSource !== null && !isBoundedText(record.dataSource, 1_000))
   )
     return false;
-  if (!isDatabaseScope(record.scope))
+  if (record.scope !== 'table' && record.scope !== 'selected-rows' && record.scope !== 'ddl')
     return false;
   if (
     !isNumber(record.rowCount) ||

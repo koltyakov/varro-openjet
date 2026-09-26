@@ -1,5 +1,6 @@
-import { supportsDetachedEditors } from '../../../../src/host-capabilities';
 import { Show, createEffect, createSignal, untrack } from 'solid-js';
+import { supportsDetachedEditors } from '../../host/extensions';
+import { HostActions } from '../HostActions';
 import { Portal } from 'solid-js/web';
 import { normalizeSessionTitle } from '../../../shared/session-title';
 import { renameSession } from '../../hooks/useOpenCode';
@@ -222,9 +223,17 @@ export function SessionActionsMenu(props: {
                   Open in Editor
                 </button>
               </Show>
-              <Show when={supportsDetachedEditors()}><button type="button" role="menuitem" onClick={() => openAsEditor(true)}>
-                Open in Window
-              </button></Show>
+              <Show when={supportsDetachedEditors()}>
+                <button type="button" role="menuitem" onClick={() => openAsEditor(true)}>
+                  Open in Window
+                </button>
+              </Show>
+              <HostActions
+                slot="session.actions"
+                sessionId={props.session.id}
+                directory={props.session.directory}
+                onComplete={() => props.state.close()}
+              />
               <button
                 type="button"
                 role="menuitem"

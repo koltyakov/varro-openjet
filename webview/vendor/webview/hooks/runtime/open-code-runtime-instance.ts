@@ -1,5 +1,5 @@
-import { syncWindowChatTheme } from '../../lib/window-chat-theme';
 import { batch, createSignal, onCleanup, onMount } from 'solid-js';
+import { syncWindowChatTheme } from '../../lib/window-chat-theme';
 import { reconcile } from 'solid-js/store';
 import type {
   AutoApproveJudgeReference,
