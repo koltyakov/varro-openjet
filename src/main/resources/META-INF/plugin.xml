@@ -52,6 +52,12 @@
     ]]></description>
 
     <change-notes><![CDATA[
+        <h3>0.4.1</h3>
+        <p>Synced Varro through f3b0b688a2d5. Added configured agent icons to the picker and toolbar,
+            with a cube fallback for custom agents, and improved agent label formatting. Fixed excess
+            blank space in short chats after activity collapses and prevented auto-scroll from interfering
+            with scrollbar dragging. Updated scrollbar styling to hide arrow buttons and use consistent
+            thumb colors. Kept the working indicator animated when reduced motion is enabled.</p>
         <h3>0.4.0</h3>
         <p>Expanded DataGrip context with active datasources, SQL and object metadata, including
             datasource awareness with no editor open. Compacted database chips and hid automatic
