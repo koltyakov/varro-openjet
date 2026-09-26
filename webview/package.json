@@ -21,11 +21,11 @@
     "highlight.js": "11.12.0",
     "jsonc-parser": "3.3.1",
     "marked": "18.0.14",
-    "mermaid": "^11.17.2",
+    "mermaid": "11.17.2",
     "solid-js": "1.9.15"
   },
   "devDependencies": {
-    "@types/node": "26.6.2",
+    "@types/node": "26.6.3",
     "@tailwindcss/vite": "4.3.3",
     "iconoir": "7.12.1",
     "material-icon-theme": "5.38.1",
@@ -33,7 +33,7 @@
     "typescript": "7.0.2",
     "vite": "8.3.1",
     "vite-plugin-solid": "2.11.14",
-    "vitest": "5.0.1"
+    "vitest": "5.0.2"
   },
   "volta": {
     "node": "24.21.0",

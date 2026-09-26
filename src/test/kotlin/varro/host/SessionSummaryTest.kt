@@ -4,6 +4,7 @@ import org.junit.Assert.*
 import org.junit.Test
 import varro.protocol.Json
 import varro.protocol.long
+import varro.protocol.num
 import varro.protocol.obj
 import varro.protocol.str
 
@@ -90,6 +91,21 @@ class SessionSummaryTest {
         assertEquals(109L, result.long("tokens"))
         assertEquals(2L, result.obj("tokenBreakdown").long("subagentCount"))
         assertEquals(159L, result.obj("tokenBreakdown").obj("subagents").long("total"))
+    }
+
+    @Test
+    fun `cost breakdown includes assistant costs without tokens and ignores invalid costs`() {
+        val result = SessionSummary.summarize(SessionSummary.History(messages("""[
+            {"info":{"role":"user","cost":99}},
+            {"info":{"role":"assistant","cost":0.125,"tokens":{"input":10}}},
+            {"info":{"role":"assistant","cost":0.25}},
+            {"info":{"role":"assistant","cost":-1}},
+            {"info":{"role":"assistant","cost":"3"}},
+            {"info":{"role":"assistant","cost":1e999}}
+        ]""")))
+        assertEquals(0.375, result.obj("tokenBreakdown").obj("session").num("cost")!!, 0.0)
+        assertEquals(10L, result.long("tokens"))
+        assertFalse(result.obj("tokenBreakdown").obj("subagents")!!.has("cost"))
     }
 
     @Test

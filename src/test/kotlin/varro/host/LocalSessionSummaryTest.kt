@@ -5,6 +5,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import varro.protocol.long
+import varro.protocol.num
 import varro.protocol.obj
 import java.sql.DriverManager
 
@@ -25,9 +26,9 @@ class LocalSessionSummaryTest {
             database.prepareStatement("INSERT INTO message VALUES (?, ?, ?, ?)").use { statement ->
                 val rows = listOf(
                     Triple("user", "root", """{"role":"user","time":{"created":1000}}"""),
-                    Triple("assistant", "root", """{"role":"assistant","time":{"created":1100,"completed":3000},"tokens":{"input":100,"output":20,"cache":{"read":1000}}}"""),
-                    Triple("child-message", "child", """{"role":"assistant","tokens":{"input":9000}}"""),
-                    Triple("grandchild-message", "grandchild", """{"role":"assistant","tokens":{"input":7}}"""),
+                    Triple("assistant", "root", """{"role":"assistant","cost":0.25,"time":{"created":1100,"completed":3000},"tokens":{"input":100,"output":20,"cache":{"read":1000}}}"""),
+                    Triple("child-message", "child", """{"role":"assistant","cost":0.125,"tokens":{"input":9000}}"""),
+                    Triple("grandchild-message", "grandchild", """{"role":"assistant","cost":0.0625,"tokens":{"input":7}}"""),
                 )
                 rows.forEachIndexed { index, (id, session, data) ->
                     statement.setString(1, id); statement.setString(2, session)
@@ -52,6 +53,8 @@ class LocalSessionSummaryTest {
         assertEquals(162L, result.long("tokens"))
         assertEquals(2000L, result.long("durationMs"))
         assertEquals(2L, result.obj("tokenBreakdown").long("subagentCount"))
+        assertEquals(0.25, result.obj("tokenBreakdown").obj("session").num("cost")!!, 0.0)
+        assertEquals(0.1875, result.obj("tokenBreakdown").obj("subagents").num("cost")!!, 0.0)
         assertFalse(history.messages.toString().contains("ignored output"))
         assertNull(LocalSessionSummary(path).read("missing"))
     }

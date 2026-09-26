@@ -52,6 +52,12 @@
     ]]></description>
 
     <change-notes><![CDATA[
+        <h3>0.3.10</h3>
+        <p>Synced Varro through bdae3be07121. Added overall session cost including subagents,
+            with cost details restored from local history. Added send animations and fixed attachment
+            visibility during sends and draft restoration after failed sends. Successful provider
+            responses now clear older authentication failure notices. Shared elapsed-time timers
+            reduce redundant updates. Updated webview dependencies.</p>
         <h3>0.3.9</h3>
         <p>Synced Varro through b7c80c9717af. Fixed return-to-bottom scrolling and preserved the
             visible response position after keyboard navigation. Pasted-text attachments now preview

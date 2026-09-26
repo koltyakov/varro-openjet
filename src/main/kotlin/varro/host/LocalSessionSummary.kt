@@ -54,7 +54,7 @@ internal class LocalSessionSummary(private val path: Path) {
                     check(size <= 64 * 1024 * 1024 && bytes <= 128 * 1024 * 1024)
                     return Json.parse(data).asJsonObject
                 }
-                val fields = listOf("role", "parentID", "mode", "providerID", "modelID", "variant", "time", "tokens", "summary")
+                val fields = listOf("role", "parentID", "mode", "providerID", "modelID", "variant", "time", "tokens", "cost", "summary")
                     .joinToString(", ") { "'$it', json_extract(data, '$.$it')" }
                 database.prepareStatement(
                     "SELECT id, session_id, json_object($fields) FROM message WHERE session_id IN ($placeholders) " +

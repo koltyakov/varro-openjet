@@ -38,7 +38,9 @@ internal object SessionSummary {
         }
         edits.addProperty("tokens", spent(session) + spent(subagents))
         edits.add("tokenBreakdown", Json.obj(
-            "session" to session, "subagents" to subagents, "subagentCount" to history.descendants.size,
+            "session" to usageWithCost(session, messageCost(history.messages)),
+            "subagents" to usageWithCost(subagents, history.descendants.sumOf { messageCost(it.messages) }),
+            "subagentCount" to history.descendants.size,
         ))
         duration(history.messages, SessionPauses.read(metadata)).entrySet().forEach { (key, value) -> edits.add(key, value) }
         history.messages.mapNotNull { it.obj("info") }.lastOrNull {
@@ -160,6 +162,15 @@ internal object SessionSummary {
     }
 
     private fun spent(usage: Map<String, Long>) = (usage.getValue("total") - usage.getValue("cacheRead")).coerceAtLeast(0)
+
+    private fun messageCost(messages: List<JsonObject>): Double = messages.mapNotNull { it.obj("info") }
+        .filter { it.str("role") == "assistant" }
+        .sumOf { it.num("cost")?.takeIf { cost -> cost.isFinite() && cost > 0 } ?: 0.0 }
+
+    private fun usageWithCost(usage: Map<String, Long>, cost: Double): JsonObject = JsonObject().apply {
+        usage.forEach { (key, value) -> addProperty(key, value) }
+        if (cost > 0) addProperty("cost", cost)
+    }
 
     private fun duration(messages: List<JsonObject>, pauses: Map<String, Long>): JsonObject {
         var total = 0L
