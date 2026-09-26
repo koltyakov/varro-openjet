@@ -1780,12 +1780,14 @@ export function ChatInput(props: { newSession?: boolean; onBeforeSend?: () => vo
   );
 
   const activeContext = createMemo(() => {
-    const database = state.editorContext.databaseContext;
+    const database = state.editorContext.databaseContext ??
+      (!composerActiveFile() && !state.editorContext.editorText ? state.editorContext.databaseEnvironment : null);
     if (database && !composerEditingMessage())
       return {
         filename: database.name,
         icon: 'table' as const,
-        lineRange: databaseContextDetail(database),
+        lineRange: '',
+        tooltipDetail: databaseContextDetail(database),
       };
     const file = composerActiveFile();
     const editorText = state.editorContext.editorText;
@@ -1821,8 +1823,9 @@ export function ChatInput(props: { newSession?: boolean; onBeforeSend?: () => vo
   const activeContextTitle = createMemo(() => {
     const context = activeContext();
     if (!context) return null;
-    const label = context.lineRange ? `${context.filename} ${context.lineRange}` : context.filename;
-    const source = state.editorContext.databaseContext ? 'database' : 'document';
+    const detail = context.tooltipDetail ?? context.lineRange;
+    const label = detail ? `${context.filename} ${detail}` : context.filename;
+    const source = context.icon === 'table' ? 'database' : 'document';
     return `${label}${
       activeContextEnabled(composerSessionId())
         ? ` · Click to disable current ${source} context`
@@ -3034,6 +3037,7 @@ export function ChatInput(props: { newSession?: boolean; onBeforeSend?: () => vo
           editorContext: {
             ...state.editorContext,
             databaseContext: cloneDatabaseContext(state.editorContext.databaseContext),
+            databaseEnvironment: cloneDatabaseContext(state.editorContext.databaseEnvironment),
             workspaceFolders: state.editorContext.workspaceFolders?.map((folder) => ({
               ...folder,
             })),

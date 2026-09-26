@@ -8,6 +8,7 @@ import com.intellij.openapi.actionSystem.DataContext
 interface DatabaseContextSource {
     fun addListener(listener: () -> Unit)
     fun snapshot(): JsonObject?
+    fun environment(activeContext: JsonObject?): JsonObject?
     fun capture(context: DataContext): JsonObject?
     fun isAvailable(context: DataContext): Boolean
     fun canDrop(attached: Any?): Boolean

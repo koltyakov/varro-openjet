@@ -800,6 +800,7 @@ export function isEditorContext<T>(value: T): value is T & EditorContext {
   }
   if (record.editorText !== undefined && !isEditorText(record.editorText)) return false;
   if (record.databaseContext != null && !isDatabaseContext(record.databaseContext)) return false;
+  if (record.databaseEnvironment != null && !isDatabaseContext(record.databaseEnvironment)) return false;
   if (!Array.isArray(record.diagnostics)) return false;
   if (
     record.diagnosticsTotal !== undefined &&

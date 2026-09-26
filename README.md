@@ -71,7 +71,13 @@ The Agents settings control the runtime-only read-only `Ask` agent, automatic co
 
 ### Database context in DataGrip
 
-Open a table or query-result grid for automatic context. Varro includes visible column metadata and any selected rows. The composer chip shows the table and row count; click it to disable context. Switching to chat keeps the last grid, while returning to an editor restores file context.
+Open a table or query-result grid for automatic context. Varro includes visible column metadata and any selected rows. The composer chip shows the object name; hover for connection details, scope, and row count, or click it to disable context. Switching to chat keeps the last grid, while returning to an editor restores file context.
+
+SQL consoles and datasource-associated SQL files provide the active connection, current catalog/schema and search path, connection state, and selected SQL or the statement under the caret. If the IDE has not parsed the latest edits, Varro uses the current buffer. Result grids include the SQL that produced them and the selected column names.
+
+Selecting objects in Database Explorer supplies context without opening a grid. Selecting a column or key includes its parent table. SQL references resolved by DataGrip supply relevant object metadata, including primary keys, foreign keys, indexes, nullability, defaults, and comments. Context follows the last console, grid, DDL editor, or Explorer selection into chat. The chip's tooltip identifies the datasource and schema; `@` table search prioritizes that datasource and schema.
+
+Project database context also includes configured datasources, their connection states, and loaded catalog/schema names, even with an empty editor area. The current datasource follows the console, grid, or Explorer selection. With no selection, Varro identifies the only configured or only connected datasource when there is one; multiple candidates stay explicit. The inventory also accompanies ordinary file context. Disabling automatic context disables this inventory too.
 
 DDL tabs provide the full editor buffer, including unsaved edits. Table grids also include DDL when already loaded in the IDE.
 
@@ -79,6 +85,10 @@ DDL tabs provide the full editor buffer, including unsaved edits. Table grids al
 - Drag tables from Database Explorer or type `@` to search by table, schema, or datasource. These attach column metadata and already-loaded DDL without opening a grid. Drops support up to 20 tables.
 
 Capture uses loaded data only. Accept active cell edits before capturing. Limits are 200 rows, 64 columns, 4,000 characters per cell, 80,000 serialized row characters, and 40,000 DDL characters. The chip reports truncation.
+
+SQL text is limited to 40,000 characters. Related metadata is limited to 8 objects and 60,000 serialized characters. Unknown connection details stay unknown, and context excludes connection URLs and credentials.
+
+Datasource inventory is limited to 20 entries and 40,000 serialized characters, with up to 16 loaded catalog/schema names per datasource.
 
 Requires Database Tools. To verify compatibility with a local DataGrip installation:
 

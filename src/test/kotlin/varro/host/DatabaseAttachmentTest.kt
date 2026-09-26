@@ -11,6 +11,16 @@ import java.nio.file.Path
 class DatabaseAttachmentTest {
     @get:Rule val temporary = TemporaryFolder()
 
+    @Test fun `console attachments preserve SQL connection identity and unknown null fields`() {
+        val store = AttachmentStore(temporary.root.toPath()) { null }
+        val snapshot = Json.obj("name" to "console", "dataSource" to "staging", "scope" to "console",
+            "connection" to Json.obj("dataSourceId" to "ds-1", "schema" to null, "connected" to null),
+            "sql" to Json.obj("text" to "select 1", "kind" to "selection", "truncated" to false))
+        val file = store.store(AttachmentStore.databaseContent(snapshot))
+        assertEquals(snapshot, Json.parse(Files.readString(Path.of(file["path"].asString))))
+        assertEquals("console", file.getAsJsonObject("database")["scope"].asString)
+    }
+
     @Test fun `table snapshots become durable files independently of subsequent schema changes`() {
         val store = AttachmentStore(temporary.root.toPath()) { null }
         val snapshot = Json.obj("name" to "main.users", "ddl" to "create table users (id INT primary key)")

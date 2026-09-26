@@ -331,8 +331,12 @@ export function buildSessionSendBody(
   const currentDocumentEnabled = isCurrentDocumentEnabled(sessionId);
   const editorText = composerState.editorContext.editorText;
   const databaseContext = composerState.editorContext.databaseContext;
+  const databaseEnvironment = composerState.editorContext.databaseEnvironment;
+  if (databaseEnvironment && !databaseContext && currentDocumentEnabled) {
+    parts.push({ type: 'text', text: formatDatabaseContext(databaseEnvironment) });
+  }
   if (databaseContext && currentDocumentEnabled) {
-    parts.push({ type: 'text', text: formatDatabaseContext(databaseContext) });
+    parts.push({ type: 'text', text: formatDatabaseContext(databaseContext, databaseEnvironment) });
   } else if (editorText && currentDocumentEnabled) {
     const range = `lines ${editorText.range.startLine}-${editorText.range.endLine}`;
     const source = editorText.kind === 'selection' ? 'Unsaved selection' : 'Unsaved buffer';
@@ -985,6 +989,7 @@ export class SessionSendOperations {
       editorContext: {
         ...sourceEditorContext,
         databaseContext: cloneDatabaseContext(sourceEditorContext.databaseContext),
+        databaseEnvironment: cloneDatabaseContext(sourceEditorContext.databaseEnvironment),
         workspaceFolders: sourceEditorContext.workspaceFolders?.map((folder) => ({ ...folder })),
         activeFile: sourceEditorContext.activeFile ? { ...sourceEditorContext.activeFile } : null,
         selection: sourceEditorContext.selection ? { ...sourceEditorContext.selection } : null,

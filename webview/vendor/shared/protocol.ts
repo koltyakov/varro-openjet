@@ -53,8 +53,10 @@ export interface InlineProblemAttachment {
   group?: EditorDiagnostic[];
 }
 
-/** A detached snapshot of a loaded database grid. Values use strings to preserve SQL precision. */
-export interface DatabaseContext {
+import type { DatabaseContextDetails } from '../../src/database-context';
+
+/** A detached snapshot of the active database surface. Values preserve SQL precision. */
+export interface DatabaseContext extends DatabaseContextDetails {
   name: string;
   dataSource: string | null;
   dialect: string | null;
@@ -62,7 +64,7 @@ export interface DatabaseContext {
   columns: Array<{ name: string; type: string }>;
   rows: Array<Array<string | null>>;
   selectedRowCount: number;
-  scope: 'table' | 'selected-rows' | 'ddl';
+  scope: 'table' | 'selected-rows' | 'ddl' | 'console' | 'object' | 'datasource';
   ddl?: string;
   pendingChanges: boolean;
   cellEditing: boolean;
@@ -86,6 +88,7 @@ export interface EditorContext {
   } | null;
   editorText?: EditorTextContext | null;
   databaseContext?: DatabaseContext | null;
+  databaseEnvironment?: DatabaseContext | null;
   diagnostics: EditorDiagnostic[];
   diagnosticsTotal?: number;
   diagnosticCounts?: { errors: number; warnings: number };

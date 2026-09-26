@@ -1,6 +1,7 @@
 package varro.host
 
 import com.intellij.ui.jcef.JBCefBrowser
+import com.intellij.ui.jcef.JBCefBrowserBase
 import com.intellij.ui.jcef.JBCefOSRHandlerFactory
 import org.cef.browser.CefBrowser
 import org.cef.handler.CefNativeRenderHandler
@@ -25,10 +26,17 @@ internal class ResizeAwareOsrHandlerFactory : JBCefOSRHandlerFactory {
     }
 
     fun installPaintGuard(browser: JBCefBrowser) {
-        val view = browser.cefBrowser.uiComponent as JComponent
-        val panel = browser.component
+        installPaintGuard(browser.component, browser.cefBrowser.uiComponent as JComponent)
+    }
+
+    internal fun installPaintGuard(panel: JComponent, view: JComponent) {
         panel.remove(view)
-        panel.add(JLayer(view, OsrPaintGuard(frames)), BorderLayout.CENTER)
+        val layer = JLayer(view, OsrPaintGuard(frames))
+        // JCEF's macOS edit actions find the browser on the focused component or
+        // its immediate parent. Preserve that lookup when inserting the paint layer.
+        layer.putClientProperty(JBCefBrowserBase.JBCEFBROWSER_INSTANCE_PROP,
+            panel.getClientProperty(JBCefBrowserBase.JBCEFBROWSER_INSTANCE_PROP))
+        panel.add(layer, BorderLayout.CENTER)
     }
 }
 

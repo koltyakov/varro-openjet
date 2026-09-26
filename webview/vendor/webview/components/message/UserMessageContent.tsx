@@ -2102,9 +2102,6 @@ function InlineMessageAttachmentChip(props: { attachment: MessageAttachment }) {
         <FolderIcon class="inline-chip-icon" width="11" height="11" />
       </Show>
       <span class="inline-chip-label">{getAttachmentLabel(attachment())}</span>
-      <Show when={database()}>
-        {(table) => <span class="inline-chip-detail">{databaseAttachmentDetail(table())}</span>}
-      </Show>
       <Show when={fileSelection()}>
         {(selection) => (
           <span class="inline-chip-detail">{formatContextLineRanges(selection().lineRanges)}</span>
@@ -2286,10 +2283,6 @@ function MessageAttachmentChip(props: { attachment: MessageAttachment }) {
 
   const detail = () => {
     const value = attachment();
-    if (value.type === 'file-reference' && value.database)
-      return <span class="chip-detail">{databaseAttachmentDetail(value.database)}</span>;
-    if (value.type === 'database')
-      return <span class="chip-detail">{databaseContextDetail(value.context)}</span>;
     if (value.type === 'file-selection') {
       return <span class="chip-detail">{formatContextLineRanges(value.lineRanges)}</span>;
     }
@@ -2555,10 +2548,6 @@ function getDisplayMessageAttachmentDetail(attachment: DisplayMessageAttachment)
   if (attachment.attachment.type === 'problem-reference')
     return problemReferenceLocation(attachment.attachment.reference);
   if (attachment.attachment.type === 'issues') return String(attachment.attachment.count);
-  if (attachment.attachment.type === 'file-reference' && attachment.attachment.database)
-    return databaseAttachmentDetail(attachment.attachment.database);
-  if (attachment.attachment.type === 'database')
-    return databaseContextDetail(attachment.attachment.context);
   if (attachment.attachment.type === 'file-selection') {
     return formatContextLineRanges(attachment.attachment.lineRanges);
   }

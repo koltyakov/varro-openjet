@@ -17,6 +17,11 @@ import java.security.MessageDigest
 
 /** Database Explorer and @ attachments use introspected schema, independent of the active grid. */
 internal class DatabaseTables(private val project: Project) {
+    @Volatile private var preference: Pair<String?, String?> = null to null
+
+    fun prefer(source: String?, schema: String?) {
+        preference = source to schema
+    }
     private fun droppedTables(attached: Any?): List<DbElement> = IdeDropObjects.objects(attached)
         .mapNotNull { value ->
             when (value) {
@@ -35,10 +40,23 @@ internal class DatabaseTables(private val project: Project) {
         droppedTables(attached).map(::snapshot)
     }
 
-    private fun tables(): Sequence<DbElement> = DbUtil.getDataSources(project).asSequence().flatMap { source ->
-        DasUtil.getTables(source).asSequence().mapNotNull { table ->
-            ProgressManager.checkCanceled()
-            source.findElement(table)?.takeIf { it.isValid }
+    private fun tables(): Sequence<DbElement> {
+        val (preferredSource, preferredSchema) = preference
+        return DbUtil.getDataSources(project).asSequence()
+            .sortedBy { if (it.uniqueId == preferredSource) 0 else 1 }.flatMap { source ->
+            val tables = DasUtil.getTables(source)
+            val ordered = if (source.uniqueId == preferredSource && !preferredSchema.isNullOrBlank()) {
+                sequenceOf(true, false).flatMap { preferred ->
+                    tables.asSequence().filter {
+                        ProgressManager.checkCanceled()
+                        (DasUtil.getSchema(it) == preferredSchema) == preferred
+                    }
+                }
+            } else tables.asSequence()
+            ordered.mapNotNull { table ->
+                ProgressManager.checkCanceled()
+                source.findElement(table)?.takeIf { it.isValid }
+            }
         }
     }
 
@@ -80,6 +98,11 @@ internal class DatabaseTables(private val project: Project) {
             selectedRowCount = 0, rows = emptySequence(),
             pendingChanges = ddl != null && FileDocumentManager.getInstance().isDocumentUnsaved(ddl),
             cellEditing = false, pageStart = 0, ddl = ddl?.text,
-        )
+        ).apply {
+            addProperty("origin", "attachment")
+            add("connection", DatabaseDetails.connection(element.dataSource))
+            add("target", DatabaseDetails.target(element))
+            DatabaseDetails.addObjects(this, listOf(element))
+        }
     }
 }

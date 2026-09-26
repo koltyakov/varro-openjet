@@ -207,6 +207,65 @@ if (existsSync(problemsPath)) {
     .replace('`[VS Code problems for', '`[JetBrains problems for'));
 }
 
+// The database host sends console, Explorer, and connection details beyond the
+// upstream grid snapshot. Keep the adaptation small; its implementation lives in src.
+const databaseProtocolPath = join(webviewRoot, 'vendor/shared/protocol.ts');
+const databaseSharedPath = join(webviewRoot, 'vendor/shared/database-context.ts');
+function adaptDatabase(path, replacements) {
+  let text = readFileSync(path, 'utf8');
+  for (const [before, after] of replacements) {
+    if (!text.includes(before)) throw new Error(`Upstream database context changed in ${path}; update the JetBrains adaptation.`);
+    text = text.replaceAll(before, after);
+  }
+  writeFileSync(path, text);
+}
+adaptDatabase(databaseProtocolPath, [
+  ['/** A detached snapshot of a loaded database grid. Values use strings to preserve SQL precision. */\n', ''],
+  ['export interface DatabaseContext {', "import type { DatabaseContextDetails } from '../../src/database-context';\n\n/** A detached snapshot of the active database surface. Values preserve SQL precision. */\nexport interface DatabaseContext extends DatabaseContextDetails {"],
+  ["scope: 'table' | 'selected-rows' | 'ddl';", "scope: 'table' | 'selected-rows' | 'ddl' | 'console' | 'object' | 'datasource';"],
+  ['  databaseContext?: DatabaseContext | null;', '  databaseContext?: DatabaseContext | null;\n  databaseEnvironment?: DatabaseContext | null;'],
+]);
+adaptDatabase(databaseSharedPath, [
+  ["import { asRecord, isString, isBoolean, isNumber } from './type-utils';", "import { asRecord, isString, isBoolean, isNumber } from './type-utils';\nimport { cloneDatabaseDetails, databaseDetailsLabel, isDatabaseContextDetails, isDatabaseScope } from '../../src/database-context';"],
+  ["record.scope !== 'table' && record.scope !== 'selected-rows' && record.scope !== 'ddl'", '!isDatabaseScope(record.scope)'],
+  ['return JSON.stringify(record.rows).length <= 81_000;', 'return JSON.stringify(record.rows).length <= 81_000 && isDatabaseContextDetails(record);'],
+  ['        ...context,', '        ...context,\n        ...cloneDatabaseDetails(context),'],
+  ['return databaseAttachmentDetail({ ...context, rowCount: context.rows.length });', 'return databaseDetailsLabel(context, databaseAttachmentDetail({ ...context, rowCount: context.rows.length }));'],
+  ["    context.scope === 'ddl'", "    context.scope === 'console' || context.scope === 'object' || context.scope === 'datasource'\n      ? context.scope\n      : context.scope === 'ddl'"],
+]);
+adaptDatabase(join(webviewRoot, 'vendor/webview/components/ChatInput.tsx'), [
+  ['    const database = state.editorContext.databaseContext;', '    const database = state.editorContext.databaseContext ??\n      (!composerActiveFile() && !state.editorContext.editorText ? state.editorContext.databaseEnvironment : null);'],
+  ['        lineRange: databaseContextDetail(database),', "        lineRange: '',\n        tooltipDetail: databaseContextDetail(database),"],
+  ['    const label = context.lineRange ? `${context.filename} ${context.lineRange}` : context.filename;',
+    '    const detail = context.tooltipDetail ?? context.lineRange;\n    const label = detail ? `${context.filename} ${detail}` : context.filename;'],
+  ["    const source = state.editorContext.databaseContext ? 'database' : 'document';", "    const source = context.icon === 'table' ? 'database' : 'document';"],
+  ['            databaseContext: cloneDatabaseContext(state.editorContext.databaseContext),', '            databaseContext: cloneDatabaseContext(state.editorContext.databaseContext),\n            databaseEnvironment: cloneDatabaseContext(state.editorContext.databaseEnvironment),'],
+]);
+adaptDatabase(join(webviewRoot, 'vendor/shared/extension-message.ts'), [
+  ['  if (record.databaseContext != null && !isDatabaseContext(record.databaseContext)) return false;',
+    '  if (record.databaseContext != null && !isDatabaseContext(record.databaseContext)) return false;\n  if (record.databaseEnvironment != null && !isDatabaseContext(record.databaseEnvironment)) return false;'],
+]);
+adaptDatabase(join(webviewRoot, 'vendor/webview/lib/database-context.ts'), [
+  ["import type { DatabaseContext } from '../../shared/protocol';", "import type { DatabaseContext } from '../../shared/protocol';\nimport { withDatabaseEnvironment } from '../../../src/database-context';"],
+  ['export function formatDatabaseContext(context: DatabaseContext): string {', 'export function formatDatabaseContext(context: DatabaseContext, environment?: DatabaseContext | null): string {'],
+  ['JSON.stringify(context, null, 2)', 'JSON.stringify(withDatabaseEnvironment(context, environment), null, 2)'],
+]);
+adaptDatabase(join(webviewRoot, 'vendor/webview/hooks/session/session-send.ts'), [
+  ['  const databaseContext = composerState.editorContext.databaseContext;', '  const databaseContext = composerState.editorContext.databaseContext;\n  const databaseEnvironment = composerState.editorContext.databaseEnvironment;\n  if (databaseEnvironment && !databaseContext && currentDocumentEnabled) {\n    parts.push({ type: \'text\', text: formatDatabaseContext(databaseEnvironment) });\n  }'],
+  ['formatDatabaseContext(databaseContext)', 'formatDatabaseContext(databaseContext, databaseEnvironment)'],
+  ['        databaseContext: cloneDatabaseContext(sourceEditorContext.databaseContext),', '        databaseContext: cloneDatabaseContext(sourceEditorContext.databaseContext),\n        databaseEnvironment: cloneDatabaseContext(sourceEditorContext.databaseEnvironment),'],
+]);
+adaptDatabase(join(webviewRoot, 'vendor/webview/components/chat-input/message-usage.ts'), [
+  ["import type { AssistantMessage, Message, Part, Session, TextPart } from '../../types';", "import type { AssistantMessage, Message, Part, Session, TextPart } from '../../types';\nimport { stripDatabaseContextForHistory } from '../../../../src/database-history';"],
+  ['    .map((part) => part.text.trim())', '    .map((part) => stripDatabaseContextForHistory(part.text).trim())'],
+]);
+// Sent database chips follow the composer's name-only display. Titles retain details.
+adaptDatabase(join(webviewRoot, 'vendor/webview/components/message/UserMessageContent.tsx'), [
+  ['      <Show when={database()}>\n        {(table) => <span class="inline-chip-detail">{databaseAttachmentDetail(table())}</span>}\n      </Show>\n', ''],
+  ['    if (value.type === \'file-reference\' && value.database)\n      return <span class="chip-detail">{databaseAttachmentDetail(value.database)}</span>;\n    if (value.type === \'database\')\n      return <span class="chip-detail">{databaseContextDetail(value.context)}</span>;\n', ''],
+  ['  if (attachment.attachment.type === \'file-reference\' && attachment.attachment.database)\n    return databaseAttachmentDetail(attachment.attachment.database);\n  if (attachment.attachment.type === \'database\')\n    return databaseContextDetail(attachment.attachment.context);\n', ''],
+]);
+
 if (updatedDependencies > 0) {
   writeFileSync(packagePath, `${JSON.stringify(localPackage, null, 2)}\n`, 'utf8');
   console.log(`Updated ${updatedDependencies} dependency versions. Run npm install in webview/ to refresh package-lock.json.`);

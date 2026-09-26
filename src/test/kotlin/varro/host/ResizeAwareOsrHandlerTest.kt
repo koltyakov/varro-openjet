@@ -5,6 +5,8 @@ import org.cef.handler.CefNativeRenderHandler
 import org.cef.handler.CefRenderHandler
 import org.junit.Assert.*
 import org.junit.Test
+import com.intellij.ui.jcef.JBCefBrowserBase
+import java.awt.BorderLayout
 import java.awt.Rectangle
 import java.awt.Graphics
 import java.awt.image.BufferedImage
@@ -12,10 +14,32 @@ import java.lang.reflect.Proxy
 import java.nio.ByteBuffer
 import javax.swing.JComponent
 import javax.swing.JLayer
+import javax.swing.JPanel
 import javax.swing.SwingUtilities
 
 class ResizeAwareOsrHandlerTest {
     private val browser = proxy<CefBrowser> { _, _ -> null }
+
+    @Test
+    fun `paint wrapper preserves the native macOS edit shortcut browser lookup`() {
+        SwingUtilities.invokeAndWait {
+            val instance = Any()
+            val property = JBCefBrowserBase.JBCEFBROWSER_INSTANCE_PROP
+            val panel = JPanel(BorderLayout()).apply { putClientProperty(property, instance) }
+            val focusedView = JPanel()
+            panel.add(focusedView, BorderLayout.CENTER)
+            // JcefShortcutProvider checks only the context component and its parent.
+            fun shortcutBrowser() = focusedView.getClientProperty(property)
+                ?: (focusedView.parent as? JComponent)?.getClientProperty(property)
+            assertSame(instance, shortcutBrowser())
+
+            ResizeAwareOsrHandlerFactory().installPaintGuard(panel, focusedView)
+
+            assertTrue(focusedView.parent is JLayer<*>)
+            assertSame(panel, focusedView.parent.parent)
+            assertSame("Select All, Copy, Cut and Paste must still reach this browser", instance, shortcutBrowser())
+        }
+    }
 
     @Test
     fun `new raster is populated outside incremental dirty region after abrupt growth and shrink`() {

@@ -171,7 +171,9 @@ class ContextProvider(private val project: Project) : Disposable {
         val roots = workspaceFolders()
         val workspacePath = project.guessProjectDir()?.path ?: project.basePath
 
-        val database = project.getService(DatabaseContextSource::class.java)?.snapshot()
+        val databaseSource = project.getService(DatabaseContextSource::class.java)
+        val database = databaseSource?.snapshot()
+        val databaseEnvironment = databaseSource?.environment(database)
         val editor = if (database == null) selectedTextEditor() else null
         val file = editor?.let { FileDocumentManager.getInstance().getFile(it.document) }
 
@@ -184,6 +186,7 @@ class ContextProvider(private val project: Project) : Disposable {
             add("selection", selection(editor))
             add("editorText", editorText(editor, file, workspacePath))
             add("databaseContext", database)
+            add("databaseEnvironment", databaseEnvironment)
         }
 
         val diagnostics = WorkspaceProblems.highlights(project, file, editor)

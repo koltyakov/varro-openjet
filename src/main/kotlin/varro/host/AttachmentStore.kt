@@ -50,7 +50,7 @@ class AttachmentStore(private val root: Path, private val workspace: () -> Strin
         private const val MAX_BYTES = 20L * 1024 * 1024
 
         fun databaseContent(snapshot: JsonObject): JsonObject {
-            val bytes = Json.gson.toJson(snapshot).toByteArray(Charsets.UTF_8)
+            val bytes = snapshot.toString().toByteArray(Charsets.UTF_8)
             return Json.obj(
                 "name" to "${snapshot.str("name") ?: "database"}-context.json",
                 "size" to bytes.size,
