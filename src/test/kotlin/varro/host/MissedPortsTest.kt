@@ -61,6 +61,30 @@ class MissedPortsTest {
         assertNotNull(queue.claim("sidebar", "s", "next", false))
     }
 
+    @Test fun `queue snapshots acknowledge each view without losing ids on host dispatch updates`() {
+        val path = temporary.root.toPath().resolve("queue.json")
+        val queue = QueuedDispatches(path, JsonArray())
+        assertFalse(queue.snapshot("sidebar").has("mutationId"))
+        queue.update("sidebar", Json.array(listOf(item())), "sidebar-1")
+        val older = queue.snapshot("sidebar")
+        queue.update("sidebar", Json.array(listOf(item(), item("next"))), "sidebar-2")
+        queue.update("editor", Json.array(listOf(item("editor-item", "editor", "other"))), "editor-1")
+        assertEquals("sidebar-1", older.str("mutationId"))
+        assertEquals(1, older.arr("messages")!!.size())
+        assertEquals("sidebar-2", queue.snapshot("sidebar").str("mutationId"))
+        assertEquals("editor-1", queue.snapshot("editor").str("mutationId"))
+
+        val lease = queue.claim("sidebar", "s", "queued", false)!!
+        val request = Json.obj("method" to "POST", "path" to "/session/s/prompt_async", "body" to JsonObject(),
+            "queuedMessageDispatch" to Json.obj("itemId" to "queued", "lease" to lease))
+        assertTrue(queue.admit("sidebar", request))
+        queue.complete(request, true)
+        val snapshot = queue.snapshot("sidebar")
+        assertEquals("sidebar-2", snapshot.str("mutationId"))
+        assertEquals(setOf("next", "editor-item"), snapshot.arr("messages")!!.map { it.asJsonObject.str("id") }.toSet())
+        assertFalse(QueuedDispatches(path, JsonArray()).snapshot("sidebar").has("mutationId"))
+    }
+
     @Test fun `uncertain queue failure remains paused after transport failure and restart`() {
         val path = temporary.root.toPath().resolve("queue.json")
         val queue = QueuedDispatches(path, Json.array(listOf(item())))

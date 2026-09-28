@@ -52,6 +52,11 @@
     ]]></description>
 
     <change-notes><![CDATA[
+        <h3>0.4.2</h3>
+        <p>Synced Varro 0.30.8 through d5cd23b52f6b. Improved long-chat rendering, scrolling,
+            composer resizing, retry display and file-change tracking. Added provider quota warnings.
+            Updated agent-selection and queued-message acknowledgements to preserve newer local
+            changes when older host updates arrive.</p>
         <h3>0.4.1</h3>
         <p>Synced Varro through f3b0b688a2d5. Added configured agent icons to the picker and toolbar,
             with a cube fallback for custom agents, and improved agent label formatting. Fixed excess

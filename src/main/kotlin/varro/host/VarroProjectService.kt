@@ -96,7 +96,12 @@ class VarroProjectService(private val project: Project) : Disposable {
     val context: ContextProvider = ContextProvider(project)
 
     private val selections = SessionSelections(store,
-        publishAgent = { id, agent -> broadcast("session-plan-state/update", Json.obj("sessionId" to id, "agent" to agent)) },
+        publishAgent = { id, agent, selectionId ->
+            broadcast("session-plan-state/update", Json.obj("sessionId" to id).apply {
+                agent?.let { addProperty("agent", it) }
+                selectionId?.let { addProperty("selectionId", it) }
+            })
+        },
         request = { method, path, body, directory ->
             server.transport.request(method, path, body, varro.server.RequestOptions(directory = directory)).data
         },
@@ -249,8 +254,10 @@ class VarroProjectService(private val project: Project) : Disposable {
 
     private fun syncQueue() {
         store.queuedMessages = queue.messages()
-        broadcast("queued-messages/sync", Json.obj("messages" to store.queuedMessages))
+        broadcastQueue()
     }
+
+    private fun broadcastQueue() = panels.forEach { it.post("queued-messages/sync", queue.snapshot(it.viewId)) }
 
     private fun readQueuedHistory(sessionId: String): JsonArray {
         val messages = JsonArray()
@@ -479,7 +486,7 @@ class VarroProjectService(private val project: Project) : Disposable {
                         Json.obj("state" to store.sessionPlanState, "agents" to store.sessionPlanAgents),
                     )
                     broadcast("model-preferences/sync", modelStore.modelPreferences)
-                    broadcast("queued-messages/sync", Json.obj("messages" to store.queuedMessages))
+                    broadcastQueue()
                     ensureServerStarted()
                 }
 
@@ -620,7 +627,7 @@ class VarroProjectService(private val project: Project) : Disposable {
                         store.sessionPlanState = state
                     }
                     payload.text("agent")?.let { agent ->
-                        selections.updateAgent(sessionId, agent, selectionDirectory(sessionId))
+                        selections.updateAgent(sessionId, agent, selectionDirectory(sessionId), payload.str("selectionId"))
                     }
                 }
 
@@ -658,7 +665,7 @@ class VarroProjectService(private val project: Project) : Disposable {
 
                 "queued-messages/update" -> {
                     val messages = payload?.getAsJsonArray("messages") ?: JsonArray()
-                    queue.update(host?.viewId ?: "sidebar", messages)
+                    queue.update(host?.viewId ?: "sidebar", messages, payload.str("mutationId"))
                     syncQueue()
                 }
 

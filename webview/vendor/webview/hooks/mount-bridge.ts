@@ -102,6 +102,9 @@ export function createMountBridgeOperations(deps: {
           if (payload.showTurnTimer !== undefined) {
             uiStore.setShowTurnTimer(payload.showTurnTimer);
           }
+          if (payload.debugShowQuotaWarning !== undefined) {
+            appStore.setState('debugShowQuotaWarning', payload.debugShowQuotaWarning);
+          }
           uiStore.setDesktopSessionPaneSide(payload.desktopSessionPaneSide);
           permissionsStore.setDefaultPermissionModePreference(payload.defaultPermissionMode);
         },
@@ -413,7 +416,7 @@ export function handleExtensionMessageWithDependencies(
       deps.setProviderRefreshPending?.(msg.payload.pending);
       break;
     case 'queued-messages/sync':
-      applyQueuedMessagesSnapshot(msg.payload.messages);
+      applyQueuedMessagesSnapshot(msg.payload.messages, msg.payload.mutationId);
       break;
     case 'queued-messages/claim-result':
       applyQueuedMessageClaimResult(msg.payload);
@@ -440,8 +443,12 @@ export function handleExtensionMessageWithDependencies(
       if (msg.payload.skippedAt !== undefined) {
         applySessionPlanStateUpdate(msg.payload.sessionId, msg.payload.skippedAt);
       }
-      if (msg.payload.agent !== undefined) {
-        applySessionSelectedAgentUpdate(msg.payload.sessionId, msg.payload.agent);
+      if (msg.payload.agent !== undefined || msg.payload.selectionId !== undefined) {
+        applySessionSelectedAgentUpdate(
+          msg.payload.sessionId,
+          msg.payload.agent,
+          msg.payload.selectionId
+        );
       }
       break;
     case 'model-preferences/sync':

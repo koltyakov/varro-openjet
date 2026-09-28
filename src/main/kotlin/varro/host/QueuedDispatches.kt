@@ -10,11 +10,15 @@ class QueuedDispatches(private val path: Path, initialMessages: JsonArray) {
     private val journal = varro.store.JsonJournal(path)
     private var state = journal.read(Json.obj("messages" to initialMessages, "dispatches" to JsonObject(), "nextLease" to 0))
     private val claims = mutableMapOf<String, JsonObject>()
+    private val mutationIds = mutableMapOf<String, String>()
 
     @Synchronized fun messages(): JsonArray = state.arr("messages")!!.deepCopy()
+    @Synchronized fun snapshot(viewId: String): JsonObject = Json.obj("messages" to messages()).apply {
+        mutationIds[viewId]?.let { addProperty("mutationId", it) }
+    }
     @Synchronized fun hasPending(): Boolean = claims.isNotEmpty() || dispatches().entrySet().any { it.value.asJsonObject.str("status") == "admitting" }
 
-    @Synchronized fun update(viewId: String, incoming: JsonArray): JsonArray {
+    @Synchronized fun update(viewId: String, incoming: JsonArray, mutationId: String? = null): JsonArray {
         val current = messages()
         val next = JsonArray()
         current.filter { owner(it.asJsonObject) != viewId }.forEach(next::add)
@@ -29,6 +33,7 @@ class QueuedDispatches(private val path: Path, initialMessages: JsonArray) {
             .forEach { item -> if (next.none { it.asJsonObject.str("id") == item.str("id") }) next.add(item.deepCopy().apply { addProperty("paused", true) }) }
         state.add("messages", next)
         save()
+        if (mutationId != null) mutationIds[viewId] = mutationId
         return messages()
     }
 

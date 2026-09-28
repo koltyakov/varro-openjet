@@ -12,7 +12,7 @@ import kotlin.concurrent.withLock
 /** OpenCode metadata is authoritative; IDE storage remains the fallback for older sessions. */
 class SessionSelections(
     private val store: VarroStore,
-    private val publishAgent: (String, String) -> Unit = { _, _ -> },
+    private val publishAgent: (String, String?, String?) -> Unit = { _, _, _ -> },
     private val request: (String, String, JsonElement?, String?) -> JsonElement?,
 ) {
     private class SessionLock {
@@ -42,15 +42,15 @@ class SessionSelections(
         } finally { release(id) }
     }
 
-    private fun restore(id: String, metadata: JsonObject?) {
+    private fun restore(id: String, metadata: JsonObject?, selectionId: String? = null) {
         val varro = metadata.obj("varro")
         model(varro?.get("model"), "provider", "model")?.let {
             if (store.sessionSelectedModels.get(id) != it) store.updateSessionModel(id, it)
         }
         varro.text("agent")?.let { agent ->
-            if (store.sessionPlanAgents.str(id) != agent) {
+            if (store.sessionPlanAgents.str(id) != agent || selectionId != null) {
                 store.updateSessionAgent(id, agent)
-                publishAgent(id, agent)
+                publishAgent(id, agent, selectionId)
             }
         }
         varro.str("permissionMode")?.takeIf { it in MODES }?.let {
@@ -69,9 +69,16 @@ class SessionSelections(
         }
     }
 
-    fun updateAgent(id: String, agent: String, directory: String?) = write(id) {
+    fun updateAgent(id: String, agent: String, directory: String?, selectionId: String? = null) = write(id) {
         require(agent.isNotBlank()) { "Invalid session agent" }
-        update(id, Json.obj("agent" to agent), directory)
+        require(selectionId == null || selectionId.isNotEmpty() && selectionId.length <= 128) { "Invalid agent selection id" }
+        try {
+            update(id, Json.obj("agent" to agent), directory, selectionId = selectionId)
+        } catch (error: Exception) {
+            // Release the renderer's pending selection without confirming an unsaved agent.
+            if (selectionId != null) publishAgent(id, null, selectionId)
+            throw error
+        }
     }
 
     fun updateMode(id: String, body: JsonObject, directory: String?): JsonObject = write(id) {
@@ -83,7 +90,7 @@ class SessionSelections(
         update(id, Json.obj("permissionMode" to mode), directory, rules)
     }
 
-    private fun update(id: String, selection: JsonObject, directory: String?, rules: JsonArray? = null): JsonObject {
+    private fun update(id: String, selection: JsonObject, directory: String?, rules: JsonArray? = null, selectionId: String? = null): JsonObject {
         require(id.matches(Regex("[A-Za-z0-9_-]+"))) { "Invalid session id" }
         val path = "/session/$id"
         val session = request("GET", path, null, directory).asObjectOrNull()
@@ -100,7 +107,7 @@ class SessionSelections(
             request("PATCH", path, body, directory).asObjectOrNull()
                 ?: error("Could not save session selection metadata")
         } else session!!
-        restore(id, metadata)
+        restore(id, metadata, selectionId)
         return confirmed
     }
 

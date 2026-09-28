@@ -864,6 +864,7 @@ export type InitialWebviewState = {
   expandThinking?: boolean;
   showChangedFiles?: boolean;
   showTurnTimer?: boolean;
+  debugShowQuotaWarning?: boolean;
   enableProblemsContext?: boolean;
   desktopSessionPaneSide?: DesktopSessionPaneSide;
   defaultPermissionMode?: PermissionMode;
@@ -956,7 +957,10 @@ export type ExtensionMessage =
       payload: { requestId: number; status: 'opened' | 'unavailable' };
     }
   | { type: 'api/response'; payload: { id: number; data?: unknown; error?: string } }
-  | { type: 'queued-messages/sync'; payload: { messages: QueuedMessageSnapshot[] } }
+  | {
+      type: 'queued-messages/sync';
+      payload: { messages: QueuedMessageSnapshot[]; mutationId?: string };
+    }
   | {
       type: 'queued-messages/session-status';
       payload: { sessionId: string; status: 'busy' | 'idle' };
@@ -986,7 +990,12 @@ export type ExtensionMessage =
     }
   | {
       type: 'session-plan-state/update';
-      payload: { sessionId: string; skippedAt?: number | null; agent?: string };
+      payload: {
+        sessionId: string;
+        skippedAt?: number | null;
+        agent?: string;
+        selectionId?: string;
+      };
     }
   | { type: 'model-preferences/sync'; payload: ModelPreferences }
   | {
@@ -1061,7 +1070,12 @@ export type WebviewMessage =
     }
   | {
       type: 'session-plan-state/update';
-      payload: { sessionId: string; skippedAt?: number | null; agent?: string };
+      payload: {
+        sessionId: string;
+        skippedAt?: number | null;
+        agent?: string;
+        selectionId?: string;
+      };
     }
   | {
       type: 'session-unread-state/update';
@@ -1107,7 +1121,10 @@ export type WebviewMessage =
   | { type: 'composer/images-update'; payload: { images: ClipboardImageSnapshot[] } }
   | { type: 'files/remove'; payload: { path: string; sentSessionId?: string } }
   | { type: 'files/clear'; payload?: { sentSessionId: string } }
-  | { type: 'queued-messages/update'; payload: { messages: QueuedMessageSnapshot[] } }
+  | {
+      type: 'queued-messages/update';
+      payload: { messages: QueuedMessageSnapshot[]; mutationId?: string };
+    }
   | {
       type: 'queued-messages/claim';
       payload: {

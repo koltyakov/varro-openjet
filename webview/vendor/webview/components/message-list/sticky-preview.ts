@@ -59,8 +59,15 @@ export function getStickyUserMessagePreview(
   if (firstVisibleMessageIndex === null || firstVisibleMessageIndex < 0) return null;
   const firstVisibleEntry = messages[firstVisibleMessageIndex];
   if (!firstVisibleEntry) return null;
-  if (firstVisibleEntry.info.role === 'user') return null;
-  const parentUserMessageId = firstVisibleEntry.info.parentID;
+  if (
+    firstVisibleEntry.info.role === 'user' &&
+    !subagentSessionIds.has(firstVisibleEntry.info.sessionID) &&
+    getUserMessagePreviewText(firstVisibleEntry.parts) !== EMPTY_USER_MESSAGE_PREVIEW
+  ) {
+    return null;
+  }
+  const parentUserMessageId =
+    firstVisibleEntry.info.role === 'assistant' ? firstVisibleEntry.info.parentID : undefined;
   let fallback: StickyUserMessagePreview | null = null;
 
   for (let i = firstVisibleMessageIndex; i >= 0; i--) {
@@ -84,11 +91,13 @@ export function getStickyUserMessagePreview(
 }
 
 export function getUserMessageNavigationPreviews(
-  messages: MessageEntry[],
-  subagentSessionIds: ReadonlySet<string> = getSubagentSessionIds(messages)
+  messages: readonly MessageEntry[],
+  subagentSessionIds: ReadonlySet<string> = getSubagentSessionIds(messages),
+  indexOffset = 0
 ): StickyUserMessagePreview[] {
   const previews: StickyUserMessagePreview[] = [];
-  for (const [index, entry] of messages.entries()) {
+  for (const [position, entry] of messages.entries()) {
+    const index = indexOffset + position;
     if (entry.info.role !== 'user' || subagentSessionIds.has(entry.info.sessionID)) continue;
     const text = getUserMessagePreviewText(entry.parts);
     if (text === EMPTY_USER_MESSAGE_PREVIEW) continue;

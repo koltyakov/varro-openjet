@@ -17,8 +17,12 @@ class SessionSelectionsTest {
                 "workspaceScope" to "folder", "extensionData" to Json.obj("keep" to true))))
         val patches = mutableListOf<JsonObject>()
         val agents = mutableListOf<String>()
+        val acknowledgements = mutableListOf<Pair<String?, String>>()
         var failPatch = false
-        val selections: SessionSelections = SessionSelections(store, publishAgent = { _, agent -> agents.add(agent) }) { method, path, body, directory ->
+        val selections: SessionSelections = SessionSelections(store, publishAgent = { _, agent, selectionId ->
+            agent?.let(agents::add)
+            selectionId?.let { acknowledgements.add(agent to it) }
+        }) { method, path, body, directory ->
             assertEquals("/session/session", path)
             assertEquals("/repo", directory)
             if (method == "PATCH") {
@@ -56,7 +60,7 @@ class SessionSelectionsTest {
         second.updateSessionAgent("session", "build")
         second.updateSessionPermissionMode("session", Json.toElement("full"))
         val restoredAgents = mutableListOf<String>()
-        val reader = SessionSelections(second, publishAgent = { _, agent -> restoredAgents.add(agent) }) { _, _, _, _ ->
+        val reader = SessionSelections(second, publishAgent = { _, agent, _ -> agent?.let(restoredAgents::add) }) { _, _, _, _ ->
             error("Restoration must not write to OpenCode")
         }
         reader.observe(fixture.session)
@@ -94,6 +98,26 @@ class SessionSelectionsTest {
         assertEquals(JsonObject(), fixture.store.sessionPlanAgents)
         assertEquals(JsonObject(), fixture.store.sessionPermissionModes)
         assertTrue(fixture.agents.isEmpty())
+    }
+
+    @Test fun `agent selection acknowledgements settle repeated choices and failed writes`() {
+        val fixture = Fixture()
+        listOf("ask", "build", "ask", "build", "build").forEachIndexed { index, agent ->
+            fixture.selections.updateAgent("session", agent, "/repo", "selection-$index")
+        }
+        assertEquals(4, fixture.patches.size)
+        assertEquals(listOf("ask", "build", "ask", "build", "build").mapIndexed { index, agent ->
+            agent to "selection-$index"
+        }, fixture.acknowledgements)
+
+        fixture.failPatch = true
+        assertThrows(IllegalStateException::class.java) {
+            fixture.selections.updateAgent("session", "plan", "/repo", "failed-selection")
+        }
+        assertEquals(null to "failed-selection", fixture.acknowledgements.last())
+        assertEquals("build", fixture.store.sessionPlanAgents.str("session"))
+        assertFalse(fixture.agents.contains("plan"))
+        assertFalse(fixture.session.obj("metadata").obj("varro")!!.has("selectionId"))
     }
 
     @Test fun `mode writes save rules and metadata together while preconfigured modes only save metadata`() {
