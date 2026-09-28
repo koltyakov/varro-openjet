@@ -21,6 +21,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: Test Docker build cleanup
+        run: python3 scripts/test-build.py
+
       - name: Set up JDK 21
         uses: actions/setup-java@v6
         with:

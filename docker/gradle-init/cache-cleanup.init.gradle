@@ -1,0 +1,13 @@
+import org.gradle.api.cache.Cleanup
+
+// Applied only to the Docker build's Gradle home, including existing cache volumes.
+beforeSettings { settings ->
+    settings.caches {
+        cleanup = Cleanup.ALWAYS
+        releasedWrappers.removeUnusedEntriesAfterDays = 14
+        snapshotWrappers.removeUnusedEntriesAfterDays = 7
+        downloadedResources.removeUnusedEntriesAfterDays = 14
+        createdResources.removeUnusedEntriesAfterDays = 7
+        buildCache.removeUnusedEntriesAfterDays = 7
+    }
+}

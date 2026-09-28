@@ -21,6 +21,7 @@ x-common: &common
   image: varro-openjet-build
   volumes:
     - gradle-cache:/home/builder/.gradle
+    - ./docker/gradle-init:/home/builder/.gradle/init.d:ro
     - npm-cache:/home/builder/.npm
   environment:
     GRADLE_OPTS: --enable-native-access=ALL-UNNAMED -Dorg.gradle.daemon=false -Dorg.gradle.welcome=never
@@ -32,6 +33,7 @@ services:
     <<: *common
     volumes:
       - gradle-cache:/home/builder/.gradle
+      - ./docker/gradle-init:/home/builder/.gradle/init.d:ro
       - npm-cache:/home/builder/.npm
       - ./dist:/out
     command: >
@@ -44,6 +46,7 @@ services:
     <<: *common
     volumes:
       - gradle-cache:/home/builder/.gradle
+      - ./docker/gradle-init:/home/builder/.gradle/init.d:ro
       - npm-cache:/home/builder/.npm
       - .:/workspace
       - ./dist:/out
@@ -56,6 +59,7 @@ services:
     <<: *common
     volumes:
       - gradle-cache:/home/builder/.gradle
+      - ./docker/gradle-init:/home/builder/.gradle/init.d:ro
       - npm-cache:/home/builder/.npm
       - .:/workspace
       - ./dist:/out
@@ -68,6 +72,7 @@ services:
     <<: *common
     volumes:
       - gradle-cache:/home/builder/.gradle
+      - ./docker/gradle-init:/home/builder/.gradle/init.d:ro
       - npm-cache:/home/builder/.npm
       - .:/workspace
     command: bash -lc "./gradlew --no-daemon test"

@@ -149,9 +149,12 @@ Docker provides the JDK, Gradle, and Node toolchain:
 ./scripts/build.sh clean    # clean build inside the image
 ./scripts/build.sh verify   # Kotlin and webview host tests
 ./scripts/build.sh shell    # open a shell in the build container
+./scripts/build.sh prune    # trim OpenJet's Docker image/build cache
 ```
 
 The plugin ZIP is written to `dist/varro-openjet-<version>.zip`. The first build downloads the IntelliJ Platform, which is over a gigabyte. Later builds reuse the Docker volume cache.
+
+Docker Buildx is required. Image builds use a dedicated `varro-openjet` builder with a 4 GB build-cache target. The script trims that cache and removes dangling OpenJet images before and after builds, including failures. Gradle checks its cache after every container build, removing unused downloads and released wrappers after 14 days, and generated cache entries after 7 days. Active dependencies remain cached. These limits apply to cache retention, not peak disk usage during a build.
 
 ### Local build
 

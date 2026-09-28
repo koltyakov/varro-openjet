@@ -104,13 +104,25 @@ full even when the host has free space. Check it with:
 docker run --rm --entrypoint sh varro-openjet-build -c 'df -h /; df -i /'
 ```
 
-Increase Docker Desktop's disk allocation or remove unused images and build cache
-through Docker Desktop. Keep the project's `gradle-cache` and `npm-cache` volumes
-to avoid downloading dependencies again. Then retry `./scripts/build.sh clean`.
+`./scripts/build.sh` automatically removes dangling OpenJet images and trims its
+dedicated `varro-openjet` builder cache to a 4 GB target before and after builds.
+You can run this maintenance separately with `./scripts/build.sh prune`.
+The builder also runs garbage collection and tries to leave 10 GB free, while
+retaining at least 1 GB of build cache. In-use cache entries can exceed these targets.
+
+Gradle checks its Docker cache after every build. Unused downloads and released
+wrappers expire after 14 days; generated resources, build-cache entries and snapshot
+wrappers expire after 7 days. The `gradle-cache` and `npm-cache` volumes remain in
+place for incremental builds. These settings do not change the host's Gradle cache.
 
 Plugin compilation runs at container startup so it can use those cache volumes.
 Older build images also contain a full Gradle cache and extracted IntelliJ platform;
-removing unused older images can recover that duplicated space.
+removing unused older images can recover that duplicated space. Builds made before
+the dedicated builder was introduced may still have layers in Docker's shared builder
+cache. Review and remove those old cache entries through Docker Desktop once; the
+project's automatic cleanup only manages its dedicated builder. If other Docker data
+still fills the disk, free that space or increase Docker Desktop's disk allocation,
+then retry `./scripts/build.sh`.
 
 ## Logs and bug reports
 

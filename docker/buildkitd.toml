@@ -1,0 +1,10 @@
+# This builder is used only by OpenJet. Dependency caches live in Compose volumes.
+[worker.oci]
+  gc = true
+  reservedSpace = "1GB"
+  maxUsedSpace = "4GB"
+  minFreeSpace = "10GB"
+
+[history]
+  maxAge = 604800
+  maxEntries = 10
