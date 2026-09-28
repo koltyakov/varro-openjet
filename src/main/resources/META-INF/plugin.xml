@@ -52,6 +52,10 @@
     ]]></description>
 
     <change-notes><![CDATA[
+        <h3>0.4.3</h3>
+        <p>Synced Varro 0.30.9 through 7285642a0a62. Fixed prompt numbering to skip empty and
+            automatic-only messages. Excluded session-resume messages from sticky previews and
+            prompt navigation.</p>
         <h3>0.4.2</h3>
         <p>Synced Varro 0.30.8 through d5cd23b52f6b. Improved long-chat rendering, scrolling,
             composer resizing, retry display and file-change tracking. Added provider quota warnings.
