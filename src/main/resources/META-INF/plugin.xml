@@ -52,6 +52,10 @@
     ]]></description>
 
     <change-notes><![CDATA[
+        <h3>0.4.4</h3>
+        <p>Synced Varro 0.30.10 through 3eac33c2c14b. Added warnings when available provider reset
+            credits expire within five days, with saved dismissals. Quota warnings now show the number
+            of available resets and alternate with expiration warnings when both apply.</p>
         <h3>0.4.3</h3>
         <p>Synced Varro 0.30.9 through 7285642a0a62. Fixed prompt numbering to skip empty and
             automatic-only messages. Excluded session-resume messages from sticky previews and
