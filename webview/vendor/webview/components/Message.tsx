@@ -8,7 +8,7 @@ import {
   untrack,
 } from 'solid-js';
 import {
-  formatProviderErrorDetails,
+  getProviderErrorDetailRows,
   formatProviderErrorMessage,
   friendlyErrorName,
   isAbortedAssistantError,
@@ -120,13 +120,17 @@ export function Message(props: {
   info: MessageType;
   parts: Part[];
   promptNumber?: number;
+  promptContinuation?: boolean;
   showPromptNumber?: boolean;
   showSentTimestamp?: boolean;
   userMessageSeriesEndId?: string;
   suppressTimestampAnimation?: boolean;
   onUserMessageHoverChange?: (messageId: string, hovering: boolean) => void;
+  onTurnHoverChange?: (messageId: string, hovering: boolean) => void;
+  onResponseHoverChange?: (messageId: string, hovering: boolean) => void;
   onAssistantDiffSettledEmpty?: (messageId: string) => void;
   isLastAssistant?: boolean;
+  hideErrorAction?: boolean;
   retryState?: AssistantRetryState;
   nearViewport?: boolean;
   outerListVirtualized?: boolean;
@@ -208,6 +212,8 @@ export function Message(props: {
     !!props.showSentTimestamp ||
     (isUserMessageHoverActive() && hoverTimestampMessageId() === props.info.id);
   const notifyUserMessageHoverChange = (hovering: boolean) => {
+    if (isUser()) props.onTurnHoverChange?.(props.info.id, hovering);
+    else props.onResponseHoverChange?.(props.info.id, hovering);
     if (hoverIntentTimer) {
       clearTimeout(hoverIntentTimer);
       hoverIntentTimer = undefined;
@@ -248,6 +254,8 @@ export function Message(props: {
     if (hoverIntentTimer) clearTimeout(hoverIntentTimer);
     if (timestampTransitionTimer) clearTimeout(timestampTransitionTimer);
     if (hoveredUserMessageId) onUserMessageHoverChange?.(hoveredUserMessageId, false);
+    if (isUser()) props.onTurnHoverChange?.(props.info.id, false);
+    else props.onResponseHoverChange?.(props.info.id, false);
   });
   const sentTimestamp = createMemo(() => formatMessageSentTime(props.info.time.created));
   const assistant = () => (isAssistantMessage(props.info) ? props.info : null);
@@ -316,11 +324,6 @@ export function Message(props: {
       return 'You are signed out of this provider. Re-authenticate to continue.';
     }
     const message = error?.data?.message?.trim();
-    const info = assistant();
-    const providerMessage = formatProviderErrorMessage(error, {
-      providerID: info?.providerID,
-    });
-    if (providerMessage) return providerMessage;
     if (message) return message;
     return friendlyErrorName(error?.name);
   });
@@ -332,23 +335,42 @@ export function Message(props: {
     )
       return null;
     const info = assistant();
-    return formatProviderErrorDetails(info?.error, {
+    const providerMessage = formatProviderErrorMessage(info?.error, {
+      providerID: info?.providerID,
+    });
+    const rows = getProviderErrorDetailRows(info?.error, {
       providerID: info?.providerID,
       modelID: info?.modelID,
     });
+    return rows.length ? { summary: providerMessage, rows } : null;
+  });
+  const assistantRetryAt = createMemo(() => {
+    if (
+      props.hideErrorAction ||
+      !props.isLastAssistant ||
+      !assistant()?.error ||
+      providerAuthRequired()
+    )
+      return undefined;
+    const status = state.sessionStatus[props.info.sessionID];
+    return status?.type === 'retry' ? status.next : undefined;
   });
   const canRetryAssistant = createMemo(() => {
     const error = assistant()?.error;
     return (
       !!error &&
-      !props.retryState &&
+      (!props.retryState ||
+        (props.retryState === 'retrying' && assistantRetryAt() !== undefined)) &&
       !isAbortedAssistantError(error) &&
       !(providerAuthRequired() && providerAuthRestored())
     );
   });
   const assistantErrorAction = createMemo(() => {
-    if (!(props.isLastAssistant ?? false) || !canRetryAssistant()) return undefined;
+    if (props.hideErrorAction || !(props.isLastAssistant ?? false) || !canRetryAssistant())
+      return undefined;
     if (providerAuthRequired() && !providerAuthRestored()) {
+      const selectedProviderID = state.selectedModel?.providerID;
+      if (selectedProviderID && selectedProviderID !== providerAuthProviderID()) return undefined;
       return {
         label: 'Re-authenticate',
         run: () => requestProviderConnection(providerAuthProviderID()!),
@@ -616,7 +638,7 @@ export function Message(props: {
             <div
               class={`value chat-turn-content ${
                 isUser()
-                  ? `chat-turn-card user-message-card${isWrapperlessUserMessage() ? ' user-message-card-wrapperless' : ''}`
+                  ? `chat-turn-card user-message-card${props.promptContinuation ? ' user-message-continuation' : ''}${isWrapperlessUserMessage() ? ' user-message-card-wrapperless' : ''}`
                   : assistantContainerClass()
               } ${isSubagent() ? 'chat-turn-subagent' : ''} ${canEditUserMessage() && !isEditingUserMessage() ? 'user-message-card-editable' : ''}`}
               onClick={handleUserCardClick}
@@ -651,6 +673,7 @@ export function Message(props: {
                     !!props.retryState || (providerAuthRequired() && providerAuthRestored())
                   }
                   errorAction={assistantErrorAction()}
+                  errorRetryAt={assistantRetryAt()}
                   highlightFinalAnswer={props.highlightFinalAnswer}
                   highlightPlanningAnswer={props.highlightPlanningAnswer}
                   suppressHighlightedCardMetaParts={!!props.highlightFinalAnswer}

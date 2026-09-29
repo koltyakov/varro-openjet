@@ -73,6 +73,7 @@ import {
   resetMessageWindowState,
   setCachedSessionMessages,
   setSessionHistoryPrompts,
+  getSessionHistoryPromptEntries,
   setSessionHistoryPromptCursor,
   setSessionHistoryCursor,
   takeCachedSessionHistoryPage,
@@ -841,11 +842,16 @@ function loadOlderSessionPrompts(
       cacheSessionHistoryPage(sessionId, cursor, page);
       const nextCursor = advanceSessionHistoryPromptCursor(sessionId, cursor, page.nextCursor);
       const prompts = page.filter((entry) => entry.info.role === 'user');
+      setSessionHistoryPrompts(
+        sessionId,
+        mergeOlderHistory(
+          getSessionHistoryPromptEntries(sessionId),
+          page.map((entry) =>
+            entry.info.role === 'user' ? entry : { info: entry.info, parts: [] }
+          )
+        )
+      );
       if (prompts.length > 0) {
-        setSessionHistoryPrompts(
-          sessionId,
-          mergeOlderHistory(getSessionHistoryPrompts(sessionId), prompts)
-        );
         const loadedMessageIds = new Set([
           ...knownLoadedMessageIds,
           ...appStore.state.messages
@@ -2271,8 +2277,8 @@ export function createOpenCodeRuntime(): OpenCodeRuntime {
     recheckSessionStatus,
   });
 
-  async function continueInterruptedSession(sessionId: string) {
-    await connectionBootstrapOperations.continueInterruptedSession(sessionId);
+  async function continueInterruptedSession(sessionId: string, options?: { messageID: string }) {
+    await connectionBootstrapOperations.continueInterruptedSession(sessionId, options);
   }
 
   const sessionSendOperations = new SessionSendOperations({

@@ -272,6 +272,11 @@ export function VirtualizedContent(
         modelChangeMap={props.modelChangeMap}
         sessionPauseMap={props.sessionPauseMap}
         promptNumberMap={props.promptNumberMap}
+        promptGroupFirstMessageIds={props.promptGroupFirstMessageIds}
+        messagePromptGroupIds={props.messagePromptGroupIds}
+        hoveredTurnId={props.hoveredTurnId}
+        onTurnHoverChange={props.onTurnHoverChange}
+        onResponseHoverChange={props.onResponseHoverChange}
         showPromptNumbers={props.showPromptNumbers}
         showSentTimestamps={props.showSentTimestamps}
         revealedSentTimestampMessageId={props.revealedSentTimestampMessageId}
@@ -279,6 +284,7 @@ export function VirtualizedContent(
         showWorkedSummaryTimes={props.showWorkedSummaryTimes}
         suppressTimestampAnimations={props.suppressTimestampAnimations}
         lastAssistantID={props.lastAssistantID}
+        errorActionMessageID={props.errorActionMessageID}
         assistantRetryStates={props.assistantRetryStates}
         previousTrailingFileEventSignatureMap={props.previousTrailingFileEventSignatureMap}
         assistantDialogSummaryMap={props.assistantDialogSummaryMap}
