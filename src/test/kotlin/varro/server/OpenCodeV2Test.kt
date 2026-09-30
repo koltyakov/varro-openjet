@@ -202,6 +202,24 @@ class OpenCodeV2Test {
         assertEquals("data:image/png;base64,eA==", payload.arr("files")!![0].asJsonObject.str("uri"))
     }
 
+    @Test fun `explicit prompt delivery survives transcript reload`() {
+        for (delivery in listOf(null, "steer", "queue", "invalid")) {
+            var admitted: JsonObject? = null
+            val native = adapter { _, path, body ->
+                if (path.endsWith("/prompt")) admitted = body.asObjectOrNull()
+                if (path == "/api/session/ses_test") Json.obj("data" to Json.obj("id" to "ses_test")) else null
+            }
+            native.request("POST", "/session/ses_test/prompt_async", Json.obj("messageID" to "msg_sent",
+                "delivery" to delivery, "parts" to listOf(Json.obj("type" to "text", "text" to "Continue"))), RequestOptions())
+            val expected = delivery?.takeIf { it == "steer" || it == "queue" }
+            assertEquals(expected, admitted.obj("metadata").str("varroDelivery"))
+            val restored = OpenCodeV2Projection.message(Json.obj("id" to "msg_sent", "type" to "user",
+                "text" to "Continue", "metadata" to admitted?.get("metadata")), "ses_test", "/project").obj("info")
+            assertEquals(expected, restored.str("delivery"))
+            assertFalse(restored.hasNonNull("pendingDelivery"))
+        }
+    }
+
     @Test fun `metadata and archive times survive adapter recreation without server patches`() {
         val root = temporary.newFolder().toPath()
         val value = Json.obj("id" to "ses_test", "title" to "test", "location" to Json.obj("directory" to "/project"), "time" to Json.obj("created" to 1, "updated" to 2))

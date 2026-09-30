@@ -52,6 +52,15 @@
     ]]></description>
 
     <change-notes><![CDATA[
+        <h3>0.5.0</h3>
+        <p>Synced Varro 0.30.15 through ff2bebfc1ecd. Added image compression options in the composer
+            with size previews and an action to restore the original. Steering messages now have distinct
+            styling and turn labels, retain their delivery mode after reload, and cannot be edited after
+            sending. Fixed turn timers during steering and retries. Skipped plans now show a notice with
+            actions to reopen or implement them. Improved prompt navigation and composer history.
+            Added &quot;Mark all as read&quot; for filtered lists of completed, plan-ready, and failed sessions.
+            Fixed bottom-follow scrolling when toggling inline file diffs, while preserving the scroll
+            position when reading earlier messages.</p>
         <h3>0.4.5</h3>
         <p>Synced Varro 0.30.11 through 074cacb09ddd. Added paged turn navigation with hover previews
             and grouped consecutive prompts under one turn number. Improved provider-error details

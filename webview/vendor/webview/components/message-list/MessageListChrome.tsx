@@ -87,8 +87,9 @@ function bindStickyTextOverflowFade(
 export function StickyUserMessagePreviewCard(props: {
   preview: StickyUserMessagePreview;
   parts?: Part[];
-  promptNumber?: number;
+  promptNumber?: number | string;
   promptContinuation?: boolean;
+  steering?: boolean;
   sentAt?: number;
   showSentTimestamp?: boolean;
   suppressTimestampAnimation?: boolean;
@@ -149,7 +150,7 @@ export function StickyUserMessagePreviewCard(props: {
             )}
           </Show>
           <div
-            class={`latest-user-message-sticky${isClickable() ? ' latest-user-message-sticky-clickable' : ''}${props.loading ? ' is-loading' : ''}`}
+            class={`latest-user-message-sticky${props.steering ? ' user-message-steering' : ''}${isClickable() ? ' latest-user-message-sticky-clickable' : ''}${props.loading ? ' is-loading' : ''}`}
             title={props.loading ? 'Loading message' : undefined}
             onMouseEnter={() => notifyUserMessageHoverChange(true)}
             onMouseLeave={() => notifyUserMessageHoverChange(false)}
@@ -289,15 +290,31 @@ export function TurnNavigationRail(props: {
       element.removeEventListener('wheel', handleWheel);
     });
   });
+  // Preview refreshes and equivalent visibility sets must not undo manual paging.
+  const viewportTurns = createMemo(
+    () => {
+      const activeIndex = props.turns.findIndex((turn) => turn.id === props.activeTurnId);
+      const visibleIndexes = props.turns.flatMap((turn, index) =>
+        props.visibleTurnIds?.has(turn.id) ? [index] : []
+      );
+      return {
+        count: props.turns.length,
+        size: capacity(),
+        firstVisible: visibleIndexes[0] ?? activeIndex,
+        lastVisible: visibleIndexes.at(-1) ?? activeIndex,
+      };
+    },
+    { count: 0, size: 0, firstVisible: -1, lastVisible: -1 },
+    {
+      equals: (previous, next) =>
+        previous.count === next.count &&
+        previous.size === next.size &&
+        previous.firstVisible === next.firstVisible &&
+        previous.lastVisible === next.lastVisible,
+    }
+  );
   createEffect(() => {
-    const count = props.turns.length;
-    const size = capacity();
-    const activeIndex = props.turns.findIndex((turn) => turn.id === props.activeTurnId);
-    const visibleIndexes = props.turns.flatMap((turn, index) =>
-      props.visibleTurnIds?.has(turn.id) ? [index] : []
-    );
-    const firstVisible = visibleIndexes[0] ?? activeIndex;
-    const lastVisible = visibleIndexes.at(-1) ?? activeIndex;
+    const { count, size, firstVisible, lastVisible } = viewportTurns();
     setStart((previous) => {
       const bounded = Math.min(previous, Math.max(0, count - size));
       if (firstVisible < 0 || (firstVisible >= bounded && lastVisible < bounded + size))

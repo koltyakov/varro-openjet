@@ -886,6 +886,20 @@ input:focus-visible {
   border: 1px solid color-mix(in srgb, var(--color-vscode-request-border) 45%, transparent);
 }
 
+.user-message-steering {
+  --color-vscode-request-bubble: color-mix(
+    in srgb,
+    var(--color-vscode-fg) 5%,
+    var(--color-vscode-widget-bg)
+  );
+  --color-vscode-request-bubble-hover: color-mix(
+    in srgb,
+    var(--color-vscode-fg) 8%,
+    var(--color-vscode-widget-bg)
+  );
+  --color-vscode-request-border: var(--color-vscode-border);
+}
+
 .user-message-card.user-message-card-wrapperless {
   padding: 0;
   border-color: transparent;
@@ -895,6 +909,22 @@ input:focus-visible {
 
 .user-message-card.user-message-card-wrapperless.user-message-card-editable:hover {
   border-color: transparent;
+}
+
+.user-message-card.plan-implementation-action {
+  align-self: flex-start;
+  max-width: 100%;
+  border: 0;
+  border-radius: 0;
+  color: var(--color-vscode-muted);
+  font-size: 12px;
+  line-height: 20px;
+}
+
+.plan-implementation-action-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .user-message-card-editable {

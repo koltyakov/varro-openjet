@@ -286,6 +286,9 @@ internal class OpenCodeV2Adapter(
                     "files" to parts.filter { it.str("type") == "file" }.map { Json.obj("uri" to it.get("url"), "name" to it.get("filename")) },
                     "agents" to parts.filter { it.str("type") == "agent" }.map { Json.obj("name" to it.get("name")) },
                     "delivery" to if (input.str("delivery") == "queue") "queue" else "steer")
+                input.str("delivery")?.takeIf { it == "steer" || it == "queue" }?.let {
+                    payload.add("metadata", Json.obj("varroDelivery" to it))
+                }
                 if (input.bool("noReply") == true) payload.addProperty("resume", false)
                 if (action == "command") payload.add("name", input.get("command"))
                 val admitted = raw("POST", "$endpoint/${if (action == "command") "command" else "prompt"}", payload)

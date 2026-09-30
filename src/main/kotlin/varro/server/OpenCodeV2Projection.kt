@@ -176,6 +176,9 @@ internal object OpenCodeV2Projection {
         } else {
             info.add("model", Json.obj("providerID" to model.str("providerID").orEmpty(), "modelID" to model.str("id").orEmpty(), "variant" to model?.get("variant")))
             if (type == "user") {
+                value.obj("metadata").str("varroDelivery")?.takeIf { it == "steer" || it == "queue" }?.let {
+                    info.addProperty("delivery", it)
+                }
                 parts.add(part(0, "text", Json.obj("text" to value.str("text").orEmpty())))
                 value.arr("files").orEmpty().forEach { entry ->
                     val file = entry.asObjectOrNull()

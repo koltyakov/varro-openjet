@@ -79,6 +79,8 @@ import {
   type SessionProgress,
 } from '../lib/session-pauses';
 import { isSessionResumeMessage, readSessionPauses } from '../../shared/session-pauses';
+import { collectSteeringMessages } from '../lib/message-steering';
+import type { SteeringMessages } from '../lib/message-steering';
 import type { AssistantMessage, MessageEntry, Part } from '../types';
 import {
   hasUserMessageContent,
@@ -344,27 +346,42 @@ export function getPromptNumberMap(messages: readonly MessageEntry[]) {
   return numberPrompts(messages).numbers;
 }
 
-/** Carry the open user group across history segment boundaries. */
-function numberPrompts(
-  messages: readonly MessageEntry[],
-  previous?: { lastNumber: number; openGroup: boolean }
-) {
+type PromptNumbers = {
+  numbers: Map<string, number>;
+  labels: Map<string, string>;
+  lastNumber: number;
+  turnsBySessionId: Map<string, { number: number; steeringCount: number }>;
+  steering: SteeringMessages;
+};
+
+/** Carry turn identities and steering ordinals across history segment boundaries. */
+function numberPrompts(messages: readonly MessageEntry[], previous?: PromptNumbers): PromptNumbers {
   const numbers = new Map<string, number>();
+  const labels = new Map<string, string>();
   let promptNumber = previous?.lastNumber ?? 0;
-  let openGroup = previous?.openGroup ?? false;
+  const turnsBySessionId = new Map(previous?.turnsBySessionId);
+  const steering = collectSteeringMessages(messages, previous?.steering);
   for (const message of messages) {
-    if (message.info.role !== 'user') {
-      openGroup = false;
-      continue;
-    }
+    if (message.info.role !== 'user' || message.info.pendingDelivery) continue;
     if (isSessionResumeMessage(message.parts)) continue;
     const parsed = parseUserMessageContent(message.parts);
     if (!hasUserMessageContent(parsed)) continue;
-    if (!openGroup) promptNumber += 1;
-    openGroup = true;
+    if (steering.ids.has(message.info.id)) {
+      const turn = turnsBySessionId.get(message.info.sessionID);
+      // A partial page cannot invent a new turn for steering whose root is not loaded yet.
+      if (!turn) continue;
+      const steeringCount = turn.steeringCount + 1;
+      turnsBySessionId.set(message.info.sessionID, { ...turn, steeringCount });
+      numbers.set(message.info.id, turn.number);
+      labels.set(message.info.id, `${turn.number}.${steeringCount}`);
+      continue;
+    }
+    promptNumber += 1;
+    turnsBySessionId.set(message.info.sessionID, { number: promptNumber, steeringCount: 0 });
     numbers.set(message.info.id, promptNumber);
+    labels.set(message.info.id, String(promptNumber));
   }
-  return { numbers, lastNumber: promptNumber, openGroup };
+  return { numbers, labels, lastNumber: promptNumber, turnsBySessionId, steering };
 }
 
 export function getActiveTurnMessageId(
@@ -1171,18 +1188,31 @@ export function MessageList() {
   const historyPromptNumbers = chainHistorySegments<ReturnType<typeof numberPrompts>>(
     (segment, previous) => createMemo(() => numberPrompts(segment.entries(), previous?.()))
   );
-  const promptNumberMap = createMemo(() => {
+  const promptNumbers = createMemo(() => {
     const olderPrompts = olderPromptsOutsideTranscript();
-    if (olderPrompts) return getPromptNumberMap(mergeOlderHistory(messages(), olderPrompts));
-    const history = historyPromptNumbers.map((numbers) => numbers());
-    return [
-      ...history.map(({ numbers }) => numbers),
-      numberPrompts(tailMessages(), history.at(-1)).numbers,
-    ].reduce<Map<string, number>>(
-      (merged, numbers) => mergeSegmentMaps(merged, numbers),
-      new Map()
-    );
+    const history = olderPrompts ? [] : historyPromptNumbers.map((numbers) => numbers());
+    const segments = olderPrompts
+      ? [numberPrompts(mergeOlderHistory(messages(), olderPrompts))]
+      : [...history, numberPrompts(tailMessages(), history.at(-1))];
+    return {
+      numbers: segments.reduce(
+        (merged, segment) => mergeSegmentMaps(merged, segment.numbers),
+        new Map<string, number>()
+      ),
+      labels: segments.reduce(
+        (merged, segment) => mergeSegmentMaps(merged, segment.labels),
+        new Map<string, string>()
+      ),
+      steeringIds: new Set(segments.flatMap((segment) => [...segment.steering.ids])),
+    };
   });
+  const promptNumberMap = createMemo(() => promptNumbers().numbers);
+  const promptNumberLabels = createMemo(() => promptNumbers().labels);
+  const steeringMessageIds = createMemo<ReadonlySet<string>>(
+    () => promptNumbers().steeringIds,
+    new Set(),
+    { equals: sameKeys }
+  );
   const promptGroupFirstMessageIds = createMemo(() => {
     const firstIds = new Map<number, string>();
     const groups = new Map<string, string>();
@@ -1871,6 +1901,7 @@ export function MessageList() {
   );
   let previousInlinePreviewLayoutSignatures = new Map<string, string>();
   let previousCompactActivityLayoutSignatures = new Map<string, string>();
+  let inlinePreviewBottomFollow: { sessionId: string; inputEpoch: number } | null = null;
   // Bootstrap exact heights once, then keep virtualization active as new rows arrive. Newly added
   // rows use provisional heights until mounted instead of remounting the full transcript.
   const shouldMeasureRows = createMemo(() => messages().length >= VIRTUALIZE_THRESHOLD);
@@ -2056,6 +2087,70 @@ export function MessageList() {
     scheduleChangedLayoutRowMeasurements(previousInlinePreviewLayoutSignatures, current);
 
     previousInlinePreviewLayoutSignatures = new Map(current);
+  });
+
+  createEffect((previous: boolean | undefined) => {
+    const enabled = showFileDiffs();
+    if (previous === undefined || previous === enabled) return enabled;
+    untrack(() => {
+      const sessionId = state.activeSessionId;
+      if (
+        !sessionId ||
+        !autoScroll() ||
+        editingMessage() ||
+        diffFocusPauseActive ||
+        stickyNavigationOwnsScroll() ||
+        pointerScrollOwnershipActive
+      )
+        return;
+
+      const owner = { sessionId, inputEpoch: directScrollInputEpoch };
+      inlinePreviewBottomFollow = owner;
+      let frameId = 0;
+      let attempts = 0;
+      let stableFrames = 0;
+      let previousHeight = -1;
+      const settle = () => {
+        frameId = 0;
+        if (
+          disposed ||
+          inlinePreviewBottomFollow !== owner ||
+          state.activeSessionId !== sessionId ||
+          directScrollInputEpoch !== owner.inputEpoch ||
+          !autoScroll() ||
+          editingMessage() ||
+          diffFocusPauseActive ||
+          stickyNavigationOwnsScroll() ||
+          pointerScrollOwnershipActive
+        ) {
+          if (inlinePreviewBottomFollow === owner) inlinePreviewBottomFollow = null;
+          return;
+        }
+        // View replacement should use its new physical bottom, not retain disappearing content.
+        clearActivityExitReserve();
+        appendBottomReserveTarget = 0;
+        setAppendBottomReserve(0);
+        performScroll({ force: true, immediate: true });
+        const height = containerRef?.scrollHeight ?? 0;
+        stableFrames =
+          height === previousHeight && distanceFromBottom() <= 1 ? stableFrames + 1 : 0;
+        previousHeight = height;
+        attempts += 1;
+        if (stableFrames >= 2 || attempts >= 12) {
+          inlinePreviewBottomFollow = null;
+          startFollowLoop(sessionId);
+          return;
+        }
+        frameId = requestAnimationFrame(settle);
+      };
+      // Let the preference's DOM replacement and row measurements finish before positioning.
+      queueMicrotask(settle);
+      onCleanup(() => {
+        if (frameId) cancelAnimationFrame(frameId);
+        if (inlinePreviewBottomFollow === owner) inlinePreviewBottomFollow = null;
+      });
+    });
+    return enabled;
   });
 
   function invalidateChangedZeroHeightRows(
@@ -4832,6 +4927,10 @@ export function MessageList() {
     // and browser clamp corrections still synchronize immediately.
     const smooth =
       !options?.immediate &&
+      !(
+        inlinePreviewBottomFollow?.sessionId === state.activeSessionId &&
+        inlinePreviewBottomFollow?.inputEpoch === directScrollInputEpoch
+      ) &&
       bottomScrollTop() > lastAutoScrolledBottomScrollTop + 1 &&
       !userScrollRecentlyActive() &&
       !reducedMotion() &&
@@ -5127,11 +5226,26 @@ export function MessageList() {
         return;
       }
 
+      const currentReserve = untrack(appendBottomReserve);
+      if (
+        containerRef.scrollTop <= 0.5 &&
+        containerRef.scrollHeight - currentReserve <= containerRef.clientHeight
+      ) {
+        // A first turn that fits needs no synthetic scroll destination. Track min-height
+        // hides a small reserve, so an unreachable alignment target would accumulate on
+        // later reconciliations until empty space creates overflow.
+        appendBottomReserveTarget = 0;
+        if (currentReserve > 0.5) setAppendBottomReserve(0);
+        pendingNewTurnMessageId = null;
+        performScroll({ force: true, immediate: true });
+        startFollowLoop(sessionId);
+        return;
+      }
+
       const containerRect = containerRef.getBoundingClientRect();
       const offset =
         card.getBoundingClientRect().top - containerRect.top - getMessageJumpTopInset();
       const targetScrollTop = Math.max(0, containerRef.scrollTop + offset);
-      const currentReserve = untrack(appendBottomReserve);
       const unreservedBottom = Math.max(
         0,
         containerRef.scrollHeight - currentReserve - containerRef.clientHeight
@@ -9229,6 +9343,7 @@ export function MessageList() {
             {(preview) => (
               <StickyUserMessagePreviewCard
                 preview={preview()}
+                steering={steeringMessageIds().has(preview().id)}
                 parts={messages()[messageIndexById().get(preview().id) ?? -1]?.parts}
                 sentAt={messages()[messageIndexById().get(preview().id) ?? -1]?.info.time.created}
                 showSentTimestamp={
@@ -9236,7 +9351,7 @@ export function MessageList() {
                 }
                 suppressTimestampAnimation={suppressTimestampAnimations()}
                 promptNumber={
-                  promptNumbersVisible() ? promptNumberMap().get(preview().id) : undefined
+                  promptNumbersVisible() ? promptNumberLabels().get(preview().id) : undefined
                 }
                 promptContinuation={promptGroupFirstMessageIds().get(preview().id) !== preview().id}
                 loading={pendingStickyJump()?.preview.id === preview().id}
@@ -9315,6 +9430,8 @@ export function MessageList() {
               modelChangeMap={modelChangeMap()}
               sessionPauseMap={rowSessionPauseMap()}
               promptNumberMap={promptNumberMap()}
+              promptNumberLabels={promptNumberLabels()}
+              steeringMessageIds={steeringMessageIds()}
               promptGroupFirstMessageIds={promptGroupFirstMessageIds()}
               messagePromptGroupIds={messagePromptGroupIds()}
               hoveredTurnId={hoveredTurnId()}
