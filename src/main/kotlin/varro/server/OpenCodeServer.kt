@@ -59,6 +59,10 @@ class OpenCodeServer(
     private val disposeGeneration = AtomicInteger(0)
     private val startInFlight = AtomicBoolean(false)
     private val serverVersion = AtomicReference<String?>(null)
+    private var versionInfo: OpenCodeVersionInfo? = null
+    private val versionInfoEpoch = AtomicInteger(0)
+    private var versionInfoGeneration = -1
+    private var versionInfoCheckedAt = 0L
     internal var authentication = OpenCodeServerAuthentication()
     @Volatile var hasHostWork: () -> Boolean = { false }
     private val maintenance = IdleMaintenance(
@@ -95,6 +99,34 @@ class OpenCodeServer(
     fun currentStatus(): ServerStatus = status.get()
 
     fun version(): String? = serverVersion.get()
+
+    /** Called off the EDT. Inspect at most once a minute, without probing or starting the server. */
+    @Synchronized fun readVersionInfo(): OpenCodeVersionInfo? {
+        if (status.get() !is ServerStatus.Running) {
+            versionInfo = null
+            return null
+        }
+        val generation = versionInfoEpoch.get()
+        val endpoint = url()
+        val attached = isAttachOnly()
+        val now = System.currentTimeMillis()
+        val cached = versionInfo
+        if (cached != null && versionInfoGeneration == generation && cached.url == endpoint &&
+            cached.attachOnly == attached && cached.serverVersion == version() && now - versionInfoCheckedAt < 60_000
+        ) return cached
+
+        val installed = if (attached) null else cli.readInstalledVersion(refresh = true)
+        val startedAt = runCatching {
+            val pid = ProcessIdentity().listeners(java.net.URI(endpoint).port).singleOrNull() ?: return@runCatching null
+            ProcessHandle.of(pid).orElse(null)?.info()?.startInstant()?.orElse(null)?.toEpochMilli()
+        }.onFailure { log.debug("Could not inspect OpenCode server uptime", it) }.getOrNull()
+        if (versionInfoEpoch.get() != generation || status.get() !is ServerStatus.Running || url() != endpoint || isAttachOnly() != attached) return null
+        return OpenCodeVersionInfo(endpoint, installed, version(), startedAt, attached).also {
+            versionInfo = it
+            versionInfoGeneration = generation
+            versionInfoCheckedAt = System.currentTimeMillis()
+        }
+    }
 
     fun workspaceDirectory(): String? = transport.workspaceDirectory()
 
@@ -451,6 +483,7 @@ class OpenCodeServer(
         val previous = status.getAndSet(normalizeRunning(next, status.get()))
         val current = status.get()
         if (previous == current) return
+        if (current !is ServerStatus.Running) versionInfoEpoch.incrementAndGet()
         statusListeners.forEach { runCatching { it(current) } }
     }
 

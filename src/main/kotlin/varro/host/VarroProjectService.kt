@@ -830,6 +830,8 @@ class VarroProjectService(private val project: Project) : Disposable {
 
     fun serverVersion(): String? = server.version()
 
+    fun serverVersionInfo() = server.readVersionInfo()
+
     fun statusBarText(): String {
         val attention = server.transport.attentionCount()
         val unread = store.completedSessionUnreadIds.size

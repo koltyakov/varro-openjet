@@ -2,6 +2,7 @@ package varro.toolwindow
 
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.util.text.StringUtil
 import com.intellij.openapi.wm.StatusBar
 import com.intellij.openapi.wm.StatusBarWidget
 import com.intellij.openapi.wm.StatusBarWidgetFactory
@@ -9,7 +10,9 @@ import com.intellij.openapi.wm.ToolWindowManager
 import com.intellij.openapi.wm.ex.ToolWindowManagerListener
 import com.intellij.util.Consumer
 import com.intellij.util.concurrency.AppExecutorUtil
+import varro.host.VarroBuild
 import varro.host.VarroProjectService
+import varro.settings.VarroSettings
 import java.awt.event.MouseEvent
 import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.TimeUnit
@@ -25,16 +28,16 @@ class VarroStatusWidgetFactory : StatusBarWidgetFactory {
 private class VarroStatusWidget(private val project: Project) : StatusBarWidget, StatusBarWidget.TextPresentation {
     private var timer: ScheduledFuture<*>? = null
     @Volatile private var text = "Varro"
-    @Volatile private var serverVersion: String? = null
+    @Volatile private var versionStatus: OpenCodeStatusPresentation? = null
     @Volatile private var toolWindowVisible = false
     @Volatile private var disposed = false
 
     override fun ID() = "VarroStatus"
     override fun getPresentation(): StatusBarWidget.WidgetPresentation = this
-    override fun getText() = if (toolWindowVisible) serverVersion?.let { "OpenCode $it" } ?: "" else text
+    override fun getText() = if (toolWindowVisible) versionStatus?.text ?: "" else text
     override fun getAlignment() = 0f
     override fun getTooltipText() = when {
-        toolWindowVisible -> serverVersion?.let { "OpenCode server version $it" }
+        toolWindowVisible -> versionStatus?.tooltip?.let { "<html>${StringUtil.escapeXmlEntities(it).replace("\n", "<br/>")}</html>" }
         hasUnreadStatus() -> "$text. Click to view completed sessions."
         hasRunningStatus() -> "$text. Click to view running sessions."
         else -> "$text. Click to open Varro chat."
@@ -63,13 +66,15 @@ private class VarroStatusWidget(private val project: Project) : StatusBarWidget,
             if (!disposed && !project.isDisposed) {
                 val service = project.getServiceIfCreated(VarroProjectService::class.java)
                 val nextText = service?.statusBarText() ?: "Varro"
-                val nextVersion = service?.serverVersion()
+                val nextVersion = service?.serverVersionInfo()?.let {
+                    OpenCodeStatusPresentation.from(it, VarroBuild.version, VarroSettings.getInstance().serverAutoUpdate)
+                }
                 ApplicationManager.getApplication().invokeLater {
                     if (!disposed && !project.isDisposed) {
                         val nextVisible = ToolWindowManager.getInstance(project).getToolWindow("Varro")?.isVisible == true
-                        if (nextText != text || nextVersion != serverVersion || nextVisible != toolWindowVisible) {
+                        if (nextText != text || nextVersion != versionStatus || nextVisible != toolWindowVisible) {
                             text = nextText
-                            serverVersion = nextVersion
+                            versionStatus = nextVersion
                             toolWindowVisible = nextVisible
                             statusBar.updateWidget(ID())
                         }

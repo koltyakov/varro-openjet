@@ -65,6 +65,8 @@ Pasting 10 or more lines that match the current selection in a saved workspace f
 
 Other actions are under Tools > Varro and in Find Action, including **New Varro Chat Window**. The tool-window options menu includes the file-diff toggle, settings, usage reports, and About. Commit-message generation is available in the commit toolbar.
 
+With the tool window open, hover over the OpenCode status-bar version for CLI and server versions, port, available process uptime, and the OpenJet version. An asterisk marks a CLI older than the pinned upstream verified version or a server running an older version than the installed CLI. Attach-only connections show the server address instead of local CLI update advice.
+
 Settings are under **Settings > Tools > Varro**. You can configure server startup and updates, the default permission mode, chat layout, fonts, and models for commit messages and permission review. The initial permission mode is `auto`; `default` follows OpenCode's rules, and `full` allows a session to act without confirmation. A font size of `0` follows the IDE's font settings.
 
 The Agents settings control the runtime-only read-only `Ask` agent, automatic compaction, reserved context tokens, and fallback titles for untitled sessions. Ask and automatic compaction are enabled by default; fallback titles are disabled.

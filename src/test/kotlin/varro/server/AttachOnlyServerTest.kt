@@ -17,6 +17,12 @@ class AttachOnlyServerTest {
             assertTrue(server.isAttachOnly())
             assertFalse(server.isManaged())
             assertEquals(version, server.version())
+            val diagnostics = server.readVersionInfo()!!
+            assertEquals(version, diagnostics.serverVersion)
+            assertNull(diagnostics.cliVersion)
+            assertTrue(diagnostics.attachOnly)
+            assertEquals(server.url(), diagnostics.url)
+            assertSame(diagnostics, server.readVersionInfo())
             assertEquals(version.substringBefore('.').toInt(), (server.currentStatus() as ServerStatus.Running).apiVersion)
             assertEquals(version.substringBefore('.').toInt(), server.currentStatus().toJson().get("apiVersion").asInt)
             assertEquals(OpenCodeServer.RestartOutcome.NOT_MANAGED, server.restart(force = true))
@@ -81,6 +87,7 @@ class AttachOnlyServerTest {
             check(server)
         } finally {
             server.dispose()
+            assertNull(server.readVersionInfo())
             endpoint.stop(0)
         }
     }

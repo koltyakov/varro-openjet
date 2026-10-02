@@ -246,7 +246,8 @@ class OpenCodeCli(
     }
 
     /** Installed CLI version, or `null` when the CLI is missing or mute. */
-    fun readInstalledVersion(): String? {
+    fun readInstalledVersion(refresh: Boolean = false): String? {
+        if (refresh) cachedVersion = null
         cachedVersion?.let { return it }
         val info = resolve()
         if (!info.found) return null
