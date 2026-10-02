@@ -52,6 +52,14 @@
     ]]></description>
 
     <change-notes><![CDATA[
+        <h3>0.6.1</h3>
+        <p>Added status-bar diagnostics for CLI and server versions, server port and uptime, and
+            the OpenJet version. Version warnings flag outdated CLIs and servers older than the
+            installed CLI. Attach-only connections show the server address and IP. Synced Varro
+            through 9fb2498742b3. New chats now use the default primary agent instead of restoring
+            the globally saved selection. Added Markdown link tooltips and prevented Alt from
+            activating the Windows menu while showing prompt numbers. Updated empty-chat hints,
+            logo rendering and status icons.</p>
         <h3>0.6.0</h3>
         <p>Synced Varro 0.31.0 through aadaead68b6a. Preserved model choices, drafts, and attachments
             when providers are unavailable, with retryable provider refreshes. Added model-selection
