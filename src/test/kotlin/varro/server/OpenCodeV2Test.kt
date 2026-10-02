@@ -202,6 +202,61 @@ class OpenCodeV2Test {
         assertEquals("data:image/png;base64,eA==", payload.arr("files")!![0].asJsonObject.str("uri"))
     }
 
+    @Test fun `steering resume reuses the existing message id without touching queued input`() {
+        val calls = mutableListOf<Pair<String, JsonElement?>>()
+        val native = adapter { method, path, body ->
+            calls.add(path to body)
+            when (path) {
+                "/api/session/ses_test/inbox" -> {
+                    assertEquals("GET", method)
+                    Json.obj("data" to listOf(Json.obj("id" to "msg_queue", "type" to "user", "delivery" to "queue"),
+                        Json.obj("id" to "msg_steer", "type" to "user", "delivery" to "steer")))
+                }
+                "/api/session/ses_test/prompt" -> { assertEquals("POST", method); null }
+                else -> error("Unexpected request $path")
+            }
+        }
+        assertTrue(native.request("POST", "/session/ses_test/resume-steering", null, RequestOptions()).data!!.asBoolean)
+        assertEquals(listOf("/api/session/ses_test/inbox", "/api/session/ses_test/prompt"), calls.map { it.first })
+        assertEquals(Json.obj("id" to "msg_steer", "text" to "", "delivery" to "steer", "resume" to true), calls.last().second)
+    }
+
+    @Test fun `steering resume is a no-op when only queued or non-user input remains`() {
+        val native = adapter { method, path, _ ->
+            assertEquals("GET", method)
+            assertEquals("/api/session/ses_test/inbox", path)
+            Json.obj("data" to listOf(Json.obj("id" to "msg_queue", "type" to "user", "delivery" to "queue"),
+                Json.obj("id" to "msg_synthetic", "type" to "synthetic", "delivery" to "steer")))
+        }
+        assertFalse(native.request("POST", "/session/ses_test/resume-steering", null, RequestOptions()).data!!.asBoolean)
+    }
+
+    @Test fun `steering resume surfaces failures without deleting pending input`() {
+        val calls = mutableListOf<String>()
+        val native = adapter { method, path, _ ->
+            calls.add(path)
+            if (method == "GET") Json.obj("data" to listOf(Json.obj("id" to "msg_steer", "type" to "user", "delivery" to "steer")))
+            else error("Resume failed")
+        }
+        assertThrows(IllegalStateException::class.java) {
+            native.request("POST", "/session/ses_test/resume-steering", null, RequestOptions())
+        }
+        assertEquals(listOf("/api/session/ses_test/inbox", "/api/session/ses_test/prompt"), calls)
+    }
+
+    @Test fun `invalid steering inboxes never admit new input`() {
+        for (inbox in listOf(Json.obj(), Json.array(listOf(Json.obj("type" to "user", "delivery" to "steer"))))) {
+            val native = adapter { method, path, _ ->
+                assertEquals("GET", method)
+                assertEquals("/api/session/ses_test/inbox", path)
+                Json.obj("data" to inbox)
+            }
+            assertThrows(IllegalStateException::class.java) {
+                native.request("POST", "/session/ses_test/resume-steering", null, RequestOptions())
+            }
+        }
+    }
+
     @Test fun `explicit prompt delivery survives transcript reload`() {
         for (delivery in listOf(null, "steer", "queue", "invalid")) {
             var admitted: JsonObject? = null

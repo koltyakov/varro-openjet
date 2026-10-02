@@ -102,6 +102,12 @@ class VarroProjectService(private val project: Project) : Disposable {
                 selectionId?.let { addProperty("selectionId", it) }
             })
         },
+        acknowledgeModel = { id, selectionId ->
+            broadcast("session-models/sync", Json.obj(
+                "models" to store.sessionSelectedModels,
+                "acknowledgement" to Json.obj("sessionId" to id, "selectionId" to selectionId),
+            ))
+        },
         request = { method, path, body, directory ->
             server.transport.request(method, path, body, varro.server.RequestOptions(directory = directory)).data
         },
@@ -612,7 +618,7 @@ class VarroProjectService(private val project: Project) : Disposable {
                 }
 
                 "session-model/update" -> payload.str("sessionId")?.let {
-                    selections.updateModel(it, payload?.get("model"), selectionDirectory(it))
+                    selections.updateModel(it, payload?.get("model"), selectionDirectory(it), payload.str("selectionId"))
                 }
 
                 "session-models/migrate" -> payload.obj("models")?.let {

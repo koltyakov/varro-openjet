@@ -14,6 +14,10 @@ export type SessionSelectionOptions = {
   selectedModel?: SelectedModel;
   directory?: string;
   reportActivationError?: boolean;
+  /** Required startup restoration must distinguish a failed read from an unavailable session. */
+  throwOnLoadFailure?: boolean;
+  /** Startup restores history without gating the whole chat on MCP connections. */
+  waitForMcpSync?: boolean;
 };
 export type ModelVariantSelections = Record<string, string | null>;
 

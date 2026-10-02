@@ -52,6 +52,15 @@
     ]]></description>
 
     <change-notes><![CDATA[
+        <h3>0.6.0</h3>
+        <p>Synced Varro 0.31.0 through aadaead68b6a. Preserved model choices, drafts, and attachments
+            when providers are unavailable, with retryable provider refreshes. Added model-selection
+            acknowledgements to protect newer composer choices from older host snapshots. Prompts with
+            agent, model, or reasoning settings that differ from the active turn are queued. Added Resume
+            steering after cancellation without duplicating prompts, generation-speed estimates, and
+            clearer Fast and Ultrafast labels. Fixed IME input handling and excluded broken images from
+            sends. Improved startup loading, interrupted-response refreshes, scrolling, question visibility,
+            and activity grouping around compaction. Updated webview build and test dependencies.</p>
         <h3>0.5.0</h3>
         <p>Synced Varro 0.30.15 through ff2bebfc1ecd. Added image compression options in the composer
             with size previews and an action to restore the original. Steering messages now have distinct

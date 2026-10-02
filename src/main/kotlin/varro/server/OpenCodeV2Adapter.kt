@@ -240,6 +240,15 @@ internal class OpenCodeV2Adapter(
                     }
                     raw("POST", "$endpoint/${if (action == "abort") "interrupt?resume=false" else "compact"}", Json.obj()); return result(true)
                 }
+                "resume-steering" -> if (method == "POST") {
+                    val inbox = data("GET", "$endpoint/inbox").asArrayOrNull() ?: error("Invalid OpenCode v2 session inbox")
+                    val pending = inbox.firstOrNull { it.asObjectOrNull().str("type") == "user" && it.asObjectOrNull().str("delivery") == "steer" }
+                        .asObjectOrNull() ?: return result(false)
+                    val messageId = pending.text("id") ?: error("Invalid OpenCode v2 steering message id")
+                    // Re-admit the existing ID to wake it without duplicating input or changing queued items.
+                    raw("POST", "$endpoint/prompt", Json.obj("id" to messageId, "text" to "", "delivery" to "steer", "resume" to true))
+                    return result(true)
+                }
                 "fork" -> return result(session(data("POST", "$endpoint/fork", Json.obj("before" to input.get("messageID"))).asJsonObject))
                 "revert" -> { raw("POST", "$endpoint/revert/stage", Json.obj("messageID" to input.get("messageID"), "files" to true)); return result(session(data("GET", endpoint).asJsonObject)) }
                 "unrevert" -> { raw("DELETE", "$endpoint/revert"); return result(session(data("GET", endpoint).asJsonObject)) }

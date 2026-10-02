@@ -40,6 +40,18 @@ class ApiRoutesTest {
     }
 
     @Test
+    fun `steering resume allows only POST with an optional directory`() {
+        val path = "/session/ses_123/resume-steering"
+        assertTrue(ApiRoutes.isAllowed("POST", path))
+        assertTrue(ApiRoutes.isAllowed("POST", "$path?directory=%2Frepo"))
+        assertFalse(ApiRoutes.isAllowed("GET", path))
+        assertFalse(ApiRoutes.isAllowed("DELETE", path))
+        assertFalse(ApiRoutes.isAllowed("POST", "$path?directory="))
+        assertFalse(ApiRoutes.isAllowed("POST", "$path?unexpected=true"))
+        assertFalse(ApiRoutes.isAllowed("POST", "/session/a%2fb/resume-steering"))
+    }
+
+    @Test
     fun `allows decision provider status and updates without a query`() {
         assertTrue(ApiRoutes.isAllowed("GET", "/varro/decision-providers"))
         assertTrue(ApiRoutes.isAllowed("POST", "/varro/decision-providers"))

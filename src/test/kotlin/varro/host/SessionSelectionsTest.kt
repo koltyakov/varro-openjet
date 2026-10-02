@@ -18,10 +18,14 @@ class SessionSelectionsTest {
         val patches = mutableListOf<JsonObject>()
         val agents = mutableListOf<String>()
         val acknowledgements = mutableListOf<Pair<String?, String>>()
+        val modelAcknowledgements = mutableListOf<Pair<JsonObject, String>>()
         var failPatch = false
         val selections: SessionSelections = SessionSelections(store, publishAgent = { _, agent, selectionId ->
             agent?.let(agents::add)
             selectionId?.let { acknowledgements.add(agent to it) }
+        }, acknowledgeModel = { id, selectionId ->
+            assertEquals("session", id)
+            modelAcknowledgements.add(store.sessionSelectedModels.deepCopy() to selectionId)
         }) { method, path, body, directory ->
             assertEquals("/session/session", path)
             assertEquals("/repo", directory)
@@ -118,6 +122,40 @@ class SessionSelectionsTest {
         assertEquals("build", fixture.store.sessionPlanAgents.str("session"))
         assertFalse(fixture.agents.contains("plan"))
         assertFalse(fixture.session.obj("metadata").obj("varro")!!.has("selectionId"))
+    }
+
+    @Test fun `model acknowledgements include confirmed snapshots for repeated and cleared choices`() {
+        val fixture = Fixture()
+        listOf("high", "low", "high", "high").forEachIndexed { index, variant ->
+            fixture.selections.updateModel("session", model(variant), "/repo", "selection-$index")
+        }
+        assertEquals(3, fixture.patches.size)
+        assertEquals(listOf("high", "low", "high", "high").mapIndexed { index, variant ->
+            Json.obj("session" to model(variant)) to "selection-$index"
+        }, fixture.modelAcknowledgements)
+        fixture.selections.updateModel("session", null, "/repo", "cleared-selection")
+        assertEquals(JsonObject() to "cleared-selection", fixture.modelAcknowledgements.last())
+        assertEquals(3, fixture.patches.size)
+        assertFalse(fixture.session.obj("metadata").obj("varro")!!.has("selectionId"))
+    }
+
+    @Test fun `failed and invalid model writes do not acknowledge an unsaved selection`() {
+        val fixture = Fixture()
+        fixture.selections.updateModel("session", model("low"), "/repo")
+        fixture.failPatch = true
+        assertThrows(IllegalStateException::class.java) {
+            fixture.selections.updateModel("session", model("high"), "/repo", "failed-selection")
+        }
+        assertThrows(IllegalStateException::class.java) {
+            fixture.selections.updateModel("session", Json.obj("providerID" to "openai"), "/repo", "invalid-model")
+        }
+        listOf("", "a".repeat(129)).forEach { selectionId ->
+            assertThrows(IllegalArgumentException::class.java) {
+                fixture.selections.updateModel("session", null, "/repo", selectionId)
+            }
+        }
+        assertTrue(fixture.modelAcknowledgements.isEmpty())
+        assertEquals(model("low"), fixture.store.sessionSelectedModels.get("session"))
     }
 
     @Test fun `mode writes save rules and metadata together while preconfigured modes only save metadata`() {

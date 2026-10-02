@@ -2,6 +2,8 @@ import type { HealthResponse } from '../../shared/health';
 import { normalizeModelVariant } from '../../shared/model-variant';
 import type { WebviewRoute } from '../../shared/protocol';
 import type { MessageEntry, SessionStatus } from '../types';
+import { measureStartupPhase } from '../../shared/startup';
+import type { StartupPhase, StartupTiming } from '../../shared/startup';
 
 type ResolvedModel = { providerID: string; modelID: string; variant?: string };
 
@@ -12,6 +14,14 @@ type LastOpenedView =
 
 export const STARTUP_VIEW_RESTORE_WINDOW_MS = 10 * 60 * 1000;
 const MAX_SETTLED_RECOVERY_CLAIMS = 100;
+const STARTUP_HEALTH_ATTEMPTS = 3;
+const STARTUP_HEALTH_RETRY_MS = 500;
+
+const STARTUP_ERROR_PREFIXES = [
+  'Failed to connect to OpenCode server:',
+  'Failed to load OpenCode startup data:',
+  'Failed to restore OpenCode session:',
+];
 
 export type InterruptedSessionContinueBody = {
   messageID?: string;
@@ -182,6 +192,7 @@ export async function initConnectionWithDependencies(
   deps: {
     health(): Promise<HealthResponse>;
     loadInitialData(): Promise<void | boolean | object>;
+    loadBackgroundData?(): Promise<void | boolean | object>;
     hydrateSessionStatuses(): Promise<void | boolean | object>;
     getActiveSessionId(): string | null;
     getPersistedActiveSessionId(): string | null;
@@ -198,38 +209,90 @@ export async function initConnectionWithDependencies(
     recoverInterruptedSessions(generation: number): Promise<void | boolean | object>;
     setInitialized(value: boolean): void;
     setError(message: string | null): void;
+    getError?(): string | null;
+    logError?(context: string, cause: unknown): void;
+    recordStartupTiming?(timing: StartupTiming, generation: number): void;
     now?(): number;
   },
   generationRef: { next(): number; isCurrent(generation: number): boolean }
 ) {
   const generation = generationRef.next();
+  const measure = <T>(phase: StartupPhase, operation: () => PromiseLike<T>) =>
+    measureStartupPhase(phase, operation, (timing) =>
+      deps.recordStartupTiming?.(timing, generation)
+    );
+  let errorPrefix = STARTUP_ERROR_PREFIXES[0];
   try {
-    const health = await deps.health();
-    if (!generationRef.isCurrent(generation)) return;
-    if (!health.healthy) throw new Error('OpenCode server is not healthy');
+    for (let attempt = 0; attempt < STARTUP_HEALTH_ATTEMPTS; attempt += 1) {
+      try {
+        const health = await measure('health', deps.health);
+        if (!generationRef.isCurrent(generation)) return;
+        if (!health.healthy) throw new Error('OpenCode server is not healthy');
+        break;
+      } catch (error) {
+        if (!generationRef.isCurrent(generation)) return;
+        const message = error instanceof Error ? error.message : String(error);
+        // Retry only transient health/network failures, never consent, identity,
+        // credentials, or server version failures. No server restart is needed.
+        if (
+          attempt === STARTUP_HEALTH_ATTEMPTS - 1 ||
+          !/not healthy|health probe failed|fetch failed|timed? ?out|timeout|ECONNREFUSED|ECONNRESET/i.test(
+            message
+          )
+        )
+          throw error;
+        await new Promise<void>((resolve) => setTimeout(resolve, STARTUP_HEALTH_RETRY_MS));
+        if (!generationRef.isCurrent(generation)) return;
+      }
+    }
 
-    await deps.loadInitialData();
+    errorPrefix = STARTUP_ERROR_PREFIXES[1];
+    if ((await measure('essential-data', deps.loadInitialData)) === false)
+      throw new Error('Essential startup snapshots are unavailable');
     if (!generationRef.isCurrent(generation)) return;
 
-    await deps.hydrateSessionStatuses();
+    if ((await measure('status', deps.hydrateSessionStatuses)) === false)
+      throw new Error('Session status snapshot is unavailable');
     if (!generationRef.isCurrent(generation)) return;
 
     const initialRoute = deps.getInitialRoute?.() ?? null;
-    if (initialRoute || !deps.getActiveSessionId()) {
-      await restoreStartupView(deps, generation, generationRef, initialRoute);
+    errorPrefix = STARTUP_ERROR_PREFIXES[2];
+    if (
+      initialRoute ||
+      !deps.getActiveSessionId() ||
+      deps.getError?.()?.startsWith('Failed to restore OpenCode session:')
+    ) {
+      await measure('view-restoration', () =>
+        restoreStartupView(deps, generation, generationRef, initialRoute)
+      );
       if (!generationRef.isCurrent(generation)) return;
     }
 
-    await deps.recoverInterruptedSessions(generation);
+    await measure('interrupted-recovery', () => deps.recoverInterruptedSessions(generation));
     if (!generationRef.isCurrent(generation)) return;
 
     deps.setInitialized(true);
+    const error = deps.getError?.();
+    if (error && STARTUP_ERROR_PREFIXES.some((prefix) => error.startsWith(prefix)))
+      deps.setError(null);
+    // Optional catalogs/status must not hold the whole chat behind its loader.
+    // Loaders retain their own workspace-generation guards and error handling.
+    if (deps.loadBackgroundData) {
+      void Promise.resolve()
+        .then(() => {
+          if (generationRef.isCurrent(generation) && deps.loadBackgroundData)
+            return measure('background-data', deps.loadBackgroundData);
+          return undefined;
+        })
+        .catch((cause: unknown) => {
+          if (generationRef.isCurrent(generation)) deps.logError?.('startupBackgroundData', cause);
+        });
+    }
   } catch (err) {
     if (!generationRef.isCurrent(generation)) return;
+    deps.logError?.('startupInitialization', err);
     deps.setInitialized(false);
-    deps.setError(
-      `Failed to connect to OpenCode server: ${err instanceof Error ? err.message : String(err)}`
-    );
+    deps.setError(`${errorPrefix} ${err instanceof Error ? err.message : String(err)}`);
   }
 }
 
@@ -263,6 +326,7 @@ async function restoreStartupView(
       const selected = await (directory
         ? deps.selectSession(initialRoute.sessionId, directory)
         : deps.selectSession(initialRoute.sessionId));
+      if (!generationRef.isCurrent(generation)) return;
       if (selected === false) deps.setShowSessionPicker(true);
     }
     deps.markInitialRouteConsumed?.();
@@ -280,6 +344,7 @@ async function restoreStartupView(
     const selected = await (directory
       ? deps.selectSession(lastOpenedView.sessionId, directory)
       : deps.selectSession(lastOpenedView.sessionId));
+    if (!generationRef.isCurrent(generation)) return;
     if (selected === false) deps.setShowSessionPicker(true);
     return;
   }
@@ -303,7 +368,9 @@ async function restoreStartupView(
   const onlyPrimarySessionId = deps.getOnlyPrimarySessionId();
   if (sessionCount === 1 && onlyPrimarySessionId && deps.hasSession(onlyPrimarySessionId)) {
     deps.setShowSessionPicker(false);
-    await deps.selectSession(onlyPrimarySessionId);
+    const selected = await deps.selectSession(onlyPrimarySessionId);
+    if (!generationRef.isCurrent(generation)) return;
+    if (selected === false) deps.setShowSessionPicker(true);
     return;
   }
 
@@ -334,6 +401,7 @@ export function ensureConnectionInitializedWithDependencies(deps: {
 export function createConnectionBootstrapOperations(deps: {
   health(): Promise<HealthResponse>;
   loadInitialData(): Promise<void | boolean | object>;
+  loadBackgroundData?(): Promise<void | boolean | object>;
   hydrateSessionStatuses(): Promise<void | boolean | object>;
   getActiveSessionId(): string | null;
   getPersistedActiveSessionId(): string | null;
@@ -349,6 +417,7 @@ export function createConnectionBootstrapOperations(deps: {
   setShowSessionPicker(value: boolean): void;
   setInitialized(value: boolean): void;
   setError(message: string | null): void;
+  getError?(): string | null;
   nextConnectionGeneration(): number;
   isCurrentConnectionGeneration(generation: number): boolean;
   getCurrentConnectionGeneration(): number;
@@ -360,6 +429,7 @@ export function createConnectionBootstrapOperations(deps: {
   hasPendingPermission(sessionId: string): boolean;
   loadSessionMessages(sessionId: string): Promise<MessageEntry[]>;
   logError(context: string, cause: unknown): void;
+  recordStartupTiming?(timing: StartupTiming, generation: number): void;
   syncSessionMcps(sessionId: string): Promise<void | boolean | object>;
   resolveModel(sessionId: string): ResolvedModel | null;
   resolveAgent(sessionId: string): string | null;
@@ -482,6 +552,10 @@ export function createConnectionBootstrapOperations(deps: {
       {
         health: deps.health,
         loadInitialData: deps.loadInitialData,
+        loadBackgroundData: deps.loadBackgroundData,
+        getError: deps.getError,
+        logError: deps.logError,
+        recordStartupTiming: deps.recordStartupTiming,
         hydrateSessionStatuses: deps.hydrateSessionStatuses,
         getActiveSessionId: deps.getActiveSessionId,
         getPersistedActiveSessionId: deps.getPersistedActiveSessionId,
@@ -491,6 +565,7 @@ export function createConnectionBootstrapOperations(deps: {
         getSessionCount: deps.getSessionCount,
         getOnlyPrimarySessionId: deps.getOnlyPrimarySessionId,
         hasSession: deps.hasSession,
+        getSessionDirectory: deps.getSessionDirectory,
         selectSession: deps.selectSession,
         startNewSession: deps.startNewSession,
         setShowSessionPicker: deps.setShowSessionPicker,

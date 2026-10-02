@@ -239,6 +239,41 @@ function fenceAttachmentText(text: string, language: string): string {
   return `${fence}${language}\n${text}\n${fence}`;
 }
 
+function resolveComposerSendModel(
+  composerState: Pick<
+    ComposerState,
+    'selectedModel' | 'providers' | 'providerDefaults' | 'modelVariantSelections'
+  >
+): SelectedModel | null {
+  const model = routingStore.resolveSelectedModel(
+    composerState.selectedModel,
+    composerState.providers,
+    composerState.providerDefaults,
+    { allowHidden: true }
+  );
+  if (composerState.selectedModel && !model) {
+    const { providerID, modelID } = composerState.selectedModel;
+    throw new Error(
+      `Selected model ${providerID}/${modelID} is unavailable. Reconnect the provider or select another model.`
+    );
+  }
+  if (!model || model.variant) return model;
+
+  const rememberedVariant =
+    composerState.modelVariantSelections[
+      getModelVariantSelectionKey(model.providerID, model.modelID)
+    ];
+  if (
+    rememberedVariant &&
+    getVariantsForModel(model.providerID, model.modelID, composerState.providers).includes(
+      rememberedVariant
+    )
+  ) {
+    return { ...model, variant: rememberedVariant };
+  }
+  return model;
+}
+
 export function buildSessionSendBody(
   composerState: ComposerState,
   sessionId: string,
@@ -246,12 +281,7 @@ export function buildSessionSendBody(
   isCurrentDocumentEnabled: (sessionId: string) => boolean,
   options?: SendFlowOptions
 ): SessionSendPayload | null {
-  const effectiveModel = routingStore.resolveSelectedModel(
-    composerState.selectedModel,
-    composerState.providers,
-    composerState.providerDefaults,
-    { allowHidden: true }
-  );
+  const effectiveModel = resolveComposerSendModel(composerState);
   const includeNativeClipboardImages = effectiveModel
     ? modelSupportsVision(
         effectiveModel.providerID,
@@ -528,21 +558,6 @@ export function buildSessionSendBody(
   if (effectiveModel?.variant) {
     body.variant =
       normalizeModelVariant(effectiveModel.modelID, effectiveModel.variant) || undefined;
-  } else if (body.model) {
-    const rememberedVariant =
-      composerState.modelVariantSelections[
-        getModelVariantSelectionKey(body.model.providerID, body.model.modelID)
-      ];
-    if (rememberedVariant !== null) {
-      const variants = getVariantsForModel(
-        body.model.providerID,
-        body.model.modelID,
-        composerState.providers
-      );
-      const validRememberedVariant =
-        rememberedVariant && variants.includes(rememberedVariant) ? rememberedVariant : null;
-      body.variant = validRememberedVariant || undefined;
-    }
   }
   if (options?.noReply) body.noReply = true;
   if (options?.delivery) body.delivery = options.delivery;
@@ -995,12 +1010,28 @@ export class SessionSendOperations {
         getModelVariantSelectionKey(explicitDefaultModel.providerID, explicitDefaultModel.modelID)
       ] = null;
     }
+    // Capture the displayed reasoning choice before session creation can turn
+    // an absent variant into an explicit session default.
+    let capturedSelectedModel: SelectedModel | null;
+    try {
+      capturedSelectedModel = resolveComposerSendModel({
+        selectedModel,
+        providers: appStore.state.providers,
+        providerDefaults: appStore.state.providerDefaults,
+        modelVariantSelections,
+      });
+    } catch (error) {
+      return async () => {
+        uiStore.setError(error instanceof Error ? error.message : String(error));
+        return false;
+      };
+    }
     const capturedAttachments = captureComposerAttachments(options?.queuedAttachments);
     const sourceEditorContext =
       options?.queuedContext?.editorContext ?? appStore.state.editorContext;
     const capturedComposerState: ComposerState = {
       selectedAgent,
-      selectedModel: selectedModel ? { ...selectedModel } : null,
+      selectedModel: capturedSelectedModel ? { ...capturedSelectedModel } : null,
       providers: [...appStore.state.providers],
       providerDefaults: { ...appStore.state.providerDefaults },
       modelVariantSelections,

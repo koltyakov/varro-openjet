@@ -892,6 +892,9 @@ export function MessageList() {
   });
   const observedVisibleMessageBounds = new Map<string, { top: number; bottom: number }>();
   const mountedMessageRows = new Map<string, HTMLDivElement>();
+  const pendingMountedRowMeasurements = new Map<string, HTMLDivElement>();
+  let mountedRowMeasurementScheduled = false;
+  onCleanup(() => pendingMountedRowMeasurements.clear());
   let previousVisibleStructureSessionId: string | null = null;
   let previousVisibleStructureMessageIds: readonly string[] | null = null;
   const messages = createMemo(() => {
@@ -1709,7 +1712,12 @@ export function MessageList() {
   function flushRowHeightCorrections() {
     rowHeightCorrectionScheduled = false;
     rowHeightCorrectionFrame = 0;
-    if (disposed) return;
+    if (disposed || pendingRowHeightCorrections.size === 0) return;
+    // Rounding is a layout mutation too. Preserve an explicit view-change or
+    // width owner without competing with ordinary measurement compensation.
+    const detachedAnchor = widthResizeCanOwnScroll()
+      ? (pendingThinkingLayoutAnchor ?? widthResizeAnchor)
+      : null;
     let changed = false;
     for (const [element, correction] of pendingRowHeightCorrections) {
       if (!element.isConnected) continue;
@@ -1725,8 +1733,8 @@ export function MessageList() {
       changed = true;
     }
     pendingRowHeightCorrections.clear();
-    if (changed && widthResizeActive && widthResizeAnchor && widthResizeCanOwnScroll()) {
-      restoreVisibleScrollAnchor(widthResizeAnchor);
+    if (changed && detachedAnchor && widthResizeCanOwnScroll()) {
+      restoreVisibleScrollAnchor(detachedAnchor);
     }
     // A deferred correction can finish a virtual range change after the track observer followed.
     // Reconcile its bottom target before the next paint, including immediate reduced-motion follow.
@@ -1908,8 +1916,11 @@ export function MessageList() {
 
   function hasMeasuredEveryMessage() {
     if (!shouldMeasureRows()) return false;
+    const zeroHeightIds = knownZeroHeightMessageIds();
     for (const id of messageIds()) {
-      if (!measuredHeights.has(id)) return false;
+      // Complete render-empty projections already have an exact zero in the prefix. Waiting for
+      // another observer delivery after grouping invalidates their cache can strand bootstrap.
+      if (!measuredHeights.has(id) && !zeroHeightIds.has(id)) return false;
     }
     return true;
   }
@@ -2314,6 +2325,49 @@ export function MessageList() {
         null)
   );
 
+  const trailingAssistantTurn = createMemo(() => {
+    messageInfoVersion();
+    const visibleMessages = messages();
+    let userMessageId: string | null = null;
+
+    for (let index = visibleMessages.length - 1; index >= 0; index -= 1) {
+      const { info, parts } = visibleMessages[index]!;
+      if (info.role === 'user') {
+        // Automatic notices and metadata-only arrivals do not start a new turn.
+        // Switching away and back would requeue already-visible assistant content.
+        if (
+          !isSessionResumeMessage(parts) &&
+          !hasUserMessageContent(parseUserMessageContent(parts))
+        )
+          continue;
+        userMessageId = info.id;
+        break;
+      }
+      if (info.mode !== 'subagent') {
+        userMessageId = info.parentID;
+        break;
+      }
+    }
+
+    if (!userMessageId) return null;
+
+    const assistantMessageIds = new Set<string>();
+    let latestAssistant: AssistantMessage | null = null;
+    for (const entry of visibleMessages) {
+      if (
+        entry.info.role !== 'assistant' ||
+        entry.info.mode === 'subagent' ||
+        entry.info.parentID !== userMessageId
+      ) {
+        continue;
+      }
+      assistantMessageIds.add(entry.info.id);
+      latestAssistant = entry.info;
+    }
+
+    return { userMessageId, assistantMessageIds, latestAssistant };
+  });
+
   const loadingRowEligible = createMemo(
     () =>
       !!state.activeSessionId &&
@@ -2324,6 +2378,67 @@ export function MessageList() {
       !hasActivePermission() &&
       !activeUsageLimit()
   );
+
+  const waitingForTools = createMemo(() => {
+    if (!loadingRowEligible()) return false;
+    const turn = trailingAssistantTurn();
+    if (!turn) return false;
+    const entries = messages();
+    const indexes = messageIndexById();
+    return [...turn.assistantMessageIds].some((messageId) => {
+      const index = indexes.get(messageId);
+      const message = index === undefined ? undefined : entries[index];
+      if (!message || message.info.role !== 'assistant' || message.info.error) return false;
+      return message.parts.some(
+        (part) =>
+          part.type === 'tool' &&
+          (part.state.status === 'pending' || part.state.status === 'running') &&
+          shouldShowAssistantPartInline(part)
+      );
+    });
+  });
+
+  const loadingTurnStartedAt = createMemo(() => {
+    messageInfoVersion();
+    const startedAt = loadingStartedAt();
+    if (startedAt !== null) return startedAt;
+    const turn = trailingAssistantTurn();
+    const index = turn ? messageIndexById().get(turn.userMessageId) : undefined;
+    return (
+      (index === undefined ? undefined : messages()[index]?.info.time.created) ??
+      turn?.latestAssistant?.time.created
+    );
+  });
+
+  const loadingElapsedStartedAt = createMemo(() => {
+    messageInfoVersion();
+    const turn = trailingAssistantTurn();
+    let completedAt: number | undefined;
+    const entries = messages();
+    const indexes = messageIndexById();
+    const recordCompletion = (end: number | undefined) => {
+      if (end !== undefined && Number.isFinite(end)) {
+        completedAt = Math.max(completedAt ?? end, end);
+      }
+    };
+    for (const messageId of turn?.assistantMessageIds ?? []) {
+      const index = indexes.get(messageId);
+      const entry = index === undefined ? undefined : entries[index];
+      if (!entry || entry.info.role !== 'assistant') continue;
+      recordCompletion(entry.info.time.completed);
+      for (const part of entry.parts) {
+        if (part.type === 'text' || part.type === 'reasoning') {
+          recordCompletion(part.time?.end);
+        } else if (
+          part.type === 'tool' &&
+          (part.state.status === 'completed' || part.state.status === 'error')
+        ) {
+          recordCompletion(part.state.time.end);
+        }
+      }
+    }
+    return completedAt ?? loadingTurnStartedAt();
+  });
 
   const shouldShowLoadingRow = createMemo(
     () =>
@@ -2634,21 +2749,12 @@ export function MessageList() {
     );
   });
   const standaloneQuestions = createMemo(() => {
-    const questions = getStandaloneQuestionPrompts(
+    if (state.messagesLoading) return [];
+    return getStandaloneQuestionPrompts(
       untrack(() => state.messages),
       state.questions,
       state.activeSessionId,
       linkedToolCalls()
-    );
-    if (!state.messagesLoading) return questions;
-
-    return questions.filter(
-      (question) =>
-        getToolCallLookupKey(
-          question.sessionID,
-          question.tool?.messageID,
-          question.tool?.callID
-        ) === null
     );
   });
   const activeSessionRootId = createMemo(
@@ -2717,6 +2823,7 @@ export function MessageList() {
   );
 
   function getQuestionRequestForTool(part: Extract<Part, { type: 'tool' }>) {
+    if (state.messagesLoading) return null;
     const key = getToolCallLookupKey(activeSessionRootId(), part.messageID, part.callID);
     return key ? (questionRequestsByToolCall().get(key) ?? null) : null;
   }
@@ -2834,7 +2941,8 @@ export function MessageList() {
     let preview = getStickyUserMessagePreview(
       visibleMessages,
       firstVisibleMessageIndex,
-      subagentSessionIds()
+      subagentSessionIds(),
+      steeringMessageIds()
     );
     let usesBoundaryPrompt = false;
     if (
@@ -2849,7 +2957,9 @@ export function MessageList() {
       if (boundaryPrompts.length > 0) {
         const boundaryPreview = getStickyUserMessagePreview(
           [...boundaryPrompts, visibleMessages[firstVisibleMessageIndex]!],
-          boundaryPrompts.length
+          boundaryPrompts.length,
+          subagentSessionIds(),
+          steeringMessageIds()
         );
         if (boundaryPreview) {
           preview = { ...boundaryPreview, index: -1 };
@@ -3045,7 +3155,9 @@ export function MessageList() {
     const measurements = rows.flatMap(({ element, messageId }) => {
       const rect = element.getBoundingClientRect();
       measuredRowInlineSizes.set(element, rect.width);
-      if (rect.height <= 0) return [];
+      // Collapsed cross-message activity can already be empty when the batch runs. Certify those
+      // projected zeros too; ResizeObserver may not redeliver a zero after its cache was invalidated.
+      if (rect.height <= 0 && !knownZeroHeightMessageIds().has(messageId)) return [];
       const height = alignMeasuredRowBlockSize(element, rect.height);
       if (!shouldAcceptRowHeight(element, messageId, height)) return [];
       return [{ messageId, height }];
@@ -3053,10 +3165,6 @@ export function MessageList() {
     if (!applyRowHeightMeasurements(measurements)) return false;
     if (publish) scheduleMeasurementPublish('content');
     return true;
-  }
-
-  function measureMountedRow(element: HTMLDivElement, messageId: string) {
-    return measureMountedRows([{ element, messageId }]);
   }
 
   function applyRowHeightMeasurements(
@@ -3926,7 +4034,14 @@ export function MessageList() {
       return;
     }
 
-    if (diffFocusPauseActive || pendingStructuralScrollAnchor) {
+    // A slow page can outlive direct input. Its exact history anchor still owns measurements;
+    // generic per-mount anchors must not queue competing restorations after the prepend.
+    const sessionId = state.activeSessionId;
+    if (
+      diffFocusPauseActive ||
+      pendingStructuralScrollAnchor ||
+      (sessionId && getCurrentPendingHistoryAnchor(sessionId)?.anchor)
+    ) {
       setMeasurementVersion((version) => version + 1);
       return;
     }
@@ -3951,6 +4066,9 @@ export function MessageList() {
   function observeMeasuredRow(element: HTMLDivElement, messageId: string, active: boolean) {
     if (!active) {
       if (mountedMessageRows.get(messageId) === element) mountedMessageRows.delete(messageId);
+      if (pendingMountedRowMeasurements.get(messageId) === element) {
+        pendingMountedRowMeasurements.delete(messageId);
+      }
       measuredRowObserver?.unobserve(element);
       return;
     }
@@ -3972,8 +4090,41 @@ export function MessageList() {
     }
     if (!shouldMeasureRows()) return;
 
-    measureMountedRow(element, messageId);
-    restorePendingHistoryAnchorIfMounted();
+    if (shouldVirtualize() && userScrollRecentlyActive()) {
+      // A direct gesture's newly mounted overscan can correct height above its painted destination.
+      // Apply that bounded correction before the scroll event remembers the destination anchor.
+      measureMountedRows([{ element, messageId }]);
+      restorePendingHistoryAnchorIfMounted();
+      if (element.isConnected && mountedMessageRows.get(messageId) === element) {
+        measuredRowObserver?.observe(element);
+      }
+      return;
+    }
+
+    // Solid mounts a whole range in one update. Publishing each row's measurement synchronously
+    // reconciles that range again and interleaves layout reads with DOM/scroll writes for every row.
+    // One microtask measures the connected batch and aligns its history owner before paint.
+    pendingMountedRowMeasurements.set(messageId, element);
+    if (!mountedRowMeasurementScheduled) {
+      mountedRowMeasurementScheduled = true;
+      queueMicrotask(() => {
+        mountedRowMeasurementScheduled = false;
+        if (disposed || !shouldMeasureRows()) {
+          pendingMountedRowMeasurements.clear();
+          return;
+        }
+        const rows = [...pendingMountedRowMeasurements].flatMap(([pendingId, pendingElement]) =>
+          pendingElement.isConnected &&
+          mountedMessageRows.get(pendingId) === pendingElement &&
+          !pendingElement.classList.contains('interactive-item-virtual-placeholder')
+            ? [{ element: pendingElement, messageId: pendingId }]
+            : []
+        );
+        pendingMountedRowMeasurements.clear();
+        measureMountedRows(rows);
+        restorePendingHistoryAnchorIfMounted();
+      });
+    }
     if (element.isConnected && mountedMessageRows.get(messageId) === element) {
       measuredRowObserver?.observe(element);
     }
@@ -4153,9 +4304,11 @@ export function MessageList() {
   function getStickyUserMessageNextUserMessageTop(messageIndex: number, containerRect: DOMRect) {
     if (!containerRef) return null;
     const currentMessages = messages();
+    const steeringIds = steeringMessageIds();
     for (let index = messageIndex + 1; index < currentMessages.length; index += 1) {
       const nextMessage = currentMessages[index];
       if (nextMessage?.info.role !== 'user') continue;
+      if (steeringIds.has(nextMessage.info.id)) continue;
 
       const nextRow = mountedMessageRows.get(nextMessage.info.id);
       if (!nextRow) return null;
@@ -4177,8 +4330,10 @@ export function MessageList() {
 
   function getNextMountedUserMessageTop(messageId: string, containerRect: DOMRect) {
     if (!containerRef) return null;
+    const steeringIds = steeringMessageIds();
     for (const row of containerRef.querySelectorAll<HTMLElement>('.interactive-request')) {
       if (row.dataset.msgId === messageId) continue;
+      if (row.dataset.msgId && steeringIds.has(row.dataset.msgId)) continue;
       const source = row.querySelector<HTMLElement>('.user-message-card');
       if (!source) continue;
       const rect = source.getBoundingClientRect();
@@ -4375,6 +4530,8 @@ export function MessageList() {
       Number.isFinite(maxVisibleItems) &&
       remainingItems.length > maxVisibleItems
     ) {
+      // The tray keeps its height; a held thumb must not gain a target that pulls it back.
+      if (pointerScrollOwnershipActive) return;
       preserveCurrentBottomTarget();
       const target = activityExitBottomTarget;
       requestAnimationFrame(() => {
@@ -4435,6 +4592,10 @@ export function MessageList() {
       }
     }
     if (reserve <= 0.5) return;
+    if (pointerScrollOwnershipActive) {
+      reserveHeldScrollbarRange(reserve);
+      return;
+    }
 
     preserveCurrentBottomTarget();
     captureActivityExitSummaryAnchor();
@@ -4614,6 +4775,10 @@ export function MessageList() {
     options?: { captureSummary?: boolean }
   ) {
     if (!containerRef || reserve <= 0.5) return;
+    if (pointerScrollOwnershipActive) {
+      reserveHeldScrollbarRange(reserve);
+      return;
+    }
 
     const collapseTarget =
       targetScrollTop ??
@@ -4808,7 +4973,8 @@ export function MessageList() {
         }
       }
     }
-    if (animated) {
+    if (pointerScrollOwnershipActive) reserveHeldScrollbarRange(reserve);
+    else if (animated) {
       activityExitBottomTarget ??= containerRef.scrollTop;
       captureActivityExitSummaryAnchor();
       if (activityExitSummaryAnchor) {
@@ -4817,6 +4983,16 @@ export function MessageList() {
       }
       setActivityExitBottomReserve((current) => current + reserve);
     } else reserveBottomCollapseSpace(reserve);
+  }
+
+  // A held thumb owns scrolling, and a downward drag leaves bottom-follow pinned. Keep only the
+  // range a collapse removes: an exit target or summary anchor armed here would capture the grab
+  // position and restore it against the drag, then again after release.
+  function reserveHeldScrollbarRange(reserve: number) {
+    // At the top, removed flow content cannot clamp the thumb backward.
+    if (!containerRef || reserve <= 0.5 || containerRef.scrollTop <= 0) return;
+    appendBottomReserveTarget = Math.max(appendBottomReserveTarget, containerRef.scrollTop);
+    setAppendBottomReserve((current) => current + reserve);
   }
 
   function clearActivityExitReserve() {
@@ -6026,14 +6202,15 @@ export function MessageList() {
     return false;
   }
 
-  function handleKeyDown(event: KeyboardEvent) {
-    if (event.defaultPrevented) return;
+  function isTranscriptScrollKey(event: KeyboardEvent) {
+    if (event.defaultPrevented) return false;
     const target = event.target;
-    if (!containerRef || !(target instanceof Element) || !containerRef.contains(target)) return;
+    if (!containerRef || !(target instanceof Element) || !containerRef.contains(target))
+      return false;
     if (
       target.closest('input, textarea, select, [contenteditable]:not([contenteditable="false"])')
     ) {
-      return;
+      return false;
     }
     // Space activates interactive controls instead of scrolling the list; arming scroll
     // ownership for it would misattribute later programmatic scrolls to user input.
@@ -6042,7 +6219,7 @@ export function MessageList() {
       target !== containerRef &&
       target.closest('button, a, label, summary, [role="button"], [role="tab"], [role="option"]')
     ) {
-      return;
+      return false;
     }
     if (
       event.key !== 'ArrowUp' &&
@@ -6053,8 +6230,25 @@ export function MessageList() {
       event.key !== 'End' &&
       event.key !== ' '
     ) {
-      return;
+      return false;
     }
+    return true;
+  }
+
+  function handleKeyDownCapture(event: KeyboardEvent) {
+    if (!isTranscriptScrollKey(event)) return;
+    if (window.innerWidth !== lastHostViewportWidth || widthResizeActive) {
+      // Host reflow can precede its resize notification. Align mounted rows before
+      // the key establishes a destination, not in a later frame that reverses it.
+      measureVisibleItems();
+    }
+    if (rowHeightCorrectionFrame) cancelAnimationFrame(rowHeightCorrectionFrame);
+    flushRowHeightCorrections();
+  }
+
+  function handleKeyDown(event: KeyboardEvent) {
+    if (!isTranscriptScrollKey(event) || !containerRef) return;
+    const target = event.target;
     pendingExpansionScrollAnchor = null;
     historyAnchorSettleOwner = null;
     if (stickyNavigationOwnsScroll()) cancelStickyNavigation();
@@ -6287,8 +6481,11 @@ export function MessageList() {
         : null;
     const expandsActiveActivity =
       !!activityKey && control.getAttribute('aria-expanded') === 'false';
+    const expandsToolDetails =
+      control.matches('.tool-invocation-header') &&
+      control.getAttribute('aria-expanded') === 'false';
     const resumeBottomFollow =
-      (expandsCompactActivity || expandsActiveActivity) &&
+      (expandsCompactActivity || expandsActiveActivity || expandsToolDetails) &&
       (autoScroll() || pinnedToBottom || followModeLocked);
     const expansionAnchor = captureExpansionScrollAnchor({
       anchor,
@@ -6679,6 +6876,7 @@ export function MessageList() {
     containerRef.addEventListener('pointerdown', handlePointerDown);
     document.addEventListener('click', handleExternalLayoutClickCapture, true);
     document.addEventListener('keydown', handleKeyDown);
+    document.addEventListener('keydown', handleKeyDownCapture, true);
     document.addEventListener('pointerup', releasePointerScrollOwnership);
     document.addEventListener('pointercancel', releasePointerScrollOwnership);
     lastContainerClientHeight = containerRef.clientHeight;
@@ -6830,8 +7028,15 @@ export function MessageList() {
         scheduleStickyPreviewViewportState(containerRef.scrollTop, currentContainerClientHeight);
       }
       if (trackChanged || containerHeightChanged || widthChanged) {
-        if (trackChanged && shouldCorrectBottomAfterResize()) {
-          performScroll({ force: true });
+        const localViewportShrinking =
+          containerHeightDelta < -0.5 && !hostViewportResizing && !widthChanged;
+        if ((trackChanged || localViewportShrinking) && shouldCorrectBottomAfterResize()) {
+          // Composer growth removes viewport space, so keep the bottom aligned before paint.
+          // Transcript growth and host reflow retain their normal follow motion.
+          performScroll({
+            force: true,
+            immediate: localViewportShrinking,
+          });
           if (widthChanged && widthResizeActive) {
             pendingWidthFollowCorrection = true;
           } else {
@@ -6855,6 +7060,7 @@ export function MessageList() {
       containerRef?.removeEventListener('pointerdown', handlePointerDown);
       document.removeEventListener('click', handleExternalLayoutClickCapture, true);
       document.removeEventListener('keydown', handleKeyDown);
+      document.removeEventListener('keydown', handleKeyDownCapture, true);
       document.removeEventListener('pointerup', releasePointerScrollOwnership);
       document.removeEventListener('pointercancel', releasePointerScrollOwnership);
       window.removeEventListener('resize', handleHostViewportResize);
@@ -6904,18 +7110,20 @@ export function MessageList() {
     if (wasMeasuring === measuring) return measuring;
 
     queueMicrotask(() => {
-      if (shouldMeasureRows() !== measuring) return;
+      if (disposed || shouldMeasureRows() !== measuring) return;
+      const rows: Array<{ element: HTMLDivElement; messageId: string }> = [];
       for (const [messageId, row] of mountedMessageRows) {
         if (measuring) {
           if (!row.isConnected) continue;
-          measureMountedRow(row, messageId);
-          if (row.isConnected && mountedMessageRows.get(messageId) === row) {
-            measuredRowObserver?.observe(row);
+          if (!row.classList.contains('interactive-item-virtual-placeholder')) {
+            rows.push({ element: row, messageId });
           }
+          measuredRowObserver?.observe(row);
         } else {
           measuredRowObserver?.unobserve(row);
         }
       }
+      if (measuring) measureMountedRows(rows);
     });
     return measuring;
   });
@@ -7227,14 +7435,10 @@ export function MessageList() {
       }
       if (shouldAlignNewTurn && startNewTurnAlignment(sessionId, targetMessageId)) return;
       if (startPendingAppendScrollTransition(sessionId)) return;
-      // Distant navigation must not traverse the entire history at streaming speed.
-      // Nearby returns and subsequent bottom growth still use the normal follower.
+      // Explicit returns jump immediately; sends and subsequent growth keep normal easing.
       performScroll({
         force: true,
-        immediate:
-          !targetMessageId &&
-          !!containerRef &&
-          distanceFromBottom() > containerRef.clientHeight * 4,
+        immediate: !targetMessageId,
       });
       startFollowLoop(sessionId);
     });
@@ -7489,48 +7693,6 @@ export function MessageList() {
         getTrailingFileEventSignatureSegment(tail, history.trailingSignature).result
       );
     });
-  });
-  const trailingAssistantTurn = createMemo(() => {
-    messageInfoVersion();
-    const visibleMessages = messages();
-    let userMessageId: string | null = null;
-
-    for (let index = visibleMessages.length - 1; index >= 0; index -= 1) {
-      const { info, parts } = visibleMessages[index]!;
-      if (info.role === 'user') {
-        // Automatic notices and metadata-only arrivals do not start a new turn.
-        // Switching away and back would requeue already-visible assistant content.
-        if (
-          !isSessionResumeMessage(parts) &&
-          !hasUserMessageContent(parseUserMessageContent(parts))
-        )
-          continue;
-        userMessageId = info.id;
-        break;
-      }
-      if (info.mode !== 'subagent') {
-        userMessageId = info.parentID;
-        break;
-      }
-    }
-
-    if (!userMessageId) return null;
-
-    const assistantMessageIds = new Set<string>();
-    let latestAssistant: AssistantMessage | null = null;
-    for (const entry of visibleMessages) {
-      if (
-        entry.info.role !== 'assistant' ||
-        entry.info.mode === 'subagent' ||
-        entry.info.parentID !== userMessageId
-      ) {
-        continue;
-      }
-      assistantMessageIds.add(entry.info.id);
-      latestAssistant = entry.info;
-    }
-
-    return { userMessageId, assistantMessageIds, latestAssistant };
   });
   const trailingTurnInlineEditRetention = createMemo<{
     sessionId: string | null;
@@ -7917,8 +8079,20 @@ export function MessageList() {
   );
 
   const presentationMessages = createMemo(() => {
-    const ids = trailingAssistantTurn()?.assistantMessageIds;
-    return compactActivityMessages().filter((message) => ids?.has(message.info.id));
+    const turn = trailingAssistantTurn();
+    let inTurn = false;
+    return compactActivityMessages().filter((message) => {
+      const isTurnAssistant = turn?.assistantMessageIds.has(message.info.id) ?? false;
+      if (message.info.id === turn?.userMessageId || isTurnAssistant) inTurn = true;
+      // Compaction paints outside assistant rows, but still ends preceding activity previews.
+      // Keep it in transcript order without replacing the real prompt's presentation identity.
+      return (
+        isTurnAssistant ||
+        (inTurn &&
+          message.info.role === 'user' &&
+          message.parts.some((part) => part.type === 'compaction'))
+      );
+    });
   });
   const presentationActivityGroups = createMemo(() =>
     getAssistantActivityGroupMap(presentationMessages(), canCompactActivityPart, (part) =>
@@ -8016,6 +8190,16 @@ export function MessageList() {
             partId: part.id,
             kind: 'activity',
             running: isAssistantActivityPartRunning(part),
+            animateExit: part.type === 'reasoning',
+            startedAt:
+              part.type === 'tool' && part.state.status === 'running'
+                ? part.state.time.start
+                : undefined,
+            durationMs:
+              part.type === 'tool' &&
+              (part.state.status === 'completed' || part.state.status === 'error')
+                ? Math.max(0, part.state.time.end - part.state.time.start)
+                : undefined,
             active: (part.type === 'reasoning'
               ? activeActivityMessageIds()
               : activeToolActivityMessageIds()
@@ -8077,9 +8261,11 @@ export function MessageList() {
     const activeMessageIds = segment.activeMessageIds();
     const streaming = segment.streaming();
     const isBoundaryPart = (part: Part) =>
-      part.type === 'text'
-        ? hasVisibleProjectedText(part, streaming)
-        : shouldShowAssistantPartInline(part);
+      isAssistantActivityPart(part) && segment.canCompact(part)
+        ? false
+        : part.type === 'text'
+          ? hasVisibleProjectedText(part, streaming)
+          : shouldShowAssistantPartInline(part);
     const isNormallyIncluded = (part: AssistantActivityPart) =>
       segment.canCompact(part) &&
       !segment.hiddenParts().has(getPresentationPartKey(part)) &&
@@ -9314,6 +9500,30 @@ export function MessageList() {
     state.messagesLoading ||
     (!!state.activeSessionId && initialPositioningSessionId() === state.activeSessionId);
 
+  // These renderer-local marks include the existing geometry/viewport-fill hold.
+  // They observe readiness without shortening it or taking scroll ownership.
+  let measuredHydration = false;
+  createEffect(() => {
+    const hydrating = hydratingSession();
+    // oxlint-disable-next-line anti-slop/no-runtime-typeof -- Test renderers may omit the browser Performance Timeline API.
+    if (typeof performance.mark !== 'function' || typeof performance.measure !== 'function') return;
+    if (hydrating && !measuredHydration) {
+      performance.clearMarks('varro.transcript.hydration-start');
+      performance.clearMarks('varro.transcript.ready');
+      performance.clearMeasures('varro.transcript.hydration');
+      performance.mark('varro.transcript.hydration-start');
+      measuredHydration = true;
+    } else if (!hydrating && measuredHydration) {
+      performance.mark('varro.transcript.ready');
+      performance.measure(
+        'varro.transcript.hydration',
+        'varro.transcript.hydration-start',
+        'varro.transcript.ready'
+      );
+      measuredHydration = false;
+    }
+  });
+
   return (
     <div class="interactive-list-shell min-h-0 flex-1">
       <Show when={hydratingSession()}>
@@ -9511,7 +9721,10 @@ export function MessageList() {
                 <LoadingRow
                   compacting={isSessionCompacting()}
                   waiting={waitingForBackground()}
+                  toolsRunning={waitingForTools()}
                   waitingStartedAt={backgroundWorkStartedAt()}
+                  turnStartedAt={loadingTurnStartedAt()}
+                  elapsedStartedAt={loadingElapsedStartedAt()}
                   visible={!state.messagesLoading && showLoadingRow()}
                 />
               </Show>

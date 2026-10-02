@@ -52,7 +52,7 @@ object ApiRoutes {
 
     /** Session sub-resources that accept a POST action. */
     private val SESSION_ACTIONS = setOf(
-        "abort", "fork", "prompt_async", "revert", "summarize", "unrevert", "init", "command",
+        "abort", "fork", "prompt_async", "resume-steering", "revert", "summarize", "unrevert", "init", "command",
     )
 
     /**

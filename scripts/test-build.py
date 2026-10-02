@@ -30,13 +30,22 @@ args = sys.argv[1:]
 with open("docker-calls.jsonl", "a") as log:
     log.write(json.dumps(args) + "\n")
 if args[:2] == ["buildx", "inspect"]:
+    if "--format" in args:
+        print("unknown flag: --format", file=sys.stderr)
+        sys.exit(125)
     if os.environ.get("DRIVER"):
-        print(os.environ["DRIVER"])
+        driver = os.environ["DRIVER"]
     elif Path("builder-created").exists():
-        print("docker-container")
+        driver = "docker-container"
     else:
         sys.exit(1)
+    print("Name:          varro-openjet")
+    print("Driver:        " + driver)
+    print("\nNodes:\nName:          varro-openjet0")
 elif args[:2] == ["buildx", "create"]:
+    if os.environ.get("DRIVER") or Path("builder-created").exists():
+        print('existing instance for "varro-openjet" but no append mode', file=sys.stderr)
+        sys.exit(1)
     Path("builder-created").touch()
 elif args[:2] == ["image", "inspect"]:
     print("outdated")
@@ -82,6 +91,15 @@ elif args[:2] == ["compose", "run"]:
                 result, calls = self.run_build(**{failure: "42", "PRUNE_EXIT": "3"})
                 self.assertEqual(result.returncode, 42, result.stderr)
                 self.assertEqual(calls[-1][:2], ["buildx", "prune"])
+
+    def test_existing_builder_is_reused_without_unsupported_inspect_flags(self):
+        result, calls = self.run_build(DRIVER="docker-container")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn(["buildx", "inspect", "varro-openjet"], calls)
+        self.assertFalse(any(call[:2] == ["buildx", "create"] for call in calls))
+        self.assertIn(["compose", "--progress", "plain", "build", "--builder", "varro-openjet", "shell"], calls)
+        self.assertIn(["compose", "run", "--rm", "dev"], calls)
+        self.assertEqual(sum(call[:2] == ["buildx", "prune"] for call in calls), 2)
 
     def test_prune_without_builder_does_not_create_or_build(self):
         result, calls = self.run_build("prune")

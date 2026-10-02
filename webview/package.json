@@ -26,15 +26,15 @@
     "solid-js": "1.9.15"
   },
   "devDependencies": {
-    "@types/node": "26.6.3",
+    "@types/node": "26.6.4",
     "@tailwindcss/vite": "4.3.3",
     "iconoir": "7.12.1",
     "material-icon-theme": "5.38.1",
     "tailwindcss": "4.3.3",
     "typescript": "7.0.2",
-    "vite": "8.3.1",
+    "vite": "8.3.2",
     "vite-plugin-solid": "2.11.14",
-    "vitest": "5.0.2"
+    "vitest": "5.0.3"
   },
   "volta": {
     "node": "24.21.0",

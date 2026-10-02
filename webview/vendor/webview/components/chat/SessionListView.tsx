@@ -58,7 +58,7 @@ import { setManualWorkspaceSelection } from '../../lib/app-state';
 import { requestWorkspaceSelection } from '../../lib/workspace-selection';
 import { ralphStore } from '../../lib/stores/ralph-store';
 import { isEmptySession, shouldHideEmptySessionFromList } from '../../lib/empty-session';
-import { formatEditCount, formatModelName, formatVariantLabel } from '../../lib/format';
+import { formatEditCount, formatVariantLabel } from '../../lib/format';
 import { formatDuration, formatRelativeAge, formatTurnCost } from '../../lib/message-metrics';
 import { getProviderIcon } from '../../lib/provider-icons';
 import { compareSessionsByActivity, compareSessionsForDisplay } from '../../lib/session-order';
@@ -85,7 +85,11 @@ import { SharedSessionIcon } from './SharedSessionIcon';
 import { isNumber, isString, type UnknownRecord, isObject } from '../../lib/runtime-values';
 import { UiIcon } from '../UiIcon';
 import { FolderIcon } from '../FolderIcon';
-import { getWorkspaceCompactLabel, WorkspacePicker } from '../chat-input/ToolbarPickers';
+import {
+  FormattedModelName,
+  getWorkspaceCompactLabel,
+  WorkspacePicker,
+} from '../chat-input/ToolbarPickers';
 import { Tooltip } from '../Tooltip';
 import { sessionDiffSummaries } from './session-diff-summaries';
 
@@ -2234,7 +2238,7 @@ function SessionListItem(props: {
     const modelName = getModelDisplayName(
       model.providerID,
       model.id,
-      formatModelName(provider?.models[model.id]?.name || model.id)
+      provider?.models[model.id]?.name || model.id
     );
     const reasoningLabel = model.variant ? formatVariantLabel(model.variant) : 'Default';
     return {
@@ -2580,9 +2584,7 @@ function SessionListItem(props: {
             </Show>
             <Show when={props.tokens !== null}>
               {' · '}
-              <span title={`${props.tokens!.toLocaleString('en-US')} tokens spent`}>
-                {formatSessionTokens(props.tokens!)} tokens
-              </span>
+              <span>{formatSessionTokens(props.tokens!)} tokens</span>
             </Show>
             <Show when={workedDurationMs()}>
               {(durationMs) => (
@@ -2607,7 +2609,9 @@ function SessionListItem(props: {
             <Show when={modelDetails()}>
               {(details) => (
                 <span class="session-item-model-meta">
-                  {` · ${details().modelName} · ${details().reasoningLabel}`}
+                  {' · '}
+                  <FormattedModelName name={details().modelName} showFastTooltip={false} />
+                  {` · ${details().reasoningLabel}`}
                 </span>
               )}
             </Show>

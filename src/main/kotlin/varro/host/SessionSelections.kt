@@ -13,6 +13,7 @@ import kotlin.concurrent.withLock
 class SessionSelections(
     private val store: VarroStore,
     private val publishAgent: (String, String?, String?) -> Unit = { _, _, _ -> },
+    private val acknowledgeModel: (String, String) -> Unit = { _, _ -> },
     private val request: (String, String, JsonElement?, String?) -> JsonElement?,
 ) {
     private class SessionLock {
@@ -58,7 +59,8 @@ class SessionSelections(
         }
     }
 
-    fun updateModel(id: String, value: JsonElement?, directory: String?) = write(id) {
+    fun updateModel(id: String, value: JsonElement?, directory: String?, selectionId: String? = null) = write(id) {
+        require(selectionId == null || selectionId.isNotEmpty() && selectionId.length <= 128) { "Invalid model selection id" }
         if (value == null || value.isJsonNull) store.updateSessionModel(id, null)
         else {
             val selection = model(value) ?: error("Invalid session model")
@@ -67,6 +69,7 @@ class SessionSelections(
             }
             update(id, Json.obj("model" to stored), directory)
         }
+        selectionId?.let { acknowledgeModel(id, it) }
     }
 
     fun updateAgent(id: String, agent: String, directory: String?, selectionId: String? = null) = write(id) {

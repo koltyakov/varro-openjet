@@ -48,7 +48,9 @@ esac
 # An isolated builder lets us trim OpenJet's image layers without pruning other
 # projects. Never select it globally: every build/prune names it explicitly.
 BUILDER=varro-openjet
-BUILDER_DRIVER="$(docker buildx inspect "$BUILDER" --format '{{.Driver}}' 2>/dev/null || true)"
+# `buildx inspect` has no --format option. Read its top-level Driver field so an
+# existing builder is not mistaken for a missing one after a suppressed error.
+BUILDER_DRIVER="$(docker buildx inspect "$BUILDER" 2>/dev/null | sed -n 's/^Driver:[[:space:]]*//p' || true)"
 if [ -n "$BUILDER_DRIVER" ] && [ "$BUILDER_DRIVER" != "docker-container" ]; then
   echo "error: Docker builder '$BUILDER' must use the docker-container driver." >&2
   exit 1
