@@ -1,21 +1,22 @@
 import { createHash } from 'node:crypto';
-import { readFileSync, readdirSync } from 'node:fs';
+import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export function vendorHash(root, entries) {
   const hash = createHash('sha256');
   function visit(path, relative) {
+    if (!statSync(path).isDirectory()) {
+      hash.update(relative + '\0');
+      hash.update(readFileSync(path));
+      hash.update('\0');
+      return;
+    }
     for (const entry of readdirSync(path, { withFileTypes: true }).sort((a, b) =>
       a.name.localeCompare(b.name)
     )) {
       const name = `${relative}/${entry.name}`;
-      if (entry.isDirectory()) visit(join(path, entry.name), name);
-      else {
-        hash.update(name + '\0');
-        hash.update(readFileSync(join(path, entry.name)));
-        hash.update('\0');
-      }
+      visit(join(path, entry.name), name);
     }
   }
   for (const entry of entries) visit(join(root, entry.to), entry.to);

@@ -9,6 +9,10 @@
     {
       "from": "src/shared",
       "to": "vendor/shared"
+    },
+    {
+      "from": "assets/icon.png",
+      "to": "assets/icon.png"
     }
   ],
   "exclude": [
@@ -18,9 +22,9 @@
     "**/*.test-support.ts"
   ],
   "revision": {
-    "commit": "aadaead68b6a0bf44992465eeb03b18d6eee384c",
+    "commit": "9fb2498742b355c2372e5644faec056ba2216bc7",
     "localChanges": false,
-    "describedAt": "2026-10-02T08:16:35.992Z"
+    "describedAt": "2026-10-02T17:17:06.851Z"
   },
-  "sourceHash": "744cfea944c83943a1f0551430af412692ea53aed441ee94a1eaabcfc0916a31"
+  "sourceHash": "28a8955448c9d7cf8bbae489fdc86fbf78b7e250adf6c56860543feb2bfbbaee"
 }
