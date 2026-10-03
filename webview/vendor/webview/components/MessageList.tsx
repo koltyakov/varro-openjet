@@ -272,13 +272,20 @@ function getFontLayoutSignature(element: HTMLElement): string {
 }
 
 function getAssistantFlowSpacingForElements(elements: readonly Element[], gap: number): number {
+  const flow = elements[0]?.parentElement;
   return getAssistantFlowSpacingSize(
     elements.map((element) => ({
       startsBordered: element.classList.contains('assistant-flow-block-starts-bordered'),
       endsBordered: element.classList.contains('assistant-flow-block-ends-bordered'),
       permissionPrompt: element.classList.contains('permission-prompt'),
+      startsSummary: element.classList.contains('assistant-flow-block-starts-summary'),
     })),
-    gap
+    gap,
+    flow
+      ? Number.parseFloat(
+          getComputedStyle(flow).getPropertyValue('--assistant-summary-after-bordered-gap')
+        ) || 0
+      : 0
   );
 }
 
@@ -1113,7 +1120,11 @@ export function MessageList() {
   }));
   const visibleBlockingStreamingPart = createMemo(() => {
     const part = streamingPart();
-    const streamingText = (part && presentation.textForPart(part)) ?? state.streamingText;
+    // Arriving text groups the preceding tool preview before its first paced chunk paints.
+    // Count the queued text as visible so Thinking cannot flash for the frames between them.
+    const streamingText =
+      (part && (presentation.textForPart(part) || presentation.targetTextForPart(part))) ??
+      state.streamingText;
     return hasVisibleBlockingStreamingPart(streamingPart(), streamingText);
   });
   // History scans are tracked so they stay current whenever the untracked tail scan runs.
@@ -1679,6 +1690,7 @@ export function MessageList() {
   let loadingRowHiddenByVisibleStream = false;
   let loadingRowReservedForMessageHydration = false;
   let appendBottomReserveTarget = 0;
+  let appendReserveReconcileFrame = 0;
   let permissionRemovalBottomTarget: {
     createdAt: number;
     permissionIds: Set<string>;
@@ -1729,6 +1741,8 @@ export function MessageList() {
     const detachedAnchor = widthResizeCanOwnScroll()
       ? (pendingThinkingLayoutAnchor ?? widthResizeAnchor)
       : null;
+    // Account for pending rounding reductions before they shrink the physical scroll range.
+    reconcileAppendBottomReserve();
     let changed = false;
     for (const [element, correction] of pendingRowHeightCorrections) {
       if (!element.isConnected) continue;
@@ -4628,6 +4642,18 @@ export function MessageList() {
     const summaries = containerRef.querySelectorAll<HTMLElement>('.assistant-activity-summary');
     const summary = summaries[summaries.length - 1];
     if (!summary) return;
+    // A tray collapsing above a separate summary moves that summary up while the bottom reserve
+    // holds the viewport. Anchoring its old top would scroll the transcript back by the tray.
+    const flow = summary.closest('.assistant-message-flow');
+    const trayAboveSummary = [
+      ...(flow?.querySelectorAll<HTMLElement>(':scope > .assistant-active-activity-tray') ?? []),
+    ].some(
+      (tray) =>
+        tray.getClientRects().length > 0 &&
+        !tray.contains(summary) &&
+        (tray.compareDocumentPosition(summary) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0
+    );
+    if (trayAboveSummary) return;
     activityExitSummaryAnchor = {
       sessionId,
       element: summary,
@@ -4820,8 +4846,11 @@ export function MessageList() {
       }
       activityExitBottomTarget = null;
       reconcileAppendBottomReserve();
-      setPreservedScrollTop(collapseTarget);
-      lastAutoScrolledBottomScrollTop = collapseTarget;
+      // Coalescing groups can finish while a retained summary still owns the viewport.
+      // Do not jump to the collapse target and let that owner undo it on the next frame.
+      if (activityExitSummaryAnchor) restoreActivityExitSummaryAnchor(activityExitSummaryAnchor);
+      else setPreservedScrollTop(collapseTarget);
+      lastAutoScrolledBottomScrollTop = containerRef.scrollTop;
       const sessionId = state.activeSessionId;
       if (sessionId) startFollowLoop(sessionId);
     });
@@ -5171,10 +5200,49 @@ export function MessageList() {
 
   function reconcileAppendBottomReserve() {
     if (!containerRef) return;
+    // Diff-view replacement owns the new physical bottom, not the previous painted target.
+    // Its settling loop clears reserves; deferred rounding must not recreate one between frames.
+    if (
+      inlinePreviewBottomFollow?.sessionId === state.activeSessionId &&
+      inlinePreviewBottomFollow?.inputEpoch === directScrollInputEpoch
+    ) {
+      return;
+    }
     const reserve = untrack(appendBottomReserve);
-    if (reserve <= 0) return;
+    // Deferred row rounding can still remove height from an entering replacement tool, or from a
+    // row whose tray just collapsed under a fixed exit target. Keep that space until the
+    // correction lands so neither consuming reserve nor the correction can clamp the viewport.
+    let pendingHeightReduction = 0;
+    for (const [element, correction] of pendingRowHeightCorrections) {
+      if (element.isConnected)
+        pendingHeightReduction += Math.max(
+          0,
+          (appliedRowHeightCorrections.get(element) ?? 0) - correction
+        );
+    }
+    if (reserve <= 0) {
+      // Replacement growth can consume the last reserve before the next rounding write.
+      // Keep the painted bottom reachable even when there is no existing spacer to grow.
+      if (
+        pendingHeightReduction <= 0 ||
+        !autoScroll() ||
+        !pinnedToBottom ||
+        stickyNavigationOwnsScroll() ||
+        pointerScrollOwnershipActive
+      ) {
+        return;
+      }
+      appendBottomReserveTarget = containerRef.scrollTop;
+    }
     // Exit space temporarily overlaps the departing tray; it is not replacement content.
-    if (activityExitBottomTarget !== null || untrack(exitingActivityPartKeys).size > 0) return;
+    if (activityExitBottomTarget !== null || untrack(exitingActivityPartKeys).size > 0) {
+      if (activityExitBottomTarget === null || pendingHeightReduction <= 0) return;
+      const shortfall =
+        activityExitBottomTarget -
+        (containerRef.scrollHeight - containerRef.clientHeight - pendingHeightReduction);
+      if (shortfall > 0) setAppendBottomReserve(reserve + Math.ceil(shortfall));
+      return;
+    }
     if (
       activityExitSummaryAnchor &&
       isLoading() &&
@@ -5188,18 +5256,12 @@ export function MessageList() {
 
     // A short transcript also needs reserve for the space below its natural content.
     // Clamping this to zero drops that space before an entering block has grown into it.
-    // Deferred row rounding can still remove height from an entering replacement tool. Keep that
-    // space until the correction lands so consuming the final reserve cannot clamp the viewport.
-    let pendingHeightReduction = 0;
-    for (const [element, correction] of pendingRowHeightCorrections) {
-      if (element.isConnected)
-        pendingHeightReduction += Math.max(
-          0,
-          (appliedRowHeightCorrections.get(element) ?? 0) - correction
-        );
-    }
     const unreservedBottom =
       containerRef.scrollHeight - reserve - containerRef.clientHeight - pendingHeightReduction;
+    if (autoScroll() && pinnedToBottom && !stickyNavigationOwnsScroll()) {
+      // A newer follow position is a lower bound, including while deferred rounding settles.
+      appendBottomReserveTarget = Math.max(appendBottomReserveTarget, containerRef.scrollTop);
+    }
     const nextReserve = Math.max(0, Math.ceil(appendBottomReserveTarget - unreservedBottom));
     if (Math.abs(nextReserve - reserve) <= 0.5) return;
     setAppendBottomReserve(nextReserve);
@@ -5335,6 +5397,12 @@ export function MessageList() {
   }
 
   function startPendingAppendScrollTransition(sessionId: string) {
+    if (activityExitBottomTarget !== null || activityExitSummaryAnchor) {
+      // New assistant steps must not restore an append anchor or animate the viewport
+      // against the current activity-collapse owner. Real response growth releases it.
+      cancelAppendScrollTransition();
+      return false;
+    }
     if (appendScrollSessionId === sessionId && appendScrollRafId) {
       pendingMeasuredAppendScroll = false;
       const appendAnchor = pendingMeasuredAppendAnchor;
@@ -6998,7 +7066,14 @@ export function MessageList() {
       } else if (containerHeightDelta < -0.5) {
         consumeBottomReserve(-containerHeightDelta);
       }
-      if (trackChanged) reconcileAppendBottomReserve();
+      if (trackChanged && !appendReserveReconcileFrame) {
+        // Consuming a reserve changes the observed track itself. A microtask still runs
+        // inside resize delivery, so coalesce that write into the next animation frame.
+        appendReserveReconcileFrame = requestAnimationFrame(() => {
+          appendReserveReconcileFrame = 0;
+          if (!disposed) reconcileAppendBottomReserve();
+        });
+      }
       if (trackChanged && shouldMeasureRows() && !autoScroll()) {
         setTrackLayoutVersion((version) => version + 1);
       }
@@ -7082,6 +7157,8 @@ export function MessageList() {
       measuredRowObserver = null;
       if (rowHeightCorrectionFrame) cancelAnimationFrame(rowHeightCorrectionFrame);
       rowHeightCorrectionFrame = 0;
+      if (appendReserveReconcileFrame) cancelAnimationFrame(appendReserveReconcileFrame);
+      appendReserveReconcileFrame = 0;
       pendingRowHeightCorrections.clear();
       mountedMessageRows.clear();
       clearObservedVisibleMessages();
@@ -7280,6 +7357,8 @@ export function MessageList() {
     cancelWidthResize();
     setHasBootstrappedVirtualization(false);
     setAppendBottomReserve(0);
+    if (appendReserveReconcileFrame) cancelAnimationFrame(appendReserveReconcileFrame);
+    appendReserveReconcileFrame = 0;
     clearActivityExitReserve();
     appendBottomReserveTarget = 0;
     newTurnReserveSessionId = null;
