@@ -53,11 +53,12 @@
 
     <change-notes><![CDATA[
         <h3>0.7.0</h3>
-        <p>Synced Varro 0.31.3 through d747067e9e59. Added Kotlin-generated image thumbnails,
+        <p>Synced Varro 0.31.3 through a74977a91f3f. Added Kotlin-generated image thumbnails,
             on-demand original attachment loading, and deferred reasoning and general-tool details.
             Previews support PNG, JPEG, GIF and WebP with orientation correction, transparency,
             bounded memory caching and cancellation. New chats remember the last selected model
-            across views and shared IDE settings. Improved long-history loading and rendering.</p>
+            across views and shared IDE settings. Improved long-history loading and rendering.
+            Syntax highlighting now runs in a lazy worker to keep the chat responsive.</p>
         <h3>0.6.2</h3>
         <p>Synced Varro 0.31.2 through 1c8c8934af8a. Fixed transcript jumps and Thinking flashes
             during streaming. Improved prompt navigation highlights and empty-chat hints in narrow

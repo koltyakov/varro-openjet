@@ -38,6 +38,7 @@ export default defineConfig({
   base: './',
   define: { __VARRO_PLUGIN_VERSION__: JSON.stringify(pluginVersion) },
   plugins: [solid(), tailwindcss(), assetVersionPlugin],
+  worker: { format: 'iife' },
   build: {
     // Emitted straight into the plugin's resources; `processResources` then
     // packages it like any other static asset.

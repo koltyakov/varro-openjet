@@ -67,6 +67,7 @@ import { AttachmentLabel } from '../AttachmentLabel';
 import { ImagePreviewOverlay, createImagePreviewEffect } from '../ImagePreview';
 import type { PreviewImage } from '../ImagePreview';
 import { MarkdownRenderer, renderCodeBlockHtml } from '../MarkdownRenderer';
+import { CodeHighlightBinding } from '../../lib/code-highlight-binding';
 import type { MarkdownInlineSlot } from '../MarkdownRenderer';
 import { getPdfDataUrlSize } from '../../../shared/native-pdf';
 import { FileTypeIcon } from '../FileTypeIcon';
@@ -1459,6 +1460,9 @@ function UserMessageTextContent(props: {
 }
 
 function UserMessageCodeBlock(props: { content: string; language?: string }) {
+  // oxlint-disable-next-line no-unassigned-vars -- Solid assigns the JSX ref before effects run.
+  let root!: HTMLDivElement;
+  const highlights = new CodeHighlightBinding();
   const html = createMemo(() =>
     renderCodeBlockHtml({
       text: props.content,
@@ -1467,7 +1471,12 @@ function UserMessageCodeBlock(props: { content: string; language?: string }) {
       showCopyButton: false,
     })
   );
-  return <div innerHTML={html()} />;
+  createEffect(() => {
+    html();
+    highlights.reconcile([root], 1);
+  });
+  onCleanup(() => highlights.dispose());
+  return <div ref={root} innerHTML={html()} />;
 }
 
 function InlineAttachmentText(props: {
