@@ -155,6 +155,9 @@ internal object OpenCodeV2Projection {
                     val toolID = content.str("id")
                     val source = content.obj("state") ?: Json.obj()
                     val state = source.deepCopy()
+                    // Native content is represented by output and attachments below. Keeping the
+                    // alias would send full image bodies even after the host defers attachments.
+                    state.remove("content")
                     if (source.str("status") == "streaming") {
                         state.addProperty("status", "pending"); state.add("raw", source.get("input")); state.add("input", Json.obj())
                     } else {

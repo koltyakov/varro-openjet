@@ -5,6 +5,7 @@ import com.google.gson.JsonElement
 import com.google.gson.JsonNull
 import com.google.gson.JsonObject
 import com.intellij.openapi.diagnostic.logger
+import com.intellij.openapi.components.service
 import com.intellij.openapi.project.Project
 import varro.protocol.Json
 import varro.protocol.asArrayOrNull
@@ -56,6 +57,9 @@ class RestProxy(
 ) {
     private val log = logger<RestProxy>()
     private val modelPricing = ModelPricingCatalog()
+    private val contentReader by lazy { MessageContentReader(service<ImageThumbnails>()) { path, options ->
+        server.transport.request("GET", path, options = options).data
+    } }
 
     /** In-flight requests, keyed by the webview's cancel key. */
     private val activeRequests = ConcurrentHashMap<String, AtomicBoolean>()
@@ -169,11 +173,22 @@ class RestProxy(
     private fun forward(method: String, path: String, body: JsonElement?, queuedDispatch: Boolean = false, isCancelled: () -> Boolean = { false }): JsonElement? {
         val request = ApiRoutes.parse(method, path)
 
-        if (method == "GET" && request != null && Regex("^/session/[^/]+/message$").matches(request.pathname) && request.query.containsKey("limit")) {
+        if (method == "GET" && request != null && request.segments.size == 6 &&
+            request.segments[0] == "session" && request.segments[2] == "message" && request.segments[4] == "part") {
+            return readContent(request, isCancelled)
+        }
+
+        if (method == "GET" && request != null && Regex("^/session/[^/]+/message$").matches(request.pathname)) {
+            val directory = request.query["directory"]?.firstOrNull()
+                ?: body.asObjectOrNull().str("workspaceDirectory") ?: server.workspaceDirectory()
             val response = server.transport.request(method, path, options = RequestOptions(
-                directory = body.asObjectOrNull().str("workspaceDirectory"), captureNextCursor = true, isCancelled = isCancelled,
+                directory = directory, captureNextCursor = true, isCancelled = isCancelled,
+                maxResponseBytes = 256L * 1024 * 1024,
             ))
-            return Json.obj("items" to response.data).apply { response.nextCursor?.let { addProperty("nextCursor", it) } }
+            val messages = MessageContent.messages(response.data, directory)
+            return if (request.query.containsKey("limit")) Json.obj("items" to messages).apply {
+                response.nextCursor?.let { addProperty("nextCursor", it) }
+            } else messages
         }
 
         // `GET /session?limit=` is a paginated read in the client's contract even
@@ -183,6 +198,13 @@ class RestProxy(
         }
 
         return server.transport.request(method = method, path = path, body = body, options = RequestOptions(isCancelled = isCancelled)).data
+    }
+
+    private fun readContent(request: ApiRoutes.Request, isCancelled: () -> Boolean): JsonElement {
+        val sessionID = request.segments[1]
+        require(sessionID !in store.hiddenSessionIds) { "404 Session not found" }
+        val directory = request.query["directory"]?.firstOrNull() ?: server.workspaceDirectory()
+        return contentReader.read(request, directory, server.url(), isCancelled)
     }
 
     /**

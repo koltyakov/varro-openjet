@@ -336,6 +336,10 @@ object ApiRoutes {
         route("/session/:id/message/:messageId") { request, _ ->
             request.method == "DELETE" && request.optionalDirectory()
         },
+        route("/session/:id/message/:messageId/part/:partId") { request, _ ->
+            request.method == "GET" && request.withOptionalDirectory("view") &&
+                (request.query["view"] == null || request.query["view"] == listOf("thumbnail"))
+        },
         route("/session/:id/todo") { request, _ ->
             request.method == "GET" && request.optionalDirectory()
         },

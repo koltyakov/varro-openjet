@@ -10,6 +10,7 @@ import {
   isSessionAwaitingInput,
   isSessionCompletedResponseUnread,
   isSessionUnread,
+  getSessionPlanUpdatedAt,
   isSkippedPlanSession,
   markSessionSeen,
   setPersistentShowSessionPicker as setShowSessionPicker,
@@ -1358,7 +1359,10 @@ export function SessionListView(props: {
             case 'completed':
               return isSessionCompletedResponseUnread(session.id);
             case 'plan-ready':
-              return isSessionUnread(session.id, session.time.updated);
+              return isSessionUnread(
+                session.id,
+                getSessionPlanUpdatedAt(session.id, session.time.updated)
+              );
             case 'failed':
               return isSessionFailureUnread(session.id);
             default:
@@ -2186,7 +2190,11 @@ function SessionListItem(props: {
   const status = () => state.sessionStatus[props.session.id];
   const hasUnreadCompletion = () =>
     props.isNewlyCompleted ||
-    (props.isCompletedPlanSession && isSessionUnread(props.session.id, props.session.time.updated));
+    (props.isCompletedPlanSession &&
+      isSessionUnread(
+        props.session.id,
+        getSessionPlanUpdatedAt(props.session.id, props.session.time.updated)
+      ));
   const hasUnreadFailure = () => props.isFailed && isSessionFailureUnread(props.session.id);
   const hasPendingInput = () =>
     props.hasPermissionRequest || props.hasQuestionRequest || props.needsAttention;
@@ -2736,18 +2744,16 @@ export function deriveSessionIndicators(sessions: typeof state.sessions): Sessio
   const descendantSubagentCountBySession = new Map<string, number>();
   const isManuallyStoppedRalphManager = (sessionId: string) =>
     ralphManagerManualStopIds.has(sessionId);
-  const isAwaitingInput = (sessionId: string) =>
-    permissionIds.has(rootSessionId(sessionId)) || questionIds.has(rootSessionId(sessionId));
   const isFailed = (sessionId: string) => {
     if (isManuallyStoppedRalphManager(sessionId)) return false;
     if (hasActiveUsageLimit(sessionId)) return true;
     return state.sessionStatus[sessionId]?.type !== 'busy' && failedSessionIds.has(sessionId);
   };
-  const isRunning = (sessionId: string) => {
+  const isRunning = (sessionId: string, rootId: string) => {
     if (hasActiveUsageLimit(sessionId)) return false;
-    if (isAwaitingInput(sessionId)) return false;
-    if (questionResponsePendingIds.has(rootSessionId(sessionId))) return true;
-    const ralphRun = ralphStore.getRun(rootSessionId(sessionId));
+    if (permissionIds.has(rootId) || questionIds.has(rootId)) return false;
+    if (questionResponsePendingIds.has(rootId)) return true;
+    const ralphRun = ralphStore.getRun(rootId);
     if (ralphRun && ralphRun.status !== 'running') return false;
     const type = state.sessionStatus[sessionId]?.type;
     return (
@@ -2780,8 +2786,8 @@ export function deriveSessionIndicators(sessions: typeof state.sessions): Sessio
     const displaySessionId = rootSessionId(sessionId);
     const failed = isFailed(sessionId);
     const hasPrompt = permissionIds.has(displaySessionId) || questionIds.has(displaySessionId);
-    const needsAttention = !failed && (hasPrompt || isAwaitingInput(sessionId));
-    const running = !needsAttention && isRunning(sessionId);
+    const needsAttention = !failed && hasPrompt;
+    const running = !needsAttention && isRunning(sessionId, displaySessionId);
 
     if (failed) {
       if (!isManuallyStoppedRalphManager(displaySessionId)) {
@@ -2811,7 +2817,10 @@ export function deriveSessionIndicators(sessions: typeof state.sessions): Sessio
     if (selectedAgent === 'plan') {
       // An empty session cannot contain a plan; the plan agent may have been
       // registered for it merely by selecting the session in the list.
-      if (!isEmptySession(session) && !isSkippedPlanSession(sessionId, session.time.updated)) {
+      if (
+        !isEmptySession(session) &&
+        !isSkippedPlanSession(sessionId, getSessionPlanUpdatedAt(sessionId, session.time.updated))
+      ) {
         planReadyIds.add(sessionId);
       }
       continue;

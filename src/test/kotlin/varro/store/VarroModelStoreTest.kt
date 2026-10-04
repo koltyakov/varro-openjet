@@ -8,6 +8,14 @@ import org.junit.Test
 import varro.protocol.*
 
 class VarroModelStoreTest {
+    @Test fun `last model persists and stale unrelated preference updates do not overwrite it`() {
+        val base = Json.obj("lastSelectedModel" to Json.obj("providerID" to "one", "modelID" to "first", "variant" to "high"))
+        val store = VarroModelStore().apply { modelPreferences = base }
+        val next = Json.obj("providerID" to "two", "modelID" to "second")
+        store.update(base, base.deepCopy().apply { add("lastSelectedModel", next) })
+        store.update(base, base.deepCopy().apply { add("pinnedModels", Json.array(listOf("one:first"))) })
+        assertEquals(next, restore(store).modelPreferences.obj("lastSelectedModel"))
+    }
     @Test
     fun `model preferences are application scoped`() {
         assertArrayEquals(arrayOf(Service.Level.APP), VarroModelStore::class.java.getAnnotation(Service::class.java).value)

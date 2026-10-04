@@ -74,7 +74,7 @@ class SharedSettingsFile(val path: Path) {
                 val old = before.get(key)
                 val value = current.get(key)
                 if (old == value) return@forEach
-                if (old?.isJsonObject == true && value?.isJsonObject == true && target.get(key)?.isJsonObject == true) {
+                if (key != "lastSelectedModel" && old?.isJsonObject == true && value?.isJsonObject == true && target.get(key)?.isJsonObject == true) {
                     mergeChanges(old.asJsonObject, value.asJsonObject, target.getAsJsonObject(key))
                 } else if (value == null) target.remove(key)
                 else target.add(key, value.deepCopy())

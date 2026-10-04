@@ -34,6 +34,8 @@ dependencies {
     // pass-through, so a mutable tree model beats generated data classes here.
     implementation("com.google.code.gson:gson:2.14.0")
     implementation("org.xerial:sqlite-jdbc:3.53.4.0")
+    implementation("com.twelvemonkeys.imageio:imageio-webp:3.12.0")
+    implementation("com.drewnoakes:metadata-extractor:2.19.0")
 
     intellijPlatform {
         create(

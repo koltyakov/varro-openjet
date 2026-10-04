@@ -12,6 +12,18 @@ import org.junit.Test
  */
 class ApiRoutesTest {
 
+    @Test fun `message content reads only accept bounded thumbnail and directory queries`() {
+        val path = "/session/ses_one/message/msg_one/part/call%3Afile%3A0"
+        assertTrue(ApiRoutes.isAllowed("GET", path))
+        assertTrue(ApiRoutes.isAllowed("GET", "$path?directory=%2Frepo&view=thumbnail"))
+        for (query in listOf("view=original", "view=thumbnail&view=thumbnail", "directory=", "url=https://example.com")) {
+            assertFalse(ApiRoutes.isAllowed("GET", "$path?$query"))
+        }
+        assertFalse(ApiRoutes.isAllowed("POST", path))
+        assertFalse(ApiRoutes.isAllowed("DELETE", path))
+        assertFalse(ApiRoutes.isAllowed("GET", "/session/ses_one/message/msg_one/part/a%2fb"))
+    }
+
     @Test fun `provider disabling accepts only POST without query parameters`() {
         val path = ApiRoutes.Endpoints.OPENCODE_CONFIG_DISABLE_PROVIDER
         assertTrue(ApiRoutes.isAllowed("POST", path))

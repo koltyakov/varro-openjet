@@ -72,6 +72,7 @@ class VarroProjectService(private val project: Project) : Disposable {
 
     private val started = AtomicBoolean(false)
     private val lastStatus = AtomicReference<ServerStatus>(ServerStatus.Stopped)
+    private val streamingToolContent = StreamingToolContent()
 
     /** Sessions whose run was cut short by a reload, offered back for recovery. */
     private val interruptedSessionIds = AtomicReference<List<String>>(emptyList())
@@ -420,7 +421,15 @@ class VarroProjectService(private val project: Project) : Disposable {
             parsed.workspaceDirectory?.let { addProperty("workspaceDirectory", it) }
             if (parsed.sequenceOnly) addProperty("sequenceOnly", true)
             parsed.sequenceStart?.let { addProperty("sequenceStart", it) }
-            parsed.properties?.let { add("properties", it) }
+            parsed.properties?.let { properties ->
+                val part = properties.obj("part")
+                add("properties", if (part != null && part.str("type") in setOf("file", "tool")) {
+                    JsonObject().apply {
+                        properties.entrySet().forEach { add(it.key, it.value) }
+                        add("part", MessageContent.project(part, eventDirectory ?: projectDirectory))
+                    }
+                } else properties)
+            }
         }
         if (parsed.type in setOf("session.created", "session.updated")) {
             (parsed.properties.obj("info") ?: parsed.properties)?.let(selections::observe)
@@ -445,7 +454,8 @@ class VarroProjectService(private val project: Project) : Disposable {
                 store.removeSessionUnreadState(listOf(sessionId))
             }
         }
-        broadcast("server/event", payload)
+        if (parsed.type == "server.connected") streamingToolContent.clear()
+        broadcast("server/event", streamingToolContent.project(payload))
     }
 
     /** Surfaces a startup failure as an IDE notification when no panel is visible. */
@@ -1158,6 +1168,7 @@ class VarroProjectService(private val project: Project) : Disposable {
     }
 
     override fun dispose() {
+        streamingToolContent.clear()
         ralph.close()
         hostServices.dispose()
         proxies.values.forEach { it.dispose() }

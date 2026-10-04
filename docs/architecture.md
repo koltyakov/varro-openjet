@@ -182,11 +182,23 @@ V2 pause markers live in `metadata.varro.pauses`, backed by the shared per-sessi
 Two request kinds share the channel:
 
 - Paths under `/varro` are the host's namespace. Handlers use IDE state, stores, local history and OpenCode requests as needed.
+- Everything else is forwarded to OpenCode after the allowlist approves it, except the host's deferred-content reads described below.
 
 `POST /varro/copied-selection/match` matches pasted text against the selected saved workspace editor or, for plain-text clipboard content, available open-terminal output. Reads run on the EDT and do not change the clipboard. Matching files return line-range attachments; unsaved selections remain plain text.
 
 `GET /varro/model-pricing` requires `providerID` and `modelID`. `ModelPricingCatalog` fetches public API rates from models.dev through the IDE HTTP client and caches the catalog for one hour. The model picker uses these rates when available and falls back to OpenCode's model costs if the catalog request fails. These are per-token API prices, not subscription charges.
-- Everything else is forwarded to OpenCode after the allowlist approves it.
+
+## Deferred message content and thumbnails
+
+History file parts and tool attachments carry scoped `varro-content:` references. `GET /session/:id/message/:messageId/part/:partId` retrieves the original from the V1 or V2 adapter and checks its session, message and part identities. The `view=thumbnail` query returns a bounded preview or `url: null`. Original image bytes stay out of history responses and streamed tool-content aliases. Opening previews and editing messages use the original-content endpoint.
+
+`MessageContent` also defers completed reasoning and large general-tool bodies. Question, todo and file-edit schemas retain their complete data for visible summaries. `StreamingToolContent` bounds pending input and general-tool details without changing event IDs, sequence numbers or routing. Text and live reasoning continue streaming normally.
+
+`ImageThumbnails` is an application service shared by IDE views and projects. It serializes original retrieval and decoding off the UI thread. It accepts embedded PNG, JPEG, GIF and WebP, reads the first frame, applies EXIF orientation, converts to sRGB and strips metadata. WebP uses the bundled pure-Java TwelveMonkeys decoder. Output is PNG with alpha, at most 384 pixels on its longest edge and 256 KiB. It never upscales small images. AVIF has no bundled JVM decoder and retains a placeholder; original-content reads still work.
+
+Inputs are limited to 24 MiB, 16 million pixels and 16,384 pixels per dimension. Decode progress checks cancellation and a ten-second cooperative deadline. Unlike upstream's separately terminable WASM worker, a JVM reader must cooperate with abort requests. Waiting requests check cancellation before loading originals. Memory-backed ImageIO streams avoid temporary image files.
+
+The memory cache holds at most 64 successful thumbnails and 4 MiB of accounted string storage. Scoped references avoid repeated original reads, and content hashes reuse conversions across views. Entries have a fixed five-minute TTL with a one-minute sweep; hits do not extend expiry. Failed conversions are retryable, eviction regenerates from OpenCode, and application disposal clears the cache. Codec dependencies and their license notices ship in the plugin's library JARs.
 
 ## Provider quota backend
 

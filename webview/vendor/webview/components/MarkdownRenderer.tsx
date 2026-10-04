@@ -88,7 +88,6 @@ type IncompleteStreamingMarkdown = {
 };
 
 type MarkdownHydrationFlags = {
-  tables: boolean;
   copyButtons: boolean;
   mermaid: boolean;
 };
@@ -898,6 +897,9 @@ function sanitizeHtml(
 
   const container = document.createElement('div');
   container.append(fragment);
+  // Virtual rows can measure immediately on mount, before Markdown hydration runs.
+  // Classify columns in the cached HTML so remounting cannot shrink a measured table.
+  applyTableColumnClasses(container);
   const result = container.innerHTML;
 
   if (!disableCache) setCachedValue(sanitizeHtmlCache, cacheKey, result);
@@ -1499,14 +1501,46 @@ function getAppendOnlyStableDelta(
   nextContent: string,
   previousContentWasSafe: boolean
 ) {
-  if (!previousContent || !previousContentWasSafe || !nextContent.startsWith(previousContent)) {
+  if (!previousContent || !nextContent.startsWith(previousContent)) {
     return null;
   }
 
   const suffix = nextContent.slice(previousContent.length);
   if (!/^(?:\r?\n){2,}/.test(suffix)) return null;
   const delta = suffix.replace(/^(?:\r?\n)+/, '');
-  return delta && isAppendOnlySafeMarkdown(delta) ? delta : null;
+  if (!delta) return null;
+  if (previousContentWasSafe && isAppendOnlySafeMarkdown(delta)) return delta;
+
+  // Rich blocks can also be appended, but only when lexing the whole document preserves
+  // both sides of the boundary. Lists and blockquotes may otherwise merge across blank lines.
+  // Raw HTML and reference definitions need whole-document parsing/sanitization context.
+  if (/[<>]/.test(nextContent)) return null;
+  const previousTokens = marked.lexer(previousContent);
+  const nextTokens = marked.lexer(nextContent);
+  const deltaTokens = marked.lexer(delta);
+  if (
+    Object.keys(previousTokens.links).length > 0 ||
+    Object.keys(nextTokens.links).length > 0 ||
+    Object.keys(deltaTokens.links).length > 0
+  ) {
+    return null;
+  }
+  const expected = [...previousTokens, ...deltaTokens].filter((token) => token.type !== 'space');
+  const actual = nextTokens.filter((token) => token.type !== 'space');
+  if (
+    actual.length !== expected.length ||
+    expected.some((token, index) => {
+      const next = actual[index]!;
+      return (
+        token.type !== next.type ||
+        token.raw.trimEnd() !== next.raw.trimEnd() ||
+        (token.type === 'list' && next.type === 'list' && token.loose !== next.loose)
+      );
+    })
+  ) {
+    return null;
+  }
+  return delta;
 }
 
 function parseMarkdown(content: string, options: ParseMarkdownOptions): string {
@@ -1678,7 +1712,6 @@ function applyCodeBlockCopyIcons(root: HTMLDivElement | undefined) {
 
 function getMarkdownHydrationFlags(html: string): MarkdownHydrationFlags {
   return {
-    tables: html.includes('<table'),
     copyButtons: html.includes('data-copy'),
     mermaid: html.includes('data-mermaid-source'),
   };
@@ -1995,7 +2028,6 @@ export async function hydrateMermaidDiagramsForTests(root: HTMLDivElement | unde
 }
 
 function hydrateRenderedMarkdown(root: HTMLDivElement | undefined, flags: MarkdownHydrationFlags) {
-  if (flags.tables) applyTableColumnClasses(root);
   if (flags.copyButtons) applyCodeBlockCopyIcons(root);
   if (flags.mermaid) void hydrateMermaidDiagramsForTests(root);
 }
@@ -2333,7 +2365,8 @@ export function MarkdownRenderer(props: MarkdownProps) {
         lastAppliedStableContent = segments.stableContent;
         lastAppliedStableHtml = nextStableHtml;
         lastAppliedStableContentWasAppendOnlySafe = appendOnlyStableDelta
-          ? true
+          ? lastAppliedStableContentWasAppendOnlySafe &&
+            isAppendOnlySafeMarkdown(appendOnlyStableDelta)
           : isAppendOnlySafeMarkdown(segments.stableContent);
         lastAppliedStableHydrationFlags = getMarkdownHydrationFlags(nextStableHtml);
         setStableHtml(nextStableHtml);

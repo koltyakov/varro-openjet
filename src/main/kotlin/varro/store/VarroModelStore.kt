@@ -45,6 +45,10 @@ class VarroModelStore : PersistentStateComponent<VarroModelStore.StoreState> {
             return
         }
         val merged = modelPreferences
+        if (base.get("lastSelectedModel") != next.get("lastSelectedModel")) {
+            if (next.has("lastSelectedModel")) merged.add("lastSelectedModel", next.get("lastSelectedModel").deepCopy())
+            else merged.remove("lastSelectedModel")
+        }
         for (key in listOf("hiddenProviders", "hiddenModels", "addedModels", "removedModels", "pinnedModels")) {
             val before = base.arr(key)?.strings().orEmpty().toSet()
             val after = next.arr(key)?.strings().orEmpty()

@@ -12,6 +12,17 @@ import java.nio.file.Path
 class SharedSettingsFileTest {
     @get:Rule val temporary = TemporaryFolder()
 
+    @Test fun `concurrent last model changes never combine different provider and model identities`() {
+        val file = SharedSettingsFile(temporary.root.toPath().resolve("models.json"))
+        val initial = document().apply { getAsJsonObject("models").add("lastSelectedModel", Json.obj("providerID" to "one", "modelID" to "first")) }
+        file.update(initial, initial, initialize = true)
+        val first = initial.deepCopy().apply { getAsJsonObject("models").add("lastSelectedModel", Json.obj("providerID" to "two", "modelID" to "second", "variant" to "high")) }
+        file.update(initial, first)
+        val second = initial.deepCopy().apply { getAsJsonObject("models").getAsJsonObject("lastSelectedModel").addProperty("modelID", "third") }
+        val result = file.update(initial, second)!!
+        assertEquals(second.getAsJsonObject("models").get("lastSelectedModel"), result.getAsJsonObject("models").get("lastSelectedModel"))
+    }
+
     private fun document(model: String = "provider/first", port: Int = 4096): JsonObject = Json.obj(
         "version" to 1,
         "core" to Json.obj("serverPort" to port, "commitMessageModel" to model),
