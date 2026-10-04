@@ -73,6 +73,14 @@ Settings are under **Settings > Tools > Varro**. You can configure server startu
 
 The Agents settings control the runtime-only read-only `Ask` agent, automatic compaction, reserved context tokens, and fallback titles for untitled sessions. Ask and automatic compaction are enabled by default; fallback titles are disabled.
 
+### Background notifications
+
+Under **Settings > Tools > Varro > Notifications**, enable desktop alerts and choose which events play the water-bubble sound: permission requests, questions, completed replies, and plans ready for review. All options default to off and stay local to each IDE. Sound works independently of desktop alerts.
+
+Alerts appear only while the IDE is in the background. On macOS, they also stay quiet while any IDE window is visible, including side-by-side use and detached chat windows. Permission alerts wait for automatic handling and disappear if the request is resolved. Subagent permission requests can alert; subagent completions do not.
+
+Varro groups bursts and leaves at least five seconds between deliveries. Desktop banners use the IDE's operating-system notification service, so enable system notifications in the IDE and allow the IDE in your OS notification settings. The IDE notification list also keeps the latest alert with an **Open chat** action. Sound uses the bundled recording through JVM audio without external players.
+
 ### Database context in DataGrip
 
 Open a table or query-result grid for automatic context. Varro includes visible column metadata and any selected rows. The composer chip shows the object name; hover for connection details, scope, and row count, or click it to disable context. Switching to chat keeps the last grid, while returning to an editor restores file context.

@@ -100,6 +100,7 @@ With automatic startup disabled and no managed process, the connection is attach
 | Model assignments | `host/ModelRoutingService.kt` |
 | Permission rules and review | `host/PermissionService.kt`, `host/ProjectPermissionConfig.kt`, `host/PermissionJudge.kt` |
 | Queued sends and Ralph orchestration | `host/QueuedDispatches.kt`, `host/RalphRunner.kt` |
+| `attention-notifications.ts`, `native-notifications.ts` | `host/AttentionNotifications.kt`, `host/ProjectNotifications.kt` |
 | Recycle bin and transcript export | `host/SessionTrash.kt`, `host/SessionTranscript.kt` |
 | Session summaries and usage reports | `host/SessionSummaryService.kt`, `host/LocalSessionSummary.kt`, `host/UsageReport.kt`, `host/LocalUsageDatabase.kt` |
 | `package.json` `contributes.configuration` | `settings/VarroSettings.kt`, `VarroConfigurable.kt` |
@@ -113,6 +114,25 @@ The synthetic origin gives dynamic `import()` a resolvable base URL. `webview.ve
 **Messaging.** Webview to host is a `JBCefJSQuery`, injected as `window.__varroHostSend`. Host to webview is `executeJavaScript` calling `window.__varroReceive`, which the shim re-dispatches as a `MessageEvent`. Outbound messages produced before the document finishes loading are queued and flushed on `onLoadEnd`.
 
 **Theme.** `ThemeBridge` derives `--vscode-*` custom properties from IntelliJ UI keys, the editor color scheme and the console ANSI palette. Theme changes update variables without reloading the page.
+
+## Background notification state
+
+`VarroProjectService` feeds workspace-scoped events and observed session metadata to one
+`ProjectNotifications` instance per project. `AttentionNotifications` tracks pending requests,
+live root-turn completions and batching on the EDT. This state is notification-only and does not
+write session data or change permission handling. It survives webview disposal but ends with the project.
+
+Permissions wait for `permission/reveal` or a 20-second fallback. Successful reply requests and
+authoritative reply events remove alerts. Reconnect reads of `/permission` and `/question` use
+mutation revisions so late snapshots cannot overwrite newer asks, replies or session deletions.
+Completion alerts exclude failed, interrupted, child and blocked turns; terminal tool steps wait
+for authoritative idle while the server is busy. V2 interrupted status carries an explicit flag.
+
+A fixed 300 ms batch window and five-second cooldown group delivery. Focus, scope and settings
+are checked again before delivery. macOS also checks Cocoa window occlusion, including detached
+windows. Desktop alerts use JetBrains `SystemNotifications`; a log-only notification group holds
+an **Open chat** action. JVM audio plays the bundled CC0 recording independently of banners.
+Notification preferences use the IDE-local settings component and are excluded from shared settings.
 
 ## Persistence and recovery
 

@@ -16,6 +16,8 @@
             <li>Add files, editor selections, terminal output and project errors and warnings as context.
                 In IDEs with Database Tools, attach table schemas and selected rows.</li>
             <li>Review plans, tool activity and file diffs. Control permissions per session or project.</li>
+            <li>Enable background desktop alerts and per-event sounds for permissions, questions,
+                completed replies and plans ready for review.</li>
             <li>Choose models and agents, view API pricing and provider quotas, and track token usage
                 across projects.</li>
             <li>Generate commit messages from your Git changes.</li>
@@ -52,6 +54,12 @@
     ]]></description>
 
     <change-notes><![CDATA[
+        <h3>0.7.1</h3>
+        <p>Synced Varro 0.32.0 through f3f31612e9e3. Added opt-in desktop notifications and
+            per-event water-bubble sounds for permissions, questions, completed replies and plans
+            ready for review. Alerts are grouped, suppressed while the IDE is active or visible
+            on macOS, and delayed while permissions are handled automatically. Improved
+            session-list performance and diff scroll positioning.</p>
         <h3>0.7.0</h3>
         <p>Synced Varro 0.31.3 through a74977a91f3f. Added Kotlin-generated image thumbnails,
             on-demand original attachment loading, and deferred reasoning and general-tool details.
@@ -270,6 +278,7 @@
             instance="varro.settings.VarroConfigurable"/>
 
         <notificationGroup id="Varro Notifications" displayType="BALLOON"/>
+        <notificationGroup id="Varro Chat Activity" displayType="NONE" isLogByDefault="true"/>
         <postStartupActivity implementation="varro.actions.ScrollingBenchmarkStartup"/>
         <toolWindow id="Varro Benchmark" anchor="right" canCloseContents="true"
                     factoryClass="varro.toolwindow.ScrollingBenchmarkToolWindowFactory"/>

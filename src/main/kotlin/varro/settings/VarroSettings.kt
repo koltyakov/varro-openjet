@@ -83,6 +83,13 @@ class VarroSettings : PersistentStateComponent<VarroSettings> {
     /** Font family override; `default` follows the IDE. */
     var chatFontFamily: String = "default"
 
+    // Notification preferences stay local to each IDE. All channels are opt-in.
+    var notificationsNative: Boolean = false
+    var notificationsSoundPermission: Boolean = false
+    var notificationsSoundQuestion: Boolean = false
+    var notificationsSoundCompleted: Boolean = false
+    var notificationsSoundPlanReady: Boolean = false
+
     // --- commit message -------------------------------------------------------
 
     /** `providerID/modelID` used to generate commit messages; empty auto-selects. */

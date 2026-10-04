@@ -132,6 +132,7 @@ class OpenCodeTransport(
     private val observedSessionDirectories = ConcurrentHashMap<String, String>()
 
     var onSessionObserved: (com.google.gson.JsonObject) -> Unit = {}
+    var onRequestSucceeded: (String, String) -> Unit = { _, _ -> }
 
     private class StreamHandle(val generation: Int) {
         @Volatile var cancelled: Boolean = false
@@ -158,6 +159,8 @@ class OpenCodeTransport(
                 options.copy(directory = options.directory ?: if (options.unscoped) null else workspaceDirectoryForRequest(method, path)))
             else performRequest(method, path, body, options)
             if (apiVersion == 2) observeSessions(method, path, response.data)
+            runCatching { onRequestSucceeded(method, path) }
+                .onFailure { log.warn("Request observer failed", it) }
             return response
         }
         finally { activeRequestCount.decrementAndGet() }

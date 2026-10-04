@@ -96,6 +96,10 @@ class VarroProjectService(private val project: Project) : Disposable {
 
     val context: ContextProvider = ContextProvider(project)
 
+    private val notifications = ProjectNotifications(project, server, settings, store) { sessionId ->
+        sidebarCommand("command/open-session", Json.obj("sessionId" to sessionId))
+    }
+
     private val selections = SessionSelections(store,
         publishAgent = { id, agent, selectionId ->
             broadcast("session-plan-state/update", Json.obj("sessionId" to id).apply {
@@ -141,7 +145,12 @@ class VarroProjectService(private val project: Project) : Disposable {
     )
 
     init {
-        server.transport.onSessionObserved = selections::observe
+        server.transport.onSessionObserved = { session ->
+            selections.observe(session)
+            notifications.observeSession(session)
+        }
+        server.transport.onRequestSucceeded = notifications::requestSucceeded
+        Disposer.register(this, notifications)
         store.migrateBrowserSessionSelections()
         server.hasHostWork = { ralph.isActive() || queue.hasPending() || queue.messages().size() > 0 }
         store.queuedMessages = queue.messages()
@@ -192,6 +201,7 @@ class VarroProjectService(private val project: Project) : Disposable {
 
         ApplicationManager.getApplication().messageBus.connect(this)
             .subscribe(VarroSettings.TOPIC, VarroSettings.Listener {
+                notifications.settingsChanged()
                 hostServices.clearProviderQuotaCache()
                 broadcastConfig()
                 server.updateAskAgentEnabled(
@@ -455,6 +465,7 @@ class VarroProjectService(private val project: Project) : Disposable {
             }
         }
         if (parsed.type == "server.connected") streamingToolContent.clear()
+        notifications.event(parsed)
         broadcast("server/event", streamingToolContent.project(payload))
     }
 
@@ -748,13 +759,16 @@ class VarroProjectService(private val project: Project) : Disposable {
                 }
                 "webview/focus" -> if (payload.bool("focused") == true) focusedHost = host
 
+                "permission/reveal" -> payload.text("permissionId")?.let(notifications::revealPermission)
+                "session/seen" -> payload.text("sessionId")?.let(notifications::seen)
+
                 "config/update" -> applyWebviewConfig(payload)
 
                 "log" -> logFromWebview(payload)
 
                 // Accepted and intentionally inert: these drive VS Code affordances
                 // with no JetBrains counterpart, and the webview does not wait on them.
-                "commands/state", "session/seen", "permission/reveal",
+                "commands/state",
                 "providers/watch", "vscode/mermaid-preview",
                 "files/remove", "files/clear", "composer/images-update",
                 -> Unit

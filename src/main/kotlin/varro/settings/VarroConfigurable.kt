@@ -118,6 +118,19 @@ class VarroConfigurable : BoundConfigurable("Varro") {
             }
         }
 
+        group("Notifications") {
+            row {
+                checkBox("Show desktop notifications when the IDE is in the background")
+                    .bindSelected(settings::notificationsNative)
+                    .comment("Permissions, questions, completed replies and plans ready for review. Also requires IDE and operating-system notification permissions.")
+            }
+            row { comment("Play the water-bubble sound for selected events. Sound is independent of desktop notifications. On macOS, alerts stay quiet while an IDE window is still visible.") }
+            row { checkBox("Permission requests, including subagents").bindSelected(settings::notificationsSoundPermission) }
+            row { checkBox("Questions needing your answer").bindSelected(settings::notificationsSoundQuestion) }
+            row { checkBox("Completed replies").bindSelected(settings::notificationsSoundCompleted) }
+            row { checkBox("Plans ready for review").bindSelected(settings::notificationsSoundPlanReady) }
+        }
+
         group("Models") {
             row("Auto-approve judge model:") {
                 textField()
