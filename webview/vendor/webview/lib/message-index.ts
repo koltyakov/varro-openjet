@@ -2,6 +2,7 @@ import type { MessageEntry } from '../types';
 import { isFunction } from './runtime-values';
 
 export type MessageIndexCallbacks = {
+  onInfoChange?: (layoutChanged: boolean) => void;
   /** Called when message-level structure changes (add/remove/replace messages or info). */
   onInvalidate?: () => void;
   /** Called when only part-level content changes within existing messages. */
@@ -33,6 +34,11 @@ export function createMessageIndex(callbacks?: MessageIndexCallbacks | (() => vo
   }
 
   return {
+    notifyInfoChange(layoutChanged: boolean) {
+      if (!isFunction(callbacks) && callbacks?.onInfoChange) callbacks.onInfoChange(layoutChanged);
+      else onInvalidate?.();
+    },
+
     invalidate() {
       messageIndexVersion++;
       onInvalidate?.();

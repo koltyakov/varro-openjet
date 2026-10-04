@@ -66,6 +66,7 @@ import {
   registerTodoCollapseHandler,
   registerComposerCollapseHandler,
   registerMessageBlockRemovalHandler,
+  registerInlineDiffLoadHandler,
   registerPresentationFlushHandler,
 } from '../lib/message-list-layout';
 import {
@@ -452,6 +453,14 @@ export function MessageList() {
       else reserveCollapsedActivityTraySpace(keys, true);
     },
     beforeGroup: (keys) => reserveCollapsedActivityTraySpace(keys),
+    beforeReplaceActivity: (key) => {
+      const separator = key.lastIndexOf('\u0000');
+      // Replacing an already-painted preview consumes its entrance before mounting.
+      claimAssistantItemReveal(
+        key.slice(0, separator),
+        `active-activity:${key.slice(separator + 1)}`
+      );
+    },
     beforeLastExit: () => preserveActivityExitReserve(),
     afterShow: (painted) => queueMicrotask(() => requestAnimationFrame(painted)),
     afterExit: (key, complete) => {
@@ -1934,7 +1943,46 @@ export function MessageList() {
   );
   let previousInlinePreviewLayoutSignatures = new Map<string, string>();
   let previousCompactActivityLayoutSignatures = new Map<string, string>();
-  let inlinePreviewBottomFollow: { sessionId: string; inputEpoch: number } | null = null;
+  let inlinePreviewBottomFollow: {
+    sessionId: string;
+    inputEpoch: number;
+    resume: () => void;
+  } | null = null;
+  const pendingInlineDiffLoads = new Set<object>();
+  const inlineDiffHeightHolds = new Map<string, { loads: Set<object>; height: number }>();
+  onCleanup(
+    registerInlineDiffLoadHandler((sessionId, messageId) => {
+      if (getSessionTreeRootId(sessionId) !== getSessionTreeRootId(state.activeSessionId ?? ''))
+        return;
+      const token = {};
+      pendingInlineDiffLoads.add(token);
+      const hold = inlineDiffHeightHolds.get(messageId) ?? {
+        loads: new Set<object>(),
+        height: measuredHeights.get(messageId) ?? 0,
+      };
+      hold.loads.add(token);
+      inlineDiffHeightHolds.set(messageId, hold);
+      const row = mountedMessageRows.get(messageId);
+      if (row && hold.height > 0) row.style.minHeight = `${hold.height}px`;
+      return () => {
+        pendingInlineDiffLoads.delete(token);
+        hold.loads.delete(token);
+        // Finish after the loaded diff replaces its summary, including a same-batch reload.
+        queueMicrotask(() => {
+          if (hold.loads.size || inlineDiffHeightHolds.get(messageId) !== hold) return;
+          inlineDiffHeightHolds.delete(messageId);
+          const mountedRow = mountedMessageRows.get(messageId);
+          if (mountedRow) {
+            mountedRow.style.removeProperty('min-height');
+            // Publish loaded geometry before range reconciliation can unmount this row.
+            // Waiting for ResizeObserver lets a remount overwrite it with the short summary.
+            measureMountedRows([{ element: mountedRow, messageId }]);
+          }
+        });
+        inlinePreviewBottomFollow?.resume();
+      };
+    })
+  );
   // Bootstrap exact heights once, then keep virtualization active as new rows arrive. Newly added
   // rows use provisional heights until mounted instead of remounting the full transcript.
   const shouldMeasureRows = createMemo(() => messages().length >= VIRTUALIZE_THRESHOLD);
@@ -2140,12 +2188,32 @@ export function MessageList() {
       )
         return;
 
-      const owner = { sessionId, inputEpoch: directScrollInputEpoch };
+      const owner = {
+        sessionId,
+        inputEpoch: directScrollInputEpoch,
+        resume: () => {
+          attempts = 0;
+          stableFrames = 0;
+          queueSettle();
+        },
+      };
       inlinePreviewBottomFollow = owner;
+      cancelAppendScrollTransition();
       let frameId = 0;
       let attempts = 0;
       let stableFrames = 0;
       let previousHeight = -1;
+      let settleQueued = false;
+      const queueSettle = () => {
+        if (settleQueued) return;
+        settleQueued = true;
+        if (frameId) cancelAnimationFrame(frameId);
+        frameId = 0;
+        queueMicrotask(() => {
+          settleQueued = false;
+          settle();
+        });
+      };
       const settle = () => {
         frameId = 0;
         if (
@@ -2172,15 +2240,19 @@ export function MessageList() {
           height === previousHeight && distanceFromBottom() <= 1 ? stableFrames + 1 : 0;
         previousHeight = height;
         attempts += 1;
-        if (stableFrames >= 2 || attempts >= 12) {
+        if (pendingInlineDiffLoads.size === 0 && (stableFrames >= 2 || attempts >= 12)) {
           inlinePreviewBottomFollow = null;
           startFollowLoop(sessionId);
           return;
         }
+        // A summary can stay geometrically stable while its diff is still loading.
+        // Keep this owner until that request settles, without running idle frames.
+        // Completion/unmount wakes the bounded settle; input and session epochs still win.
+        if (pendingInlineDiffLoads.size > 0 && (stableFrames >= 2 || attempts >= 12)) return;
         frameId = requestAnimationFrame(settle);
       };
       // Let the preference's DOM replacement and row measurements finish before positioning.
-      queueMicrotask(settle);
+      queueSettle();
       onCleanup(() => {
         if (frameId) cancelAnimationFrame(frameId);
         if (inlinePreviewBottomFollow === owner) inlinePreviewBottomFollow = null;
@@ -2693,8 +2765,8 @@ export function MessageList() {
         pinnedIndex: anchorIndex,
         pinnedGapStart,
         pinnedGapEnd,
-        topPad: metrics.prefix[start] ?? 0,
-        bottomPad: metrics.totalHeight - (metrics.prefix[end] ?? 0),
+        topPad: metrics.prefix.at(start) ?? 0,
+        bottomPad: metrics.totalHeight - (metrics.prefix.at(end) ?? 0),
       };
     },
     EMPTY_VISIBLE_RANGE,
@@ -3140,6 +3212,8 @@ export function MessageList() {
     // A placeholder's block size comes from virtual metrics; recording it as a measurement would
     // promote a provisional estimate to an exact content height.
     if (element.classList.contains('interactive-item-virtual-placeholder')) return false;
+    // A reloading summary is not a new exact measurement of the previously painted diff.
+    if ((inlineDiffHeightHolds.get(messageId)?.height ?? 0) > 0) return false;
     if (height !== 0) {
       if (knownZeroHeightMessageIds().has(messageId) && element.querySelector('.diff-summary')) {
         const index = messageIndexById().get(messageId);
@@ -3277,7 +3351,7 @@ export function MessageList() {
           const previousEffectiveHeight =
             previousHeight ??
             (metricsBefore
-              ? metricsBefore.prefix[index + 1]! - metricsBefore.prefix[index]!
+              ? metricsBefore.prefix.at(index + 1)! - metricsBefore.prefix.at(index)!
               : undefined);
           if (previousEffectiveHeight !== undefined) {
             scrollAdjustment += height - previousEffectiveHeight;
@@ -3591,7 +3665,7 @@ export function MessageList() {
       return {
         messageId,
         top:
-          getContainerScrollTopForVirtualOffset(metrics.prefix[index] ?? 0) -
+          getContainerScrollTopForVirtualOffset(metrics.prefix.at(index) ?? 0) -
           containerRef.scrollTop,
         topPad: visibleRange().topPad,
       };
@@ -3643,7 +3717,7 @@ export function MessageList() {
     if (index === null || !messageId) return null;
     return {
       messageId,
-      top: lastVirtualContentOrigin + (metrics.prefix[index] ?? 0) - containerScrollTop,
+      top: lastVirtualContentOrigin + (metrics.prefix.at(index) ?? 0) - containerScrollTop,
       topPad: 0,
     };
   }
@@ -4042,7 +4116,7 @@ export function MessageList() {
           if (index !== undefined) {
             const metrics = virtualMetrics();
             delta =
-              getContainerScrollTopForVirtualOffset(metrics.prefix[index] ?? 0) -
+              getContainerScrollTopForVirtualOffset(metrics.prefix.at(index) ?? 0) -
               containerRef.scrollTop -
               anchor.top;
           }
@@ -4128,6 +4202,8 @@ export function MessageList() {
     }
 
     mountedMessageRows.set(messageId, element);
+    const inlineDiffHeight = inlineDiffHeightHolds.get(messageId)?.height ?? 0;
+    if (inlineDiffHeight > 0) element.style.minHeight = `${inlineDiffHeight}px`;
     if (widthResizeActive) widthResizeNewlyMountedRows.add(element);
     if (element.classList.contains('interactive-request')) {
       const currentStickyPreview = untrack(stickyUserMessagePreview);
@@ -8666,6 +8742,7 @@ export function MessageList() {
   });
   const assistantDialogSummaryMap = createMemo(() => {
     messageStructureVersion();
+    messageInfoVersion();
     const suppressTrailingSummary = trailingSummaryMessageId() === null;
     const sessions = projectDialogSessions();
     const dialogMessages = assistantDialogMessages();
@@ -9041,7 +9118,7 @@ export function MessageList() {
         if (shouldVirtualize()) {
           const metrics = virtualMetrics();
           const nextScrollTop =
-            getContainerScrollTopForVirtualOffset(metrics.prefix[messageIndex] ?? 0) -
+            getContainerScrollTopForVirtualOffset(metrics.prefix.at(messageIndex) ?? 0) -
             getMessageJumpTopInset();
           container.scrollTop = nextScrollTop;
           setScrollTop(nextScrollTop);

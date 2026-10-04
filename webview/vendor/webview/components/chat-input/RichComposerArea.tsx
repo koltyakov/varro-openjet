@@ -1,4 +1,13 @@
-import { For, Show, batch, createEffect, createSignal, onMount, onCleanup } from 'solid-js';
+import {
+  For,
+  Show,
+  batch,
+  createEffect,
+  createMemo,
+  createSignal,
+  onMount,
+  onCleanup,
+} from 'solid-js';
 import { Portal } from 'solid-js/web';
 import { splitExternalLinkText } from '../../lib/external-link';
 import { emptyPageIcon, folderIcon, gymIcon } from '../../lib/ui-icons';
@@ -791,19 +800,17 @@ export function RichComposerArea(props: {
   }
 
   let lastSyncedValue = '';
-  let lastSyncedChips = '';
+  let lastSyncedChips: ReturnType<typeof chipSnapshot> | undefined;
   let lastSyncedPendingPaste: RichComposerPasteInsertion | undefined;
-
-  createEffect(() => {
-    const text = props.value;
-    const pendingPaste = props.pendingPaste;
-    const pendingPasteChanged = pendingPaste !== lastSyncedPendingPaste;
-    const requestedCursor = props.cursorOffset;
-    const chips = JSON.stringify(
+  // Compare image URLs by identity/value without serializing their base64 payload on each keypress.
+  const chipSnapshot = createMemo(
+    () =>
       props.chips
         .filter((chip) => chip.type !== 'external-link')
         .map((chip) => [
           chip.id,
+          chip.type,
+          chip.path,
           chip.label,
           chip.title,
           chip.detail,
@@ -813,11 +820,26 @@ export function RichComposerArea(props: {
           chip.previewImage?.alt,
           chip.textMarker,
           chip.severity,
-          chip.problemDetails,
+          JSON.stringify(chip.problemDetails),
           chip.compressible,
           chip.compressionHint,
-        ])
-    );
+        ]),
+    undefined,
+    {
+      equals: (previous, next) =>
+        previous.length === next.length &&
+        previous.every((fields, index) =>
+          fields.every((value, field) => value === next[index]![field])
+        ),
+    }
+  );
+
+  createEffect(() => {
+    const text = props.value;
+    const pendingPaste = props.pendingPaste;
+    const pendingPasteChanged = pendingPaste !== lastSyncedPendingPaste;
+    const requestedCursor = props.cursorOffset;
+    const chips = chipSnapshot();
     const isFocused = props.isFocused || document.activeElement === editorEl;
     // The browser owns the DOM and selection until composition has been flushed.
     // Keep tracking controlled props so deferred updates run when composition ends.

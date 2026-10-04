@@ -10,7 +10,12 @@ import {
   state,
   streamingDeltaQueue,
 } from './app-state';
-import { areMessageEntriesEquivalent, getSharedMessagePrefixLength } from './message-entry-sync';
+import {
+  areMessageEntriesEquivalent,
+  areMessageInfosEquivalent,
+  isMessageLayoutInfoEquivalent,
+  getSharedMessagePrefixLength,
+} from './message-entry-sync';
 import { recordProviderAuthSuccess } from './provider-connection-state';
 import { markSessionResponseCompleted, markSessionSeen } from './state-session-lifecycle';
 import { flushPendingStreamingDeltasFor, shouldUseStreamingText } from './streaming-deltas';
@@ -68,9 +73,15 @@ export function upsertMessageInfo(info: Message) {
           messageIndex.invalidate();
           return;
         }
-        if (msgs[idx]!.info === info) return;
-        msgs[idx]!.info = info;
-        messageIndex.invalidate();
+        const previous = msgs[idx]!.info;
+        if (areMessageInfosEquivalent(previous, info)) return;
+        const layoutChanged = !isMessageLayoutInfoEquivalent(previous, info);
+        if (!layoutChanged && previous.role === 'assistant' && info.role === 'assistant') {
+          // Preserve the info object so role/session/grouping readers do not subscribe to usage churn.
+          previous.cost = info.cost;
+          previous.tokens = info.tokens;
+        } else msgs[idx]!.info = info;
+        messageIndex.notifyInfoChange(layoutChanged);
         return;
       } else {
         msgs.push({ info, parts: [] });
