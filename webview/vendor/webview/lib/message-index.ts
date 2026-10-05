@@ -55,6 +55,18 @@ export function createMessageIndex(callbacks?: MessageIndexCallbacks | (() => vo
 
     ensureIndex,
 
+    /** Register a true tail append without rebuilding retained message or part locations. */
+    appendMessage(msgs: MessageEntry[]) {
+      ensureIndex(msgs);
+      const msgIdx = msgs.length - 1;
+      const message = msgs[msgIdx]!;
+      messageById.set(message.info.id, msgIdx);
+      for (let partIdx = 0; partIdx < message.parts.length; partIdx++) {
+        partById.set(message.parts[partIdx]!.id, { msgIdx, partIdx });
+      }
+      onInvalidate?.();
+    },
+
     appendPart(
       msgs: MessageEntry[],
       partId: string,

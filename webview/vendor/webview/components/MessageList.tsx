@@ -800,6 +800,8 @@ export function MessageList() {
     observer: MutationObserver | null;
   } | null = null;
   let pointerScrollOwnershipActive = false;
+  let pointerScrollRange = 0;
+  let wheelListenerPassive = true;
   let diffFocusPauseActive = false;
   let resumeAutoScrollAfterDiffFocus = false;
   let diffFocusResumeRafId = 0;
@@ -1521,7 +1523,7 @@ export function MessageList() {
       ) {
         return;
       }
-      performScroll();
+      performScroll({ immediate: true });
       const sessionId = state.activeSessionId;
       if (sessionId) startFollowLoop(sessionId);
     });
@@ -1938,11 +1940,27 @@ export function MessageList() {
     return assistantItemRevealReady;
   }
 
+  let inlinePreviewLayoutAnchor: VisibleScrollAnchor | null = null;
+  createComputed(
+    on(showFileDiffs, (enabled, previous) => {
+      if (previous === undefined || enabled === previous) return;
+      // Capture before preview DOM removal can shrink the scroll range and clamp scrollTop.
+      // A post-render capture would remember the clamped destination instead of the reader.
+      inlinePreviewLayoutAnchor =
+        containerRef?.isConnected && !autoScroll()
+          ? captureDetachedVisibleScrollAnchor(containerRef.scrollTop)
+          : null;
+    })
+  );
   const inlinePreviewLayoutSignatures = createMemo(() =>
     getInlinePreviewLayoutSignatures(messages(), showFileDiffs())
   );
   let previousInlinePreviewLayoutSignatures = new Map<string, string>();
   let previousCompactActivityLayoutSignatures = new Map<string, string>();
+  const [changedLayoutAnchor, setChangedLayoutAnchor] = createSignal<VisibleScrollAnchor | null>(
+    null
+  );
+  let changedLayoutAnchorInputEpoch = -1;
   let inlinePreviewBottomFollow: {
     sessionId: string;
     inputEpoch: number;
@@ -2090,12 +2108,14 @@ export function MessageList() {
     const preferredLayoutAnchor = preferredAnchor ?? pendingThinkingLayoutAnchor;
     // Bottom-follow can move a still-mounted detached anchor before a disclosure pauses follow.
     // Reuse its saved offset only while it still describes the current scroll position.
-    const invalidatedAnchor =
+    // A held scrollbar owns ongoing movement, even when a layout change occurs after pointerdown.
+    const invalidatedAnchor: VisibleScrollAnchor | null =
       (invalidatedUnmountedHeight || mountedRows.length > 0) &&
       !autoScroll() &&
       !followModeLocked &&
       !pendingScrollToBottomRequest &&
       appendScrollRafId === 0 &&
+      !pointerScrollOwnershipActive &&
       !stickyNavigationOwnsScroll() &&
       !editingMessage() &&
       !pendingExpansionScrollAnchor &&
@@ -2112,6 +2132,11 @@ export function MessageList() {
               : captureDetachedVisibleScrollAnchor(containerRef?.scrollTop ?? 0)))
           : captureVisibleScrollAnchor()
         : null;
+    // Measurement compensation can itself reconcile the range before publication.
+    if (invalidatedAnchor) {
+      changedLayoutAnchorInputEpoch = invalidatedAnchorInputEpoch;
+      setChangedLayoutAnchor(invalidatedAnchor);
+    }
     for (const messageId of unmountedMessageIds) {
       if (!measuredHeights.delete(messageId)) continue;
       zeroHeightRenderGeometrySignatures.delete(messageId);
@@ -2119,31 +2144,99 @@ export function MessageList() {
     }
 
     const publishChangedLayout = () => {
+      const anchorRow = invalidatedAnchor
+        ? mountedMessageRows.get(invalidatedAnchor.messageId)
+        : undefined;
+      const anchorElement = invalidatedAnchor
+        ? getMountedScrollAnchorElement(invalidatedAnchor)
+        : null;
+      const anchorOffset =
+        anchorRow && anchorElement
+          ? anchorElement.getBoundingClientRect().top - anchorRow.getBoundingClientRect().top
+          : 0;
       // This batch already owns an exact anchor; do not queue a competing row-level correction.
-      publishMeasurementVersion({ preserveVisibleAnchor: !invalidatedAnchor });
+      batch(() => {
+        // Invalidated offscreen heights can move the range past the reader before restoration.
+        // Keep its exact row mounted while the new prefix and DOM settle.
+        if (invalidatedAnchor) {
+          changedLayoutAnchorInputEpoch = invalidatedAnchorInputEpoch;
+          setChangedLayoutAnchor(invalidatedAnchor);
+        }
+        publishMeasurementVersion({ preserveVisibleAnchor: !invalidatedAnchor });
+        if (invalidatedAnchor && anchorElement && shouldVirtualize()) {
+          const index = messageIndexById().get(invalidatedAnchor.messageId);
+          if (index !== undefined) {
+            const targetTop =
+              anchorElement === anchorRow
+                ? (invalidatedAnchor.messageTop ?? invalidatedAnchor.top)
+                : invalidatedAnchor.top;
+            // Select the destination range with the new prefix, rather than mounting rows at the
+            // old scroll coordinate and immediately throwing them away during DOM restoration.
+            setScrollTop(
+              Math.max(
+                0,
+                getContainerScrollTopForVirtualOffset(virtualMetrics().prefix.at(index) ?? 0) +
+                  anchorOffset -
+                  targetTop
+              )
+            );
+          }
+        }
+      });
       if (!invalidatedAnchor) return;
       queueMicrotask(() => {
         if (
+          state.activeSessionId === activeSessionId &&
+          untrack(changedLayoutAnchor) === invalidatedAnchor &&
           userScrollOwnershipEpoch === invalidatedAnchorOwnershipEpoch &&
           directScrollInputEpoch === invalidatedAnchorInputEpoch &&
           !stickyNavigationOwnsScroll() &&
           !pendingExpansionScrollAnchor
         ) {
-          restoreVisibleScrollAnchor(invalidatedAnchor, { useMessageOffsetFallback: true });
+          restoreVisibleScrollAnchor(invalidatedAnchor, {
+            useMessageOffsetFallback: true,
+            reserveBottomOverflow: true,
+          });
+          // Mounting the deficit reserve can also replace the trailing summary slot.
+          // Reconcile that geometry before paint, rather than waiting for the first settle frame.
+          queueMicrotask(() => {
+            if (
+              untrack(changedLayoutAnchor) === invalidatedAnchor &&
+              directScrollInputEpoch === invalidatedAnchorInputEpoch &&
+              state.activeSessionId === activeSessionId
+            ) {
+              restoreVisibleScrollAnchor(invalidatedAnchor, {
+                useMessageOffsetFallback: true,
+                reserveBottomOverflow: true,
+              });
+            }
+          });
           void (async () => {
-            for (let attempt = 0; attempt < 12; attempt += 1) {
-              await waitForAnimationFrame();
-              if (
-                userScrollOwnershipEpoch !== invalidatedAnchorOwnershipEpoch ||
-                directScrollInputEpoch !== invalidatedAnchorInputEpoch ||
-                stickyNavigationOwnsScroll() ||
-                pendingExpansionScrollAnchor
-              ) {
-                return;
+            try {
+              for (let attempt = 0; attempt < 12; attempt += 1) {
+                await waitForAnimationFrame();
+                if (
+                  disposed ||
+                  state.activeSessionId !== activeSessionId ||
+                  untrack(changedLayoutAnchor) !== invalidatedAnchor ||
+                  userScrollOwnershipEpoch !== invalidatedAnchorOwnershipEpoch ||
+                  directScrollInputEpoch !== invalidatedAnchorInputEpoch ||
+                  stickyNavigationOwnsScroll() ||
+                  pendingExpansionScrollAnchor
+                ) {
+                  return;
+                }
+                restoreVisibleScrollAnchor(invalidatedAnchor, {
+                  useMessageOffsetFallback: true,
+                  reserveBottomOverflow: true,
+                });
               }
-              restoreVisibleScrollAnchor(invalidatedAnchor, { useMessageOffsetFallback: true });
+            } finally {
+              if (untrack(changedLayoutAnchor) === invalidatedAnchor) setChangedLayoutAnchor(null);
             }
           })();
+        } else if (untrack(changedLayoutAnchor) === invalidatedAnchor) {
+          setChangedLayoutAnchor(null);
         }
       });
     };
@@ -2153,22 +2246,29 @@ export function MessageList() {
       return;
     }
 
-    queueMicrotask(() => {
-      const connectedRows = mountedRows.filter(
-        ({ element, messageId }) =>
-          element.isConnected && mountedMessageRows.get(messageId) === element
-      );
-      const measuredMountedHeight = measureMountedRows(connectedRows, false);
-      if (!measuredMountedHeight && !invalidatedUnmountedHeight && !invalidatedAnchor) return;
-      publishChangedLayout();
-      scheduleStickyPreviewGeometryRefresh({ force: true });
-      scheduleVisibleMeasurement({ afterResize: true });
-    });
+    queueMicrotask(() =>
+      batch(() => {
+        const connectedRows = mountedRows.filter(
+          ({ element, messageId }) =>
+            element.isConnected && mountedMessageRows.get(messageId) === element
+        );
+        const measuredMountedHeight = measureMountedRows(connectedRows, false);
+        if (!measuredMountedHeight && !invalidatedUnmountedHeight && !invalidatedAnchor) return;
+        publishChangedLayout();
+        scheduleStickyPreviewGeometryRefresh({ force: true });
+        scheduleVisibleMeasurement({ afterResize: true });
+      })
+    );
   }
 
   createEffect(() => {
     const current = inlinePreviewLayoutSignatures();
-    scheduleChangedLayoutRowMeasurements(previousInlinePreviewLayoutSignatures, current);
+    scheduleChangedLayoutRowMeasurements(
+      previousInlinePreviewLayoutSignatures,
+      current,
+      inlinePreviewLayoutAnchor
+    );
+    inlinePreviewLayoutAnchor = null;
 
     previousInlinePreviewLayoutSignatures = new Map(current);
   });
@@ -2204,15 +2304,20 @@ export function MessageList() {
       let stableFrames = 0;
       let previousHeight = -1;
       let settleQueued = false;
-      const queueSettle = () => {
-        if (settleQueued) return;
+      const runSettle = () => {
+        // Range changes can synchronously unmount loading diffs and wake this owner again.
+        // Coalesce those wakes with this pass and its next frame rather than starving paint.
         settleQueued = true;
-        if (frameId) cancelAnimationFrame(frameId);
-        frameId = 0;
-        queueMicrotask(() => {
-          settleQueued = false;
+        try {
           settle();
-        });
+        } finally {
+          settleQueued = false;
+        }
+      };
+      const queueSettle = () => {
+        if (settleQueued || frameId) return;
+        settleQueued = true;
+        queueMicrotask(runSettle);
       };
       const settle = () => {
         frameId = 0;
@@ -2249,7 +2354,7 @@ export function MessageList() {
         // Keep this owner until that request settles, without running idle frames.
         // Completion/unmount wakes the bounded settle; input and session epochs still win.
         if (pendingInlineDiffLoads.size > 0 && (stableFrames >= 2 || attempts >= 12)) return;
-        frameId = requestAnimationFrame(settle);
+        frameId = requestAnimationFrame(runSettle);
       };
       // Let the preference's DOM replacement and row measurements finish before positioning.
       queueSettle();
@@ -2729,6 +2834,7 @@ export function MessageList() {
           ? pendingStructuralScrollAnchor.anchor
           : null;
       const widthAnchorMessageId = widthResizePinnedMessageId();
+      const layoutAnchorMessageId = changedLayoutAnchor()?.messageId;
       const editedMessageId = editingMessage()?.messageId;
       const anchorIndex = editedMessageId
         ? messageIndexById().get(editedMessageId)
@@ -2738,7 +2844,9 @@ export function MessageList() {
             ? messageIndexById().get(structuralAnchor.messageId)
             : widthAnchorMessageId
               ? messageIndexById().get(widthAnchorMessageId)
-              : undefined;
+              : layoutAnchorMessageId
+                ? messageIndexById().get(layoutAnchorMessageId)
+                : undefined;
       if (anchorIndex === undefined) return range;
 
       // A prepend can temporarily place the old viewport thousands of provisional pixels away.
@@ -3276,8 +3384,9 @@ export function MessageList() {
   ) {
     // Tests and no-layout environments may never deliver ResizeObserver entries, so virtualization
     // must not depend on observer callbacks alone.
-    const measurements = rows.flatMap(({ element, messageId }) => {
-      const rect = element.getBoundingClientRect();
+    const rects = rows.map(({ element }) => element.getBoundingClientRect());
+    const measurements = rows.flatMap(({ element, messageId }, index) => {
+      const rect = rects[index]!;
       measuredRowInlineSizes.set(element, rect.width);
       // Collapsed cross-message activity can already be empty when the batch runs. Certify those
       // projected zeros too; ResizeObserver may not redeliver a zero after its cache was invalidated.
@@ -3286,8 +3395,9 @@ export function MessageList() {
       if (!shouldAcceptRowHeight(element, messageId, height)) return [];
       return [{ messageId, height }];
     });
-    if (!applyRowHeightMeasurements(measurements)) return false;
-    if (publish) scheduleMeasurementPublish('content');
+    const result = applyRowHeightMeasurements(measurements);
+    if (!result.changed) return false;
+    if (publish) scheduleMeasurementPublish('content', result.scrollAdjusted);
     return true;
   }
 
@@ -3372,7 +3482,7 @@ export function MessageList() {
       restoreVisibleScrollAnchor(widthResizeAnchor);
     }
 
-    return changed;
+    return { changed, scrollAdjusted: !!containerRef && Math.abs(resolvedScrollAdjustment) > 0.5 };
   }
 
   function setMeasuredHeightsFor(entries: ResizeObserverEntry[]) {
@@ -3434,15 +3544,16 @@ export function MessageList() {
     }
 
     if (widthReflowOnly) beginWidthResize();
-    if (!applyRowHeightMeasurements(measurements, { widthReflow: widthReflowOnly })) return;
+    const result = applyRowHeightMeasurements(measurements, { widthReflow: widthReflowOnly });
+    if (!result.changed) return;
 
-    scheduleMeasurementPublish(widthReflowOnly ? 'width' : 'content');
+    scheduleMeasurementPublish(widthReflowOnly ? 'width' : 'content', result.scrollAdjusted);
     restorePendingHistoryAnchorIfMounted();
     scheduleStickyPreviewGeometryRefresh({ force: !widthReflowOnly });
     scheduleVisibleMeasurement({ afterResize: true, widthResize: widthReflowOnly });
   }
 
-  function scheduleMeasurementPublish(reason: 'content' | 'width') {
+  function scheduleMeasurementPublish(reason: 'content' | 'width', scrollAdjusted = false) {
     if (reason === 'width' && shouldVirtualize()) {
       pendingWidthMeasurementPublish = true;
       beginWidthResize();
@@ -3450,7 +3561,7 @@ export function MessageList() {
     }
 
     pendingWidthMeasurementPublish = false;
-    publishMeasurementVersion();
+    publishMeasurementVersion({ skipGenericAnchor: scrollAdjusted });
   }
 
   function captureMountedVisibleScrollAnchorWithTopPad(
@@ -4135,8 +4246,10 @@ export function MessageList() {
         const currentReserve = untrack(appendBottomReserve);
         const unreservedBottom = Math.max(0, bottomScrollTop() - currentReserve);
         const requiredReserve = Math.max(0, nextScrollTop - unreservedBottom);
-        if (requiredReserve > currentReserve + 0.5) {
+        if (requiredReserve > 0.5) {
           appendBottomReserveTarget = Math.max(appendBottomReserveTarget, nextScrollTop);
+        }
+        if (requiredReserve > currentReserve + 0.5) {
           setAppendBottomReserve(requiredReserve);
           waitForReserveMount = true;
         }
@@ -4156,7 +4269,10 @@ export function MessageList() {
     return true;
   }
 
-  function publishMeasurementVersion(options?: { preserveVisibleAnchor?: boolean }) {
+  function publishMeasurementVersion(options?: {
+    preserveVisibleAnchor?: boolean;
+    skipGenericAnchor?: boolean;
+  }) {
     if (!containerRef || options?.preserveVisibleAnchor === false) {
       setMeasurementVersion((version) => version + 1);
       return;
@@ -4165,6 +4281,27 @@ export function MessageList() {
     // A slow page can outlive direct input. Its exact history anchor still owns measurements;
     // generic per-mount anchors must not queue competing restorations after the prepend.
     const sessionId = state.activeSessionId;
+    const layoutAnchor = untrack(changedLayoutAnchor);
+    if (layoutAnchor) {
+      const inputEpoch = changedLayoutAnchorInputEpoch;
+      setMeasurementVersion((version) => version + 1);
+      // Newly mounted rows may shrink again before the next frame. Preserve the layout owner's
+      // target after this reconciliation too, rather than painting a clamped intermediate position.
+      queueMicrotask(() => {
+        if (
+          !disposed &&
+          state.activeSessionId === sessionId &&
+          untrack(changedLayoutAnchor) === layoutAnchor &&
+          directScrollInputEpoch === inputEpoch
+        ) {
+          restoreVisibleScrollAnchor(layoutAnchor, {
+            useMessageOffsetFallback: true,
+            reserveBottomOverflow: true,
+          });
+        }
+      });
+      return;
+    }
     if (
       diffFocusPauseActive ||
       pendingStructuralScrollAnchor ||
@@ -4175,7 +4312,16 @@ export function MessageList() {
     }
 
     const capturedAutoScroll = autoScroll();
-    if (capturedAutoScroll || stickyNavigationOwnsScroll() || userScrollRecentlyActive()) {
+    // Prefix compensation has already moved scrollTop, but its spacer has not
+    // been published yet. Capturing that intermediate DOM position would restore
+    // the same height delta a second time after publication, especially when a
+    // slow mount outlives the direct-input window. Explicit owners above still win.
+    if (
+      options?.skipGenericAnchor ||
+      capturedAutoScroll ||
+      stickyNavigationOwnsScroll() ||
+      userScrollRecentlyActive()
+    ) {
       setMeasurementVersion((version) => version + 1);
       return;
     }
@@ -4442,8 +4588,11 @@ export function MessageList() {
 
       const nextRow = mountedMessageRows.get(nextMessage.info.id);
       if (!nextRow) return null;
-      // Automatic notices and child-session handoffs are user-role rows without a prompt card.
-      const nextElement = nextRow.querySelector<HTMLElement>('.user-message-card');
+      // Inline editing replaces the prompt card but still blocks the preceding sticky preview.
+      // Automatic notices and child-session handoffs have neither prompt surface.
+      const nextElement = nextRow.querySelector<HTMLElement>(
+        '.user-message-card, .inline-edit-composer-slot'
+      );
       if (!nextElement) continue;
       const nextRect = nextElement?.getBoundingClientRect();
       if (!nextRect) return null;
@@ -4464,7 +4613,9 @@ export function MessageList() {
     for (const row of containerRef.querySelectorAll<HTMLElement>('.interactive-request')) {
       if (row.dataset.msgId === messageId) continue;
       if (row.dataset.msgId && steeringIds.has(row.dataset.msgId)) continue;
-      const source = row.querySelector<HTMLElement>('.user-message-card');
+      const source = row.querySelector<HTMLElement>(
+        '.user-message-card, .inline-edit-composer-slot'
+      );
       if (!source) continue;
       const rect = source.getBoundingClientRect();
       if (rect.bottom <= containerRect.top) continue;
@@ -4629,8 +4780,8 @@ export function MessageList() {
     if (
       !containerRef ||
       containerRef.scrollTop <= 0 ||
-      !autoScroll() ||
-      (!pinnedToBottom && getDistanceFromBottom(containerRef) > 2) ||
+      (!pointerScrollOwnershipActive &&
+        (!autoScroll() || (!pinnedToBottom && getDistanceFromBottom(containerRef) > 2))) ||
       stickyNavigationOwnsScroll()
     ) {
       return;
@@ -4965,8 +5116,8 @@ export function MessageList() {
     if (
       groupKeys.size === 0 ||
       !containerRef ||
-      !autoScroll() ||
-      (!pinnedToBottom && getDistanceFromBottom(containerRef) > 2) ||
+      (!pointerScrollOwnershipActive &&
+        (!autoScroll() || (!pinnedToBottom && getDistanceFromBottom(containerRef) > 2))) ||
       stickyNavigationOwnsScroll()
     ) {
       return;
@@ -5014,12 +5165,14 @@ export function MessageList() {
   }
 
   function reserveCollapsedActivityTraySpace(keys: ReadonlySet<string>, animated = false) {
+    // Detached thumbs need the same pre-removal reservation as bottom-follow. ResizeObserver
+    // runs after native scrollbar geometry has already seen the shorter range.
     if (
       keys.size === 0 ||
       !containerRef ||
       containerRef.scrollTop <= 0 ||
-      !autoScroll() ||
-      (!pinnedToBottom && getDistanceFromBottom(containerRef) > 2) ||
+      (!pointerScrollOwnershipActive &&
+        (!autoScroll() || (!pinnedToBottom && getDistanceFromBottom(containerRef) > 2))) ||
       stickyNavigationOwnsScroll()
     ) {
       return;
@@ -5244,10 +5397,11 @@ export function MessageList() {
       return;
     }
 
-    // Ease new bottom growth even when no text was paced recently. Position restoration
-    // and browser clamp corrections still synchronize immediately.
+    // Ease new bottom growth even when no text was paced recently. Width reflow,
+    // position restoration, and browser clamp corrections synchronize immediately.
     const smooth =
       !options?.immediate &&
+      !widthResizeActive &&
       !(
         inlinePreviewBottomFollow?.sessionId === state.activeSessionId &&
         inlinePreviewBottomFollow?.inputEpoch === directScrollInputEpoch
@@ -5367,7 +5521,11 @@ export function MessageList() {
       // A newer follow position is a lower bound, including while deferred rounding settles.
       appendBottomReserveTarget = Math.max(appendBottomReserveTarget, containerRef.scrollTop);
     }
-    const nextReserve = Math.max(0, Math.ceil(appendBottomReserveTarget - unreservedBottom));
+    // During a drag the whole range matters, including reserve below the current viewport.
+    const reserveTarget = pointerScrollOwnershipActive
+      ? Math.max(appendBottomReserveTarget, pointerScrollRange)
+      : appendBottomReserveTarget;
+    const nextReserve = Math.max(0, Math.ceil(reserveTarget - unreservedBottom));
     if (Math.abs(nextReserve - reserve) <= 0.5) return;
     setAppendBottomReserve(nextReserve);
     if (nextReserve <= 0.5) {
@@ -5411,7 +5569,8 @@ export function MessageList() {
   }
 
   function releaseOffscreenBottomReserve() {
-    if (!containerRef || untrack(appendBottomReserve) <= 0.5) return;
+    if (!containerRef || pointerScrollOwnershipActive || untrack(appendBottomReserve) <= 0.5)
+      return;
     const reserveElement = trackRef?.querySelector<HTMLElement>('.append-scroll-bottom-reserve');
     if (!reserveElement) return;
     if (reserveElement.getBoundingClientRect().top < containerRef.getBoundingClientRect().bottom) {
@@ -5502,9 +5661,13 @@ export function MessageList() {
   }
 
   function startPendingAppendScrollTransition(sessionId: string) {
-    if (activityExitBottomTarget !== null || activityExitSummaryAnchor) {
+    if (
+      pointerScrollOwnershipActive ||
+      activityExitBottomTarget !== null ||
+      activityExitSummaryAnchor
+    ) {
       // New assistant steps must not restore an append anchor or animate the viewport
-      // against the current activity-collapse owner. Real response growth releases it.
+      // against a held scrollbar or the current activity-collapse owner.
       cancelAppendScrollTransition();
       return false;
     }
@@ -5891,7 +6054,10 @@ export function MessageList() {
     const top = clampEditScrollTop(containerRef.scrollTop);
     const currentViewportHeight = containerRef.clientHeight;
     const scrollDelta = top - lastObservedScrollTop;
+    const layoutAnchorSettling =
+      !!untrack(changedLayoutAnchor) && changedLayoutAnchorInputEpoch === directScrollInputEpoch;
     const mountedDetachedAnchor = (() => {
+      if (layoutAnchorSettling) return null;
       if (suppressSyncScrollTop || Math.abs(scrollDelta) <= 0.5) return null;
       if (widthResizeActive || stickyNavigationOwnsScroll() || editingMessage()) return null;
       if (directMovementAnchor) {
@@ -5911,18 +6077,38 @@ export function MessageList() {
         const anchorElement = getMountedScrollAnchorElement(anchor);
         const anchorRect = anchorElement?.getBoundingClientRect();
         const containerRect = containerRef!.getBoundingClientRect();
+        // An earlier response can enter above a still-visible assistant anchor.
+        // Keep deliberate user-card anchoring and defer prefix reads until needed.
+        const anchorRowRect =
+          scrollDelta < -0.5 && anchor.renderKey
+            ? mountedMessageRows.get(anchor.messageId)?.getBoundingClientRect()
+            : null;
+        const anchorRowStillVisible =
+          !!anchorRowRect &&
+          anchorRowRect.bottom > containerRect.top &&
+          anchorRowRect.top < containerRect.bottom;
+        const metrics = anchorRowStillVisible && shouldVirtualize() ? virtualMetrics() : null;
+        let index = metrics
+          ? getFirstVisibleMessageIndexFromVirtualMetrics({
+              metrics,
+              scrollTop: getVirtualScrollTop(top),
+            })
+          : null;
+        const anchorIndex = index === null ? undefined : messageIndexById().get(anchor.messageId);
+        const revealedEarlierRow =
+          index !== null && anchorIndex !== undefined && index < anchorIndex;
         if (
+          revealedEarlierRow ||
           !anchorRect ||
           anchorRect.bottom <= containerRect.top ||
           anchorRect.top >= containerRect.bottom
         ) {
-          const metrics = shouldVirtualize() ? virtualMetrics() : null;
-          const index = metrics
-            ? getFirstVisibleMessageIndexFromVirtualMetrics({
-                metrics,
-                scrollTop: getVirtualScrollTop(top),
-              })
-            : null;
+          if (!metrics && shouldVirtualize()) {
+            index = getFirstVisibleMessageIndexFromVirtualMetrics({
+              metrics: virtualMetrics(),
+              scrollTop: getVirtualScrollTop(top),
+            });
+          }
           const replacement = refineTallRenderItemScrollAnchor(
             index === null
               ? captureVisibleScrollAnchor({ preferStableRenderItem: true })
@@ -5930,6 +6116,9 @@ export function MessageList() {
             WIDTH_RESIZE_ANCHOR_INSET_PX,
             { includeCompact: true }
           );
+          // Once the destination has painted, a pre-wheel prediction must not pin a
+          // later row through width reflow while newly revealed content moves above it.
+          if (replacement && revealedEarlierRow) pendingWheelResizeAnchor = null;
           directMovementAnchor = replacement ? { anchor: replacement, scrollTop: top } : null;
           return replacement;
         }
@@ -5985,7 +6174,12 @@ export function MessageList() {
     // Layout-driven scroll events during history settling belong to the history anchor, not the
     // wheel gesture that originally reached the boundary. Structural reconciliation has the same
     // ownership until direct input supersedes it.
-    if (actualScrollMovement && !historyAnchorSettling && !structuralAnchorSettling) {
+    if (
+      actualScrollMovement &&
+      !historyAnchorSettling &&
+      !structuralAnchorSettling &&
+      !layoutAnchorSettling
+    ) {
       userScrollOwnershipEpoch += 1;
     }
     if (
@@ -5999,7 +6193,7 @@ export function MessageList() {
     }
     const userScrolledUp =
       now - lastWheelUpAt <= 160 ||
-      (scrollDelta < -1 &&
+      (scrollDelta < -0.5 &&
         (pointerScrollOwnershipActive || now - lastScrollInputAt <= SCROLL_INPUT_WINDOW_MS));
     const confirmedManualUpwardMovement = scrollDelta < 0 && userScrolledUp;
     if (!autoScrollEnabled || now - lastWheelAt <= ACTIVE_WHEEL_WINDOW_MS || userScrolledUp) {
@@ -6073,6 +6267,7 @@ export function MessageList() {
     }
     // Resize corrections can look like downward movement after an upward wheel.
     const shouldReattachToBottom =
+      !layoutAnchorSettling &&
       !stickyNavigationOwnsScroll() &&
       !editingMessage() &&
       !autoScrollEnabled &&
@@ -6095,6 +6290,7 @@ export function MessageList() {
       autoScrollThresholdPx: AUTO_SCROLL_THRESHOLD_PX,
     });
     if (decision.shouldCancelPendingScroll) {
+      pendingScrollToBottomRequest = false;
       pinnedToBottom = false;
     } else if (
       distance < AUTO_SCROLL_THRESHOLD_PX &&
@@ -6127,14 +6323,14 @@ export function MessageList() {
     if (
       autoScroll() &&
       pinnedToBottom &&
-      distance <= 1 &&
+      (distance <= 1 || (actualScrollMovement && scrollDelta > 0.5 && userScrollInputActive)) &&
       activityExitBottomTarget === null &&
       !pointerScrollOwnershipActive &&
       !editingMessage() &&
       !diffFocusPauseActive
     ) {
-      // An exit that began while detached has no reserve. Protect its remaining height when
-      // native input reaches the bottom before the animation finishes. A held scrollbar
+      // Protect the remaining exit height at a newer downward destination, including one
+      // inside the reserved range rather than at its bottom. A held scrollbar
       // already owns scrolling; layout-driven bottom events must not reclaim its exit anchor.
       reserveCollapsedActivityTraySpace(exitingActivityPartKeys(), true);
     }
@@ -6298,7 +6494,9 @@ export function MessageList() {
       initialScrollRafId = 0;
       activeFollowLoopSessionId = null;
     }
-    if (deltaY < -0.5) {
+    // Subpixel trackpad input must release follow before native movement is rounded
+    // or a streamed update queues another bottom correction.
+    if (deltaY < 0) {
       lastWheelUpAt = lastWheelAt;
       // Diff focus has already paused follow; wheel intent must cancel its deferred resume too.
       resumeAutoScrollAfterDiffFocus = false;
@@ -6307,7 +6505,14 @@ export function MessageList() {
         scheduleUpwardStickyHandoffRelease();
       }
       if (autoScroll() || pinnedToBottom || followModeLocked) {
+        // Commit the first upward step with the ownership handoff. Chromium can otherwise
+        // add an already-submitted follow write to the native wheel destination afterward.
+        const applyWheelMovement = !wheelListenerPassive && event.cancelable && !!containerRef;
+        if (applyWheelMovement) event.preventDefault();
         disengageBottomFollow();
+        if (applyWheelMovement && containerRef) {
+          containerRef.scrollTop = Math.max(0, containerRef.scrollTop + deltaY);
+        }
       }
       if (
         containerRef &&
@@ -6478,11 +6683,14 @@ export function MessageList() {
       else if (event.key === 'End') nextScrollTop = maximumScrollTop;
       event.preventDefault();
       const resolvedScrollTop = Math.min(maximumScrollTop, Math.max(0, nextScrollTop));
+      const movedDown = resolvedScrollTop > containerRef.scrollTop + 0.5;
       if (resolvedScrollTop < containerRef.scrollTop - 0.5) {
         disengageBottomFollow();
         resumeAutoScrollAfterDiffFocus = false;
       }
       containerRef.scrollTop = resolvedScrollTop;
+      // Reserve before the next animation frame can shrink the range under this destination.
+      if (movedDown) reserveCollapsedActivityTraySpace(exitingActivityPartKeys(), true);
       directMovementAnchor = null;
       // Host resize can arrive before the destination frame. It must restore the
       // keyboard destination, not the detached anchor from before this movement.
@@ -6568,6 +6776,14 @@ export function MessageList() {
     if (activityCollapseSettleRafId) cancelAnimationFrame(activityCollapseSettleRafId);
     activityCollapseSettleRafId = 0;
     pointerScrollOwnershipActive = true;
+    pointerScrollRange = bottomScrollTop();
+    containerRef.dataset.pointerScrollOwned = '';
+    // Browser anchoring can otherwise adjust a detached, non-virtualized list
+    // while the native thumb is held, then the next pointer move restores the
+    // thumb's position. Let the pointer alone own scrolling until release.
+    containerRef.style.overflowAnchor = 'none';
+    // The measured append animation writes directly, bypassing performScroll's pointer guard.
+    cancelAppendScrollTransition();
     lastScrollInputAt = performance.now();
     directScrollInputEpoch += 1;
     virtualPlaceholderReleaseBlockedUntil = lastScrollInputAt + USER_SCROLL_IDLE_MS;
@@ -6575,6 +6791,9 @@ export function MessageList() {
 
   function releasePointerScrollOwnership() {
     pointerScrollOwnershipActive = false;
+    pointerScrollRange = 0;
+    containerRef?.style.removeProperty('overflow-anchor');
+    if (containerRef) delete containerRef.dataset.pointerScrollOwned;
   }
 
   function handleFocusIn(event: FocusEvent) {
@@ -6882,7 +7101,17 @@ export function MessageList() {
     const container = containerRef;
     if (!container) return;
 
-    const options: AddEventListenerOptions = { passive: !editingMessage() };
+    // Release live follow before the compositor applies upward movement. A passive listener
+    // lets an in-flight follow frame write over the gesture before wheel intent arrives.
+    const followingLiveOutput =
+      autoScroll() &&
+      (activeSessionWorking() ||
+        !!visibleRunningToolPart() ||
+        !!state.streamingPartId ||
+        state.streamingText.length > 0 ||
+        presentation.pending());
+    wheelListenerPassive = !editingMessage() && !followingLiveOutput;
+    const options: AddEventListenerOptions = { passive: wheelListenerPassive };
     container.addEventListener('wheel', onWheel, options);
     onCleanup(() => container.removeEventListener('wheel', onWheel, options));
   });
@@ -7171,6 +7400,17 @@ export function MessageList() {
       } else if (containerHeightDelta < -0.5) {
         consumeBottomReserve(-containerHeightDelta);
       }
+      if (pointerScrollOwnershipActive) {
+        const range = bottomScrollTop();
+        if (range < pointerScrollRange - 0.5) {
+          // Detached trays can shrink without creating a pinned exit reservation.
+          // Keep the native thumb's range stable without restoring any scrollTop.
+          reserveHeldScrollbarRange(pointerScrollRange - range);
+        }
+        // Replacement content consumes reserve. Counting both as new range would retain another
+        // tray's height on every completion throughout the hold.
+        pointerScrollRange = Math.max(pointerScrollRange, range - untrack(appendBottomReserve));
+      }
       if (trackChanged && !appendReserveReconcileFrame) {
         // Consuming a reserve changes the observed track itself. A microtask still runs
         // inside resize delivery, so coalesce that write into the next animation frame.
@@ -7223,7 +7463,7 @@ export function MessageList() {
           containerHeightDelta < -0.5 && !hostViewportResizing && !widthChanged;
         if ((trackChanged || localViewportShrinking) && shouldCorrectBottomAfterResize()) {
           // Composer growth removes viewport space, so keep the bottom aligned before paint.
-          // Transcript growth and host reflow retain their normal follow motion.
+          // Width reflow also bypasses easing in performScroll while measurements settle.
           performScroll({
             force: true,
             immediate: localViewportShrinking,

@@ -15,13 +15,14 @@ internal class QuotaAdapters(
 ) {
     fun poll(provider: JsonObject, auth: JsonObject, model: String?, now: Long): JsonObject? {
         val id = provider.str("id") ?: return null
-        fun available(windows: List<JsonObject>, plan: String? = null): JsonObject = Json.obj(
+        fun available(windows: List<JsonObject>, plan: String? = null, creditBalance: Double? = null): JsonObject = Json.obj(
             "providerID" to id, "modelID" to model, "checkedAt" to now, "source" to "provider",
-            "status" to if (windows.isEmpty()) "unsupported" else "available",
-            "note" to if (windows.isEmpty()) "Provider returned no supported quota windows" else "Polled provider quota endpoint",
+            "status" to if (windows.isEmpty() && creditBalance == null) "unsupported" else "available",
+            "note" to if (windows.isEmpty() && creditBalance == null) "Provider returned no supported quota windows" else "Polled provider quota endpoint",
         ).apply {
-            if (windows.isNotEmpty()) add("windows", Json.array(windows.distinctBy { it.str("id") }))
+            if (windows.isNotEmpty() || creditBalance != null) add("windows", Json.array(windows.distinctBy { it.str("id") }))
             plan?.let { addProperty("planName", it) }
+            creditBalance?.let { addProperty("creditBalance", it) }
         }
         fun token(): String = credentials.token(provider, auth) ?: throw QuotaFailure("No $id credentials available. Connect the provider in OpenCode.", 401)
         return when (id) {
@@ -106,7 +107,8 @@ internal class QuotaAdapters(
                 if (response.code == 404) { base = "https://chatgpt.com/api/codex"; response = send("$base/usage", oauth.string("access"), headers) }
                 val payload = checked(response).json()
                 val plan = payload.string("plan_type")
-                val result = available(QuotaParsers.codex(payload, now), when (plan) { "pro" -> "Pro 20x"; "prolite" -> "Pro 5x"; else -> plan?.let(::label) })
+                val creditBalance = payload.obj("credits").number("balance")?.takeIf { it >= 0 }
+                val result = available(QuotaParsers.codex(payload, now), when (plan) { "pro" -> "Pro 20x"; "prolite" -> "Pro 5x"; else -> plan?.let(::label) }, creditBalance)
                 payload.record("rate_limit_reset_credits", "rateLimitResetCredits").number("available_count", "availableCount")?.takeIf { it > 0 }?.let { count ->
                     val summary = Json.obj("availableCount" to count.toInt(), "credits" to null)
                     runCatching { json("$base/rate-limit-reset-credits", oauth.string("access"), headers) }.getOrNull()?.let { detail ->

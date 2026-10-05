@@ -11,3 +11,24 @@ it('accepts the native quota event with nullable bounds and rejects the former s
   const formerWire = JSON.parse(JSON.stringify(message, (_key, value: unknown) => value === null ? undefined : value));
   expect(parseExtensionMessage(formerWire)).toBeNull();
 });
+
+it.each([62_500, 62500.5, 0])('accepts the native Codex credit balance %s without quota windows', (creditBalance) => {
+  const message = {
+    type: 'provider-limit/updated',
+    payload: { directory: null, status: {
+      providerID: 'openai', modelID: null, source: 'provider', status: 'available', checkedAt: 1_800_000_000_000,
+      windows: [], creditBalance,
+    } },
+  };
+  expect(parseExtensionMessage(message)).toEqual(message);
+});
+
+it.each(['62500', null, NaN, Infinity, -1])('rejects an invalid native credit balance %s', (creditBalance) => {
+  expect(parseExtensionMessage({
+    type: 'provider-limit/updated',
+    payload: { directory: null, status: {
+      providerID: 'openai', modelID: null, source: 'provider', status: 'available', checkedAt: 1_800_000_000_000,
+      windows: [], creditBalance,
+    } },
+  })).toBeNull();
+});

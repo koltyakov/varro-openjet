@@ -51,7 +51,7 @@ export function upsertMessage(msg: MessageEntry) {
         messageIndex.invalidate();
       } else {
         msgs.push(msg);
-        messageIndex.invalidate();
+        messageIndex.appendMessage(msgs);
       }
     })
   );
@@ -85,7 +85,7 @@ export function upsertMessageInfo(info: Message) {
         return;
       } else {
         msgs.push({ info, parts: [] });
-        messageIndex.invalidate();
+        messageIndex.appendMessage(msgs);
       }
     })
   );

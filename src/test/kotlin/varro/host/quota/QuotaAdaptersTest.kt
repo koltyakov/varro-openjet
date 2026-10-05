@@ -62,6 +62,50 @@ class QuotaAdaptersTest {
         assertEquals(80, legacy.single().int("remaining"))
     }
 
+    @Test fun `Codex credit balances are available with or without quota windows`() {
+        val credentials = QuotaCredentials(temporary.newFolder().toPath(), emptyMap())
+        val provider = Json.obj("id" to "openai", "models" to JsonObject())
+        val auth = Json.obj("openai" to Json.obj("type" to "oauth", "access" to "test-token"))
+        for (balance in listOf(62_500, "62500.50", 0, "0")) {
+            for (withWindows in listOf(false, true)) {
+                val payload = Json.obj("credits" to Json.obj("balance" to balance))
+                if (withWindows) payload.add("rate_limit", Json.obj("primary_window" to Json.obj("used_percent" to 20)))
+                var requests = 0
+                val adapters = QuotaAdapters(QuotaHttp { request ->
+                    requests++
+                    assertEquals("https://chatgpt.com/backend-api/wham/usage", request.url)
+                    assertEquals("Bearer test-token", request.headers["Authorization"])
+                    QuotaResponse(200, Json.stringify(payload).toByteArray())
+                }, credentials) { _, _ -> fail("Unexpected OAuth refresh") }
+                val result = adapters.poll(provider, auth, "test-model", now)!!
+                assertEquals("available", result.str("status"))
+                assertEquals(balance.toString().toDouble(), result.number("creditBalance")!!, 0.0)
+                assertEquals(if (withWindows) 1 else 0, result.arr("windows")!!.size())
+                assertEquals(1, requests)
+            }
+        }
+    }
+
+    @Test fun `Codex invalid credit balances do not create available quotas`() {
+        val credentials = QuotaCredentials(temporary.newFolder().toPath(), emptyMap())
+        val provider = Json.obj("id" to "openai", "models" to JsonObject())
+        val auth = Json.obj("openai" to Json.obj("type" to "oauth", "access" to "test-token"))
+        for (credits in listOf(JsonObject(), Json.obj("balance" to null), Json.obj("balance" to ""),
+            Json.obj("balance" to "unknown"), Json.obj("balance" to "NaN"), Json.obj("balance" to "Infinity"),
+            Json.obj("balance" to -1), Json.obj("balance" to JsonObject()), Json.obj("balance" to true))) {
+            for (withWindows in listOf(false, true)) {
+                val payload = Json.obj("credits" to credits)
+                if (withWindows) payload.add("rate_limit", Json.obj("primary_window" to Json.obj("used_percent" to 20)))
+                val adapters = QuotaAdapters(QuotaHttp {
+                    QuotaResponse(200, Json.stringify(payload).toByteArray())
+                }, credentials) { _, _ -> fail("Unexpected OAuth refresh") }
+                val result = adapters.poll(provider, auth, "test-model", now)!!
+                assertEquals(if (withWindows) "available" else "unsupported", result.str("status"))
+                assertFalse(result.has("creditBalance"))
+            }
+        }
+    }
+
     @Test fun `credential fallback honors isolated XDG and provider home overrides`() {
         val home = temporary.newFolder().toPath()
         val data = temporary.newFolder().toPath()

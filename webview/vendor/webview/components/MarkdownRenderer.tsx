@@ -2436,9 +2436,9 @@ function MermaidPreviewOverlay(props: { preview: { svg: string } | null; onClose
   });
 
   return (
-    <Portal>
-      <Show when={props.preview}>
-        {(preview) => (
+    <Show when={props.preview}>
+      {(preview) => (
+        <Portal>
           <div
             ref={(element) => onCleanup(trapModalFocus(element))}
             class="mermaid-preview-overlay"
@@ -2468,8 +2468,8 @@ function MermaidPreviewOverlay(props: { preview: { svg: string } | null; onClose
               onClick={(event) => event.stopPropagation()}
             />
           </div>
-        )}
-      </Show>
-    </Portal>
+        </Portal>
+      )}
+    </Show>
   );
 }

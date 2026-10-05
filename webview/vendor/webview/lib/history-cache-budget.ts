@@ -1,3 +1,4 @@
+import { $RAW } from 'solid-js/store';
 import { isObject, isString } from './runtime-values';
 import type { MessageEntry } from '../types';
 
@@ -10,7 +11,13 @@ function estimateBytes(value: readonly MessageEntry[]): number {
   const seen = new Set<object>();
   let bytes = 0;
   while (pending.length && bytes <= MAX_HISTORY_CACHE_BYTES) {
-    const item = pending.pop();
+    const candidate = pending.pop();
+    // Counting a store snapshot must not create proxies and reactive nodes for every
+    // historical field. Read its backing object without changing the cached entries.
+    // SAFETY: isObject narrows to an object; Solid's optional $RAW value remains unknown.
+    const item = isObject(candidate)
+      ? ((candidate as { [$RAW]?: unknown })[$RAW] ?? candidate)
+      : candidate;
     if (isString(item)) bytes += item.length * 2;
     else if (isObject(item) && !seen.has(item)) {
       seen.add(item);

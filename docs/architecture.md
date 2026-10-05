@@ -34,7 +34,6 @@ and reads the older database transcript format. Unknown captured envelopes remai
 the provider. No vendored files are rewritten during sync or transformed for host wording in Vite.
 
 `npm run sync:check` verifies the vendored content hash recorded in `vendor/UPSTREAM.json`.
-Until the host API revision is published upstream, sync with `VARRO_SOURCE=/path/to/varro npm run sync`.
 The upstream contract is documented in Varro's `docs/host-extensions.md`.
 
 ## Layout

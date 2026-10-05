@@ -1541,7 +1541,17 @@ function normalizeEditableExternalLinks(editor: HTMLElement): boolean {
     editor.querySelectorAll<HTMLElement>('.composer-external-link')
   )) {
     const content = element.textContent ?? '';
-    const segments = splitExternalLinkText(content);
+    // A trailing dot is plain text until the next character makes it part of
+    // the hostname. Include adjacent text so the editable link can grow again.
+    let candidate = content;
+    for (
+      let sibling = element.nextSibling;
+      sibling instanceof Text;
+      sibling = sibling.nextSibling
+    ) {
+      candidate += sibling.data;
+    }
+    const segments = splitExternalLinkText(candidate);
     const linkIndex = segments.findIndex((segment) => segment.type === 'external-link');
     if (linkIndex === -1) {
       element.replaceWith(document.createTextNode(content));
@@ -1555,12 +1565,39 @@ function normalizeEditableExternalLinks(editor: HTMLElement): boolean {
       .slice(0, linkIndex)
       .map((segment) => (segment.type === 'text' ? segment.content : segment.href))
       .join('');
-    const linkStart = content.indexOf(link.href, prefix.length);
-    const suffix = content.slice(linkStart + link.href.length);
-    if (!prefix && !suffix) continue;
+    const linkStart = candidate.indexOf(link.href, prefix.length);
+    if (linkStart >= content.length) {
+      element.replaceWith(document.createTextNode(content));
+      changed = true;
+      continue;
+    }
+    const linkEnd = linkStart + link.href.length;
+    const suffix = content.slice(linkEnd);
+    let remaining = Math.max(0, linkEnd - content.length);
+    element.title = link.href;
+    if (!prefix && !suffix && remaining === 0) continue;
+
+    while (remaining > 0 && element.nextSibling instanceof Text) {
+      const sibling = element.nextSibling;
+      const consumed = Math.min(remaining, sibling.length);
+      sibling.deleteData(0, consumed);
+      remaining -= consumed;
+      if (sibling.length === 0) sibling.remove();
+    }
 
     if (prefix) element.before(document.createTextNode(prefix));
-    element.textContent = link.href;
+    const leadingContent = element.querySelector('.link-leading-content');
+    const leadingLabel = leadingContent?.querySelector('.link-leading-label');
+    if (leadingContent && leadingLabel) {
+      const firstCharacter = Array.from(link.href)[0] ?? '';
+      leadingLabel.textContent = firstCharacter;
+      element.replaceChildren(
+        leadingContent,
+        document.createTextNode(link.href.slice(firstCharacter.length))
+      );
+    } else {
+      element.textContent = link.href;
+    }
     if (suffix) element.after(document.createTextNode(suffix));
     changed = true;
   }

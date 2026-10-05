@@ -55,11 +55,14 @@
 
     <change-notes><![CDATA[
         <h3>0.7.1</h3>
-        <p>Synced Varro 0.32.0 through f3f31612e9e3. Added opt-in desktop notifications and
+        <p>Synced Varro 0.32.2 through 70fa4c49950c. Added opt-in desktop notifications and
             per-event water-bubble sounds for permissions, questions, completed replies and plans
             ready for review. Alerts are grouped, suppressed while the IDE is active or visible
-            on macOS, and delayed while permissions are handled automatically. Improved
-            session-list performance and diff scroll positioning.</p>
+            on macOS, and delayed while permissions are handled automatically. Added Codex credit
+            balances to the quota popup and milestone reminders for expiring quota resets. Improved
+            session-list and long-history performance, scrolling during resizing and scrollbar dragging,
+            and scroll positioning when toggling file diffs. Fixed composer link editing and excluded
+            file and working-directory context from recalled prompts.</p>
         <h3>0.7.0</h3>
         <p>Synced Varro 0.31.3 through a74977a91f3f. Added Kotlin-generated image thumbnails,
             on-demand original attachment loading, and deferred reasoning and general-tool details.

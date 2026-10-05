@@ -140,6 +140,8 @@ V2 session sharing is unavailable. Varro stores V2-only metadata and archive tim
 
 Quota badges show remaining allowances and reset times when the provider exposes them. The Kotlin adapters support Anthropic/Claude Code, OpenAI Codex, GitHub Copilot, OpenRouter, Gemini, Antigravity, Ollama Cloud, OpenCode Go, Z.ai, MiniMax, Kimi, and xAI. They use existing credentials and the IDE's HTTP proxy and certificate settings. No Node.js helper is required.
 
+The Codex quota popup also shows the remaining credit balance when the usage endpoint provides it, even without active quota windows.
+
 When a poll fails, Varro may show the last successful snapshot for up to 15 minutes. Quota caches are project-local. Antigravity needs a detected local language-server port or the `ANTIGRAVITY_BASE_URL` and `ANTIGRAVITY_CSRF_TOKEN` environment variables, with a loopback IP address in the URL.
 
 Usage reports open as Markdown documents and cover retained history across projects for today, the last 7 and 30 days, and optionally all time. They read the local OpenCode database without starting the server and include prompt counts, tokens, cache usage, and assistant duration by provider and model. If the database is missing, reports fall back to REST history for up to 250 sessions.
