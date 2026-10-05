@@ -54,195 +54,56 @@
     ]]></description>
 
     <change-notes><![CDATA[
-        <h3>0.7.1</h3>
-        <p>Synced Varro 0.32.2 through 70fa4c49950c. Added opt-in desktop notifications and
-            per-event water-bubble sounds for permissions, questions, completed replies and plans
-            ready for review. Alerts are grouped, suppressed while the IDE is active or visible
-            on macOS, and delayed while permissions are handled automatically. Added Codex credit
-            balances to the quota popup and milestone reminders for expiring quota resets. Improved
-            session-list and long-history performance, scrolling during resizing and scrollbar dragging,
-            and scroll positioning when toggling file diffs. Fixed composer link editing and excluded
-            file and working-directory context from recalled prompts.</p>
-        <h3>0.7.0</h3>
-        <p>Synced Varro 0.31.3 through a74977a91f3f. Added Kotlin-generated image thumbnails,
-            on-demand original attachment loading, and deferred reasoning and general-tool details.
-            Previews support PNG, JPEG, GIF and WebP with orientation correction, transparency,
-            bounded memory caching and cancellation. New chats remember the last selected model
-            across views and shared IDE settings. Improved long-history loading and rendering.
-            Syntax highlighting now runs in a lazy worker to keep the chat responsive.</p>
-        <h3>0.6.2</h3>
-        <p>Synced Varro 0.31.2 through 1c8c8934af8a. Fixed transcript jumps and Thinking flashes
-            during streaming. Improved prompt navigation highlights and empty-chat hints in narrow
-            views, softened composer and prompt scrollbars, and updated Mermaid to 12.1.0.</p>
-        <h3>0.6.1</h3>
-        <p>Added status-bar diagnostics for CLI and server versions, server port and uptime, and
-            the OpenJet version. Version warnings flag outdated CLIs and servers older than the
-            installed CLI. Attach-only connections show the server address and IP. Synced Varro
-            through 9fb2498742b3. New chats now use the default primary agent instead of restoring
-            the globally saved selection. Added Markdown link tooltips and prevented Alt from
-            activating the Windows menu while showing prompt numbers. Updated empty-chat hints,
-            logo rendering and status icons.</p>
-        <h3>0.6.0</h3>
-        <p>Synced Varro 0.31.0 through aadaead68b6a. Preserved model choices, drafts, and attachments
-            when providers are unavailable, with retryable provider refreshes. Added model-selection
-            acknowledgements to protect newer composer choices from older host snapshots. Prompts with
-            agent, model, or reasoning settings that differ from the active turn are queued. Added Resume
-            steering after cancellation without duplicating prompts, generation-speed estimates, and
-            clearer Fast and Ultrafast labels. Fixed IME input handling and excluded broken images from
-            sends. Improved startup loading, interrupted-response refreshes, scrolling, question visibility,
-            and activity grouping around compaction. Updated webview build and test dependencies.</p>
-        <h3>0.5.0</h3>
-        <p>Synced Varro 0.30.15 through ff2bebfc1ecd. Added image compression options in the composer
-            with size previews and an action to restore the original. Steering messages now have distinct
-            styling and turn labels, retain their delivery mode after reload, and cannot be edited after
-            sending. Fixed turn timers during steering and retries. Skipped plans now show a notice with
-            actions to reopen or implement them. Improved prompt navigation and composer history.
-            Added &quot;Mark all as read&quot; for filtered lists of completed, plan-ready, and failed sessions.
-            Fixed bottom-follow scrolling when toggling inline file diffs, while preserving the scroll
-            position when reading earlier messages.</p>
-        <h3>0.4.5</h3>
-        <p>Synced Varro 0.30.11 through 074cacb09ddd. Added paged turn navigation with hover previews
-            and grouped consecutive prompts under one turn number. Improved provider-error details
-            with copyable response bodies and retry countdowns. Limited automatic provider retries
-            to three attempts with increasing delays, preserving cancellation and retry state across
-            status refreshes. Updated the ChatGPT usage link.</p>
-        <h3>0.4.4</h3>
-        <p>Synced Varro 0.30.10 through 3eac33c2c14b. Added warnings when available provider reset
-            credits expire within five days, with saved dismissals. Quota warnings now show the number
-            of available resets and alternate with expiration warnings when both apply.</p>
-        <h3>0.4.3</h3>
-        <p>Synced Varro 0.30.9 through 7285642a0a62. Fixed prompt numbering to skip empty and
-            automatic-only messages. Excluded session-resume messages from sticky previews and
-            prompt navigation.</p>
-        <h3>0.4.2</h3>
-        <p>Synced Varro 0.30.8 through d5cd23b52f6b. Improved long-chat rendering, scrolling,
-            composer resizing, retry display and file-change tracking. Added provider quota warnings.
-            Updated agent-selection and queued-message acknowledgements to preserve newer local
-            changes when older host updates arrive.</p>
-        <h3>0.4.1</h3>
-        <p>Synced Varro through f3b0b688a2d5. Added configured agent icons to the picker and toolbar,
-            with a cube fallback for custom agents, and improved agent label formatting. Fixed excess
-            blank space in short chats after activity collapses and prevented auto-scroll from interfering
-            with scrollbar dragging. Updated scrollbar styling to hide arrow buttons and use consistent
-            thumb colors. Kept the working indicator animated when reduced motion is enabled.</p>
-        <h3>0.4.0</h3>
-        <p>Expanded DataGrip context with active datasources, SQL and object metadata, including
-            datasource awareness with no editor open. Compacted database chips and hid automatic
-            context from prompt history. Fixed macOS editing shortcuts. Synced Varro through
-            33ca48c5b500 and moved JetBrains customizations to host extension hooks.</p>
-        <h3>0.3.10</h3>
-        <p>Synced Varro through bdae3be07121. Added overall session cost including subagents,
-            with cost details restored from local history. Added send animations and fixed attachment
-            visibility during sends and draft restoration after failed sends. Successful provider
-            responses now clear older authentication failure notices. Shared elapsed-time timers
-            reduce redundant updates. Updated webview dependencies.</p>
-        <h3>0.3.9</h3>
-        <p>Synced Varro through b7c80c9717af. Fixed return-to-bottom scrolling and preserved the
-            visible response position after keyboard navigation. Pasted-text attachments now preview
-            base64-encoded content, and attachment-only messages display without an extra wrapper.
-            Inline attachments stay in place while sending. Pastes shorter than 10 lines remain
-            editable text instead of becoming editor or terminal context attachments. Updated Vite.</p>
-        <h3>0.3.8</h3>
-        <p>Synced Varro through a061cf7d4a3e. Added OpenCode V2 session pause and resume, with
-            parked queued messages and pause-aware session and usage durations. Large text pastes
-            become previewable attachments that survive draft and queue restoration. Improved
-            streaming activity, attachment display and scrolling as the composer collapses.
-            V2 commit-message generation uses the stateless endpoint when available, with
-            helper-session fallback for older servers and unsupported models. Updated DOMPurify.</p>
-        <h3>0.3.7</h3>
-        <p>Synced Varro through 45eedb25d62c. Pasted saved-editor selections and matching terminal
-            output become context attachments. Improved attachment editing, queued context and composer
-            completion placement. Model refreshes show progress and discover new models while retaining
-            explicit removals across chat views. V2 synthetic messages appear as automatic-action notices.
-            Authenticated servers now prompt for credentials and save verified passwords in the IDE password
-            safe. Corrected migrated usage timing and retained recycle-bin entries until deletion is confirmed.</p>
-        <h3>0.3.6</h3>
-        <p>Synced the latest Varro UI, fixing scroll position after short replies and showing
-            permission approval failures inline. Aligned attach-only connections with upstream:
-            external servers use the configured port without ownership takeover or local maintenance,
-            usage reports read server history, and unsupported local configuration, quota, CLI and
-            history-import actions explain where to run them.</p>
-        <h3>0.3.5</h3>
-        <p>Updated the Varro chat UI and aligned the OpenCode V2 backend. Background shell work now
-            keeps sessions busy through follow-up turns and stops when cancelled. Queued and steering
-            messages retain their delivery state. Fixed provider sign-in attempt tracking, cancellation
-            cleanup and authentication form defaults and field types. Corrected configured model pricing,
-            partial model limits, project configuration precedence and mixed-format model routing.
-            Fixed workspace paths containing Unicode or literal percent escapes, and hid incomplete
-            HTML tags while Markdown streams.</p>
-        <h3>0.3.4</h3>
-        <p>Added workspace disabling for automatically discovered Ollama, LM Studio and vLLM providers
-            in OpenCode V2. Disabled providers' configured models now stay hidden. Fixed provider
-            credential and environment status using V2 integration data. Updated provider reconnection
-            and retry recovery notices, corrected the provider logout command, and fixed file-edit card
-            cleanup during chat updates.</p>
-        <h3>0.3.3</h3>
-        <p>Added TypeSafe Jev as an optional reviewer for Auto-mode permission requests, connected from
-            the Models view menu and stored in the IDE password safe, or read from
-            <code>TYPESAFE_API_KEY</code>. Jev reviews requests before the judge model and approves only
-            confident, low-risk actions. Everything else asks, and Jev errors fall back to the judge model.
-            Auto-approve activity now shows which model reviewed each request.</p>
-        <h3>0.3.2</h3>
-        <p>Added shared OpenCode server ownership across Varro family products, with ownership handoff
-            and recovery after an IDE host exits. Closing a project now leaves its server available
-            to other Varro hosts. Fixed ownership recovery after macOS binary updates. Restart checks
-            now detect active sessions and pending questions or permissions, while allowing idle V2
-            servers to restart when historical session directories have been deleted.</p>
-        <h3>0.3.1</h3>
-        <p>Added retry recovery notices to assistant history. Updated V2 installation and upgrade
-            commands, provider authentication forms and server status screens. Fixed handling of
-            streamed message parts, permissions and Windows paths. Provider connection forms now
-            accept optional fields and support multiple conditions for showing a field.</p>
-        <h3>0.3.0</h3>
-        <p>Added OpenCode V2 support from 2.0.5, alongside V1 support from 1.16.0, with automatic
-            protocol detection and discovery of registered local V2 services. Added authenticated V2
-            connections, V2 configuration support, and CLI updates using the matching package.
-            Added a Tools-menu action to import V1 conversations and their same-workspace child sessions
-            into V2. Usage reports now read both versions and avoid counting imported conversations twice.
-            Updated chat rendering for V2 skill, shell and patch activity. The tool window now shows
-            the connected OpenCode server version.</p>
-        <h3>0.2.0</h3>
-        <p>Removed the upper IDE build limit, with support starting at 2025.2. Detached chat window
-            commands now appear only on IDEs with the required APIs, available in 2026.1 and newer.
-            Added API pricing and provider quota details to the model picker, using cached models.dev
-            rates with OpenCode pricing as a fallback. Permission prompts now identify subagent requests.
-            Older message summaries show relative dates.</p>
-        <h3>0.1.7</h3>
-        <p>Added detached IDE windows for new and existing chats. Added a light/dark toggle in wide
-            editor and window chats, with per-chat state and a saved preference for new chats.
-            Fixed stale browser regions during window resizing. Smoothed bottom following as messages
-            grow and corrected message-row alignment before painting.</p>
-        <h3>0.1.6</h3>
-        <p>Added workspace errors and warnings as chat context, with individual problem references,
-            a Problems-view action and settings to disable inclusion. Problem attachments persist across
-            drafts, queued messages and message edits. Added table attachments from Database Explorer
-            drag-and-drop and @ mentions, and preserved database snapshot details in stored attachments.
-            Reduced redundant editor-context refreshes and saved-view updates. Improved streaming Markdown
-            performance and set a 60 FPS default for off-screen browser rendering, with IDE frame-rate
-            overrides respected. Added an in-IDE scrolling benchmark.</p>
-        <h3>0.1.5</h3>
-        <p>Added database context in DataGrip and IDEs with Database Tools, including table schemas,
-            selected rows and JSON snapshot attachments. Added opt-in sharing of model lists and core
-            settings across JetBrains IDEs. Fixed macOS line navigation in editable chat content.</p>
-        <h3>0.1.4</h3>
-        <p>Added a read-only Ask agent and shell and patch timers. Saved and synced session selections across views.
-            Fixed permission saving, draft selections and session forking. Improved auto-scroll, streaming Markdown
-            and attachment spacing. Refined light-theme styling, compaction visibility and the toolbar version label.</p>
-        <h3>0.1.3</h3>
-        <p>Smoothed streaming text, tool activity transitions and auto-scroll. Reduced scroll jumps when
-            activity, to-do lists and file-change cards collapse. Kept more sessions visible in the session list
-            and fixed formatting for editor and terminal selections containing Markdown code fences.</p>
-        <h3>0.1.2</h3>
-        <p>Refined chat activity and file-change display. Fixed auto-scroll, diff preview stability,
-            streaming inline code, and composer busy indicators. Restored native Command+Arrow navigation.</p>
-        <h3>0.1.1</h3>
-        <p>Fixed browser resource loading and file drag-and-drop on IntelliJ IDEA 2025.2, 2025.3 and 2026.1,
-            and quota requests on 2025.2 with redirects still blocked. Removed internal API dependencies
-            and redundant generated overrides. Verified on IntelliJ IDEA 2025.2.6.3, 2025.3.6.1,
-            2026.1.5 and 2026.2.2.</p>
-        <h3>0.1.0</h3>
-        <p>Initial release of the OpenCode workbench for JetBrains IDEs, with project-aware chat,
-            parallel sessions, plan and change review, model and permission controls, and usage reporting.</p>
+        <h3>0.7.x</h3>
+        <ul>
+            <li>Optional background desktop alerts and sounds for permissions, questions, completed
+                replies and plans ready for review.</li>
+            <li>Image previews in chat history, faster long-chat loading and smoother scrolling.</li>
+            <li>New chats remember the last selected model. Codex quotas show credit balances and
+                reminders for expiring resets.</li>
+        </ul>
+        <h3>0.6.x</h3>
+        <ul>
+            <li>Keep drafts, attachments and model choices when a provider is unavailable; resume
+                cancelled work without duplicate prompts.</li>
+            <li>Status-bar connection details and warnings for outdated CLI or server versions.</li>
+            <li>Fixed streaming jumps and IME input; improved prompt navigation and model-speed labels.</li>
+        </ul>
+        <h3>0.5.x</h3>
+        <ul>
+            <li>Compress image attachments with size previews and an option to restore the original.</li>
+            <li>Reopen or implement skipped plans, and mark filtered session lists as read.</li>
+            <li>Clearer steering messages and more reliable timers, prompt history and diff scrolling.</li>
+        </ul>
+        <h3>0.4.x</h3>
+        <ul>
+            <li>DataGrip context includes active datasources, SQL and related database objects.</li>
+            <li>Turn navigation with hover previews, custom agent icons and quota-expiration warnings.</li>
+            <li>Clearer provider errors and retry countdowns; improved scrolling and macOS editing shortcuts.</li>
+        </ul>
+        <h3>0.3.x</h3>
+        <ul>
+            <li>OpenCode V2 support alongside V1, automatic server discovery and V1 conversation import.</li>
+            <li>Pause and resume sessions, view costs including subagents, and paste long text or
+                matching editor and terminal selections as attachments.</li>
+            <li>Shared servers across Varro hosts, saved server credentials, optional TypeSafe Jev
+                permission review and controls for discovered local providers.</li>
+        </ul>
+        <h3>0.2.x</h3>
+        <ul>
+            <li>Support for JetBrains IDEs from 2025.2 without an upper build limit.</li>
+            <li>Model API pricing and provider quota details; permission prompts identify subagent requests.</li>
+        </ul>
+        <h3>0.1.x</h3>
+        <ul>
+            <li>OpenCode chat for JetBrains IDEs with parallel sessions, plan and change review,
+                model and permission controls, and usage reports.</li>
+            <li>Detached chat windows and per-chat light/dark toggles.</li>
+            <li>Database schemas, selected rows and project problems as context; table drag-and-drop
+                and @ mentions.</li>
+            <li>Shared settings across JetBrains IDEs, a read-only Ask agent and synced session selections.</li>
+            <li>Fixed file drops and native editing shortcuts; improved streaming, diffs and scrolling.</li>
+        </ul>
     ]]></change-notes>
 
     <depends>com.intellij.modules.platform</depends>

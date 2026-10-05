@@ -67,6 +67,9 @@ export default defineConfig({
     minify: 'oxc',
     sourcemap: false,
     target: 'es2022',
+    // Match upstream's Chromium CSS target so minification preserves selector
+    // specificity and class indexing instead of wrapping merged rules in :is().
+    cssTarget: 'chrome120',
     chunkSizeWarningLimit: 4096,
   },
 });
