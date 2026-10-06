@@ -56,11 +56,11 @@
     <change-notes><![CDATA[
         <h3>0.7.x</h3>
         <ul>
-            <li>Optional background desktop alerts and sounds for permissions, questions, completed
-                replies and plans ready for review.</li>
-            <li>Image previews in chat history, faster long-chat loading and smoother scrolling.</li>
-            <li>New chats remember the last selected model. Codex quotas show credit balances and
-                reminders for expiring resets.</li>
+            <li>Shared server ownership with VS Code Varro and safer restart recovery.</li>
+            <li>Fixed startup loading, skill insertion and chat handoffs.</li>
+            <li>Optional background alerts and sounds.</li>
+            <li>History image previews, faster loading and smoother scrolling.</li>
+            <li>Remembered model choices, Codex credits and quota-reset reminders.</li>
         </ul>
         <h3>0.6.x</h3>
         <ul>

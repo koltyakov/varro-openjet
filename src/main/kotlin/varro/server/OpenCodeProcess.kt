@@ -28,6 +28,7 @@ class OpenCodeProcess(
     private val configuredPort: () -> Int,
     private val workspaceCwd: () -> String?,
     private val askAgentEnabled: () -> Boolean = { false },
+    serverStateDirectory: java.nio.file.Path? = null,
 ) {
     private val log = logger<OpenCodeProcess>()
 
@@ -38,28 +39,77 @@ class OpenCodeProcess(
     private val managed = AtomicBoolean(false)
     private val capturedOutput = AtomicReference("")
     private val askAgentConfig = AskAgentConfig(cli.serverEnvironment(), workspaceCwd)
-    private val ownership by lazy { ServerOwnership(configuredPort()) }
+    private val ownership by lazy {
+        if (serverStateDirectory == null) ServerOwnership(configuredPort())
+        else ServerOwnership(configuredPort(), serverStateDirectory, serverStateDirectory)
+    }
     private var ownershipRegistered = false
-    private var serverPassword: String? = null
+    @Volatile private var serverPassword: String? = null
+    @Volatile private var serverUsername = "opencode"
+    private var credentialPort = 0
 
-    fun restoreConnection() {
-        ownership.connection()?.let { (port, password) ->
+    fun restoreConnection(): Boolean {
+        val connection = ownership.connection() ?: return false
+        connection.let { (port, password, username) ->
             adoptPort(port)
-            password?.let { OpenCodeConnection.register("http://127.0.0.1:$port", it) }
+            val servicePassword = if (password == null) OpenCodeConnection.registration(cli.serverEnvironment())?.takeIf {
+                it.url == "http://127.0.0.1:$port" && it.pid == ownership.registeredPid
+            }?.password else null
+            val savedPassword = password ?: servicePassword
+            if (savedPassword != null) {
+                credentialPort = port
+                serverPassword = savedPassword
+                serverUsername = username
+                OpenCodeConnection.register("http://127.0.0.1:$port", savedPassword, username)
+            }
+        }
+        return true
+    }
+
+    fun restoreDiscoveredOwnership(password: String) {
+        credentialPort = port
+        serverPassword = password
+        serverUsername = "opencode"
+        ownership.connection(port, password)?.let { connection ->
+            connection.password?.let {
+                serverPassword = it
+                serverUsername = connection.username
+                OpenCodeConnection.register("http://127.0.0.1:$port", it, connection.username)
+            }
         }
     }
 
-    fun refreshOwnership(takeover: Boolean = false): Boolean = ownership.refresh(port, takeover).also { managed.set(it) }
+    fun verifyConnection(reconnect: Boolean = false) = ownership.verifyConnection(port, reconnect)
+    val isCredentialOnly: Boolean get() = ownership.credentialOnly
+    val registeredPid: Long? get() = ownership.registeredPid
+    fun registrationChanged(): Boolean = ownership.registrationChanged()
+    fun beginLaunch(): Boolean = ownership.beginLaunch()
+    fun endLaunch() = ownership.endLaunch()
+
+    fun refreshOwnership(takeover: Boolean = false): Boolean = ownership.refresh(port, takeover,
+        serverPassword?.takeIf { credentialPort == port }, serverUsername).also { managed.set(it) }
 
     fun confirmOwnership(): Boolean {
         val pid = handler.get()?.process?.pid() ?: return false
-        return ownership.register(port, pid, serverPassword).also { ownershipRegistered = it; managed.set(it) }
+        val registered = runCatching { ownership.register(port, pid, serverPassword, serverUsername) }
+        ownershipRegistered = registered.getOrDefault(false)
+        managed.set(ownershipRegistered)
+        if (ownershipRegistered) return true
+        val password = serverPassword
+        if (password != null && ownership.retainConnection(port, password, serverUsername)) {
+            handler.set(null)
+            log.warn("Connected with verified OpenCode credentials without process ownership; lifecycle operations are disabled")
+            return true
+        }
+        registered.getOrThrow()
+        return false
     }
 
     fun disconnect() {
         ownership.relinquish()
         managed.set(false)
         handler.set(null)
+        ownershipRegistered = false
     }
 
     fun updateAskAgent(): Boolean = isManaged && askAgentConfig.rewrite(askAgentEnabled())
@@ -68,7 +118,10 @@ class OpenCodeProcess(
 
     fun adoptPort(port: Int) { currentPort.set(port) }
 
-    fun authorization(): String? = OpenCodeConnection.credentials("http://127.0.0.1:$port", cli.serverEnvironment())
+    fun authorization(): String? {
+        verifyConnection()
+        return OpenCodeConnection.credentials("http://127.0.0.1:$port", cli.serverEnvironment())
+    }
 
     val isManaged: Boolean get() = managed.get()
 
@@ -110,6 +163,8 @@ class OpenCodeProcess(
      */
     fun launch(callbacks: ProcessLaunchCallbacks): OSProcessHandler {
         check(!isRunning) { "Cannot launch OpenCode while a managed child is still running" }
+        ownership.assertLaunchAllowed()
+        ownershipRegistered = false
 
         if (currentPort.get() <= 0) currentPort.set(configuredPort())
         val info = cli.resolve()
@@ -119,9 +174,15 @@ class OpenCodeProcess(
         val commandLine = cli.launchCommandLine(info.command, listOf("serve", "--port", launchPort.toString()))
         log.info("Starting OpenCode server: ${info.command} serve --port $launchPort")
 
+        val environment = cli.serverEnvironment(askAgentConfig.prepare(askAgentEnabled())).toMutableMap()
+        serverPassword = environment["OPENCODE_SERVER_PASSWORD"]?.takeIf { it.isNotEmpty() }
+            ?: java.util.UUID.randomUUID().toString() + java.util.UUID.randomUUID().toString()
+        serverUsername = environment["OPENCODE_SERVER_USERNAME"]?.takeIf { it.isNotEmpty() } ?: "opencode"
+        require(':' !in serverUsername) { "OpenCode server username must not contain a colon" }
+        environment["OPENCODE_SERVER_PASSWORD"] = serverPassword!!
         val general = GeneralCommandLine(commandLine).apply {
             workspaceCwd()?.let { withWorkDirectory(it) }
-            withEnvironment(cli.serverEnvironment(askAgentConfig.prepare(askAgentEnabled())))
+            withEnvironment(environment)
             // The child must not inherit the IDE's own environment filtering;
             // OpenCode shells out to git, node and the user's tools.
             withParentEnvironmentType(GeneralCommandLine.ParentEnvironmentType.NONE)
@@ -130,10 +191,11 @@ class OpenCodeProcess(
 
         capturedOutput.set("")
         val credentialUrl = "http://127.0.0.1:$launchPort"
+        credentialPort = launchPort
         OpenCodeConnection.forget(credentialUrl)
-        serverPassword = cli.serverEnvironment()["OPENCODE_SERVER_PASSWORD"]
-        val stdout = OpenCodeStartupOutput { serverPassword = it; OpenCodeConnection.register(credentialUrl, it) }
-        val stderr = OpenCodeStartupOutput { serverPassword = it; OpenCodeConnection.register(credentialUrl, it) }
+        OpenCodeConnection.register(credentialUrl, serverPassword!!, serverUsername)
+        val stdout = OpenCodeStartupOutput { serverPassword = it; OpenCodeConnection.register(credentialUrl, it, serverUsername) }
+        val stderr = OpenCodeStartupOutput { serverPassword = it; OpenCodeConnection.register(credentialUrl, it, serverUsername) }
         val processHandler = try {
             OSProcessHandler(general)
         } catch (failure: Exception) {
@@ -142,6 +204,7 @@ class OpenCodeProcess(
         }
         processHandler.addProcessListener(object : ProcessListener {
             override fun onTextAvailable(event: ProcessEvent, outputType: Key<*>) {
+                if (handler.get() !== event.processHandler) return
                 val text = (if (outputType.toString() == "stderr") stderr else stdout).write(event.text ?: return)
                 if (text.isEmpty()) return
                 capturedOutput.updateAndGet { appendBounded(it, text) }
@@ -149,7 +212,8 @@ class OpenCodeProcess(
             }
 
             override fun processTerminated(event: ProcessEvent) {
-                OpenCodeConnection.forget(credentialUrl)
+                if (handler.get() !== event.processHandler) return
+                serverPassword?.let { OpenCodeConnection.forget(credentialUrl, it, serverUsername) }
                 managed.set(false)
                 callbacks.onExit(event.exitCode)
             }
@@ -161,11 +225,22 @@ class OpenCodeProcess(
         return processHandler
     }
 
+    /** V2 can retain a service password instead of using the launch environment. */
+    fun refreshLaunchCredentials() {
+        if (handler.get() == null) return
+        OpenCodeConnection.registration(cli.serverEnvironment())?.takeIf { it.url == "http://127.0.0.1:$port" }?.let {
+            serverPassword = it.password
+            serverUsername = "opencode"
+            OpenCodeConnection.register(it.url, it.password)
+        }
+    }
+
     /**
-     * Stops a server this project started. Graceful first so OpenCode can flush
+     * Stops a server whose shared lease this host currently owns. Graceful first so OpenCode can flush
      * session state, then forced once the grace window elapses.
      */
     fun stop(gracePeriodMs: Long = GRACEFUL_SHUTDOWN_MS) {
+        check(!isCredentialOnly) { "This OpenCode connection has verified credentials but no process ownership" }
         if (handler.get() == null && !managed.get()) return
         if (ownershipRegistered || handler.get() == null) {
             if (ownership.stop(gracePeriodMs)) {

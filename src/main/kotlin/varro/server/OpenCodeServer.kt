@@ -35,6 +35,7 @@ import java.util.concurrent.atomic.AtomicReference
  */
 class OpenCodeServer(
     private val settings: VarroSettings,
+    serverStateDirectory: java.nio.file.Path? = null,
     private val workspaceCwd: () -> String?,
 ) : Disposable {
 
@@ -52,6 +53,7 @@ class OpenCodeServer(
         configuredPort = { settings.normalizedPort() },
         workspaceCwd = workspaceCwd,
         askAgentEnabled = { settings.chatEnableAskAgent },
+        serverStateDirectory = serverStateDirectory,
     )
 
     private val status = AtomicReference<ServerStatus>(ServerStatus.Stopped)
@@ -76,6 +78,8 @@ class OpenCodeServer(
         },
     )
     private val maintenanceStarted = AtomicBoolean(false)
+    private var recoveryAttempts = 0
+    private var runningSince = 0L
 
     private val statusListeners = ConcurrentHashMap.newKeySet<(ServerStatus) -> Unit>()
     private val eventListeners = ConcurrentHashMap.newKeySet<(JsonElement) -> Unit>()
@@ -92,6 +96,7 @@ class OpenCodeServer(
         updateEventStreamState = ::applyEventStreamState,
         emitEvent = { event -> eventListeners.forEach { runCatching { it(event) } } },
         getAuthorization = { authentication.authorization(url()) ?: process.authorization() },
+        verifyConnection = process::verifyConnection,
     )
 
     fun url(): String = "http://127.0.0.1:${process.port}"
@@ -132,7 +137,7 @@ class OpenCodeServer(
 
     fun isManaged(): Boolean = process.isManaged
 
-    fun isAttachOnly(): Boolean = !settings.serverAutoStart && !process.isManaged
+    fun isAttachOnly(): Boolean = process.isCredentialOnly || (!settings.serverAutoStart && !process.isManaged)
 
     /** Serialize config changes with startup/restart, then refresh agents after OpenCode reloads. */
     fun updateAskAgentEnabled(onUpdated: () -> Unit, onFailure: (String) -> Unit) {
@@ -187,20 +192,25 @@ class OpenCodeServer(
         setStatus(ServerStatus.Starting)
 
         try {
-            if (!isAttachOnly()) process.restoreConnection()
+            val restored = settings.serverAutoStart && process.restoreConnection()
             // Validate the registered service identity before adopting its port.
-            if (!isAttachOnly() && settings.serverCommand.isBlank()) {
+            if (settings.serverAutoStart && settings.serverCommand.isBlank() && !restored) {
                 OpenCodeConnection.registration(cli.serverEnvironment())?.let { registration ->
                     process.adoptPort(java.net.URI(registration.url).port)
                     val health = transport.readHealthInfo()
                     if (!health.healthy || health.pid != registration.pid || health.version != registration.version) {
                         process.resetPortState()
                         transport.resetProtocol()
-                    }
+                    } else process.restoreDiscoveredOwnership(registration.password)
                 }
             }
             // 1. Adopt a healthy server rather than fighting it for the port.
             var existing = transport.readHealthInfo()
+            if (!existing.healthy && transport.healthFailure?.contains("authentication") == true) {
+                // Another editor can publish the credential lease during handoff.
+                if (settings.serverAutoStart) process.restoreConnection()
+                existing = transport.readHealthInfo()
+            }
             if (!existing.healthy && transport.healthFailure?.contains("authentication") == true) {
                 val endpoint = url()
                 existing = authentication.recover(endpoint, checkCurrent = {
@@ -258,13 +268,34 @@ class OpenCodeServer(
             }
 
             // 4. Spawn, retrying across ports while the port is taken.
-            process.resetPortState()
-            while (true) {
+            val claimDeadline = System.currentTimeMillis() + STARTUP_TIMEOUT_MS
+            while (!process.beginLaunch()) {
                 if (disposeGeneration.get() != generation) return
-                val started = spawnAndAwaitHealth(generation)
-                if (started) break
-                if (process.hasPortInUseDetected() && process.tryAdvancePort()) continue
-                return
+                check(System.currentTimeMillis() < claimDeadline) { "Another Varro editor is still preparing the OpenCode server; retry startup" }
+                Thread.sleep(HEALTH_POLL_INTERVAL_MS)
+            }
+            try {
+                // The editor holding the claim may have just published its server.
+                process.restoreConnection()
+                val shared = transport.readHealthInfo()
+                if (shared.healthy) {
+                    process.refreshOwnership()
+                    serverVersion.set(shared.version)
+                    checkCompatibility(shared.version)?.let { setStatus(it); return }
+                    finishStart(generation)
+                    return
+                }
+                transport.healthFailure?.let { setStatus(ServerStatus.Error(it)); return }
+                process.resetPortState()
+                while (true) {
+                    if (disposeGeneration.get() != generation) return
+                    val started = spawnAndAwaitHealth(generation)
+                    if (started) break
+                    if (process.hasPortInUseDetected() && process.tryAdvancePort()) continue
+                    return
+                }
+            } finally {
+                process.endLaunch()
             }
 
             serverVersion.set(transport.readHealthInfo().version ?: installed)
@@ -303,6 +334,7 @@ class OpenCodeServer(
                 // attempt, so it is reported rather than retried silently.
                 if (disposeGeneration.get() != generation) return
                 if (status.get() is ServerStatus.Running) {
+                    if (recoverRegisteredServer(generation)) return
                     log.warn("OpenCode server exited unexpectedly with code $exitCode")
                     transport.stopEventStream()
                     setStatus(
@@ -324,6 +356,7 @@ class OpenCodeServer(
                 process.stop()
                 return false
             }
+            process.refreshLaunchCredentials()
             if (transport.checkHealth()) {
                 check(process.confirmOwnership()) { "Could not confirm shared OpenCode server ownership" }
                 return true
@@ -368,12 +401,16 @@ class OpenCodeServer(
         // `degraded` until the stream actually connects; the transport promotes it
         // to healthy, so the UI never claims live updates it does not have.
         setStatus(ServerStatus.Running(url(), EventStreamState.DEGRADED, transport.apiVersion))
+        runningSince = System.currentTimeMillis()
         transport.startEventStream(OpenCodeRequestScope.normalizeDirectory(workspaceCwd()))
         if (maintenanceStarted.compareAndSet(false, true)) scheduler.scheduleWithFixedDelay({
-            if (isAttachOnly()) return@scheduleWithFixedDelay
+            if (isAttachOnly() || status.get() !is ServerStatus.Running) return@scheduleWithFixedDelay
+            val changed = runCatching { process.registrationChanged() }
+                .onFailure { log.info("OpenCode registration inspection was inconclusive", it) }.getOrDefault(false)
+            if (changed) { recoverRegisteredServer(disposeGeneration.get()); return@scheduleWithFixedDelay }
             runCatching { process.refreshOwnership() }.onFailure { log.info("OpenCode ownership check failed", it) }
             runCatching { maintenance.tick() }.onFailure { log.info("OpenCode maintenance check failed", it) }
-        }, 60, 60, TimeUnit.SECONDS)
+        }, 30, 30, TimeUnit.SECONDS)
     }
 
     private fun isIdleForMaintenance(): Boolean {
@@ -501,8 +538,38 @@ class OpenCodeServer(
     private fun applyEventStreamState(state: EventStreamState) {
         val current = status.get()
         if (current !is ServerStatus.Running) return
+        if (state == EventStreamState.DEGRADED && !isAttachOnly()) {
+            val pid = process.registeredPid
+            if (pid != null && !ProcessHandle.of(pid).map { it.isAlive }.orElse(false) && recoverRegisteredServer(disposeGeneration.get())) return
+        }
         if (current.eventStream == state) return
         setStatus(current.copy(eventStream = state))
+    }
+
+    /** Followers reconnect through the shared registration, never stop the former owner's process. */
+    private fun recoverRegisteredServer(generation: Int): Boolean {
+        if (process.registeredPid == null || isAttachOnly() || scheduler.isShutdown) return false
+        scheduler.execute {
+            if (disposeGeneration.get() != generation || phase.get() != Phase.IDLE || status.get() !is ServerStatus.Running) return@execute
+            if (System.currentTimeMillis() - runningSince >= 30_000) recoveryAttempts = 0
+            if (recoveryAttempts >= 3) {
+                transport.stopEventStream()
+                setStatus(ServerStatus.Error("The registered OpenCode server stopped repeatedly. Retry startup."))
+                return@execute
+            }
+            recoveryAttempts += 1
+            disposeGeneration.incrementAndGet()
+            transport.stopEventStream()
+            transport.abortRequests()
+            transport.clearPendingAttentionRequests()
+            process.disconnect()
+            serverVersion.set(null)
+            transport.resetProtocol()
+            setStatus(ServerStatus.Stopped)
+            // Give the owning editor time to publish its replacement first.
+            scheduler.schedule({ if (phase.get() != Phase.DISPOSING) ensureStarted() }, 1000, TimeUnit.MILLISECONDS)
+        }
+        return true
     }
 
     override fun dispose() {

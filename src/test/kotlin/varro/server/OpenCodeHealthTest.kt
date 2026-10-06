@@ -5,6 +5,24 @@ import org.junit.Test
 import varro.protocol.Json
 
 class OpenCodeHealthTest {
+    @Test fun `authentication rejection cannot be bypassed through a fallback health endpoint`() {
+        val endpoint = com.sun.net.httpserver.HttpServer.create(java.net.InetSocketAddress("127.0.0.1", 0), 0)
+        val routes = java.util.Collections.synchronizedList(mutableListOf<String>())
+        endpoint.createContext("/") { exchange ->
+            routes.add(exchange.requestURI.path)
+            val bytes = """{"healthy":true,"version":"1.18.34"}""".toByteArray()
+            exchange.sendResponseHeaders(if (exchange.requestURI.path == "/api/info") 401 else 200, bytes.size.toLong())
+            exchange.responseBody.use { it.write(bytes) }
+        }
+        endpoint.start()
+        val transport = OpenCodeTransport({ "http://127.0.0.1:${endpoint.address.port}" }, { null }, { ServerStatus.Stopped }, { false }, {}, {})
+        try {
+            assertFalse(transport.checkHealth())
+            assertEquals(listOf("/api/info"), routes)
+            assertTrue(transport.healthFailure!!.contains("authentication"))
+        } finally { transport.dispose(); endpoint.stop(0) }
+    }
+
     @Test fun `detects both protocol families and rejects HTML and authentication failures`() {
         val server = com.sun.net.httpserver.HttpServer.create(java.net.InetSocketAddress("127.0.0.1", 0), 0)
         var family = 2

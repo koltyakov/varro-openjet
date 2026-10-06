@@ -74,6 +74,7 @@ class OpenCodeTransport(
     private val emitEvent: (JsonElement) -> Unit,
     private val getAuthorization: () -> String? = { null },
     sessionStateDirectory: java.nio.file.Path? = null,
+    private val verifyConnection: (Boolean) -> Unit = {},
 ) {
     private val log = logger<OpenCodeTransport>()
     @Volatile var apiVersion: Int = 1
@@ -168,6 +169,7 @@ class OpenCodeTransport(
 
     private fun performRequest(method: String, path: String, body: JsonElement?, options: RequestOptions): OpenCodeResponse {
         options.checkCancelled()
+        verifyConnection(false)
         val directory = if (options.unscoped) {
             null
         } else {
@@ -319,6 +321,8 @@ class OpenCodeTransport(
                 HealthInfo(true, version, record.get("pid")?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isNumber }?.asLong)
             }.getOrNull()
             if (health != null) { healthFailure = null; return health }
+            // Never bypass explicit credential rejection with another health route.
+            if (failure != null) break
         }
         healthFailure = failure
         return HealthInfo(false)
@@ -366,6 +370,8 @@ class OpenCodeTransport(
         val connectedAt: Long
 
         try {
+            verifyConnection(true)
+            if (!isCurrent(handle) || getUrl() != serverUrl) return
             val scoped = OpenCodeRequestScope.scope(serverUrl, if (apiVersion == 2) "/api/event" else EVENT_STREAM_PATH, null)
             val builder = HttpRequest.newBuilder(URI.create(scoped.url))
                 .header("Accept", "text/event-stream")

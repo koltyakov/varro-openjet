@@ -11,8 +11,9 @@ import java.util.concurrent.ConcurrentHashMap
 internal object OpenCodeConnection {
     private val managed = ConcurrentHashMap<String, String>()
     fun authorization(password: String, username: String = "opencode") = "Basic " + Base64.getEncoder().encodeToString("$username:$password".toByteArray(Charsets.UTF_8))
-    fun register(url: String, password: String) { managed[url] = authorization(password) }
+    fun register(url: String, password: String, username: String = "opencode") { managed[url] = authorization(password, username) }
     fun forget(url: String) { managed.remove(url) }
+    fun forget(url: String, password: String, username: String) { managed.remove(url, authorization(password, username)) }
     fun credentials(url: String, environment: Map<String, String>): String? {
         managed[url]?.let { return it }
         registration(environment)?.takeIf { it.url == url }?.let { return authorization(it.password) }

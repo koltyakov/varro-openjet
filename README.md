@@ -29,6 +29,14 @@ Varro discovers a registered local V2 service when no explicit CLI command is co
 
 Background CLI updates are enabled by default and run only for a managed server while sessions and host work are idle. The updated CLI takes effect on the next server start. Varro only stops servers it started.
 
+OpenJet and Varro for VS Code share server ownership under the same OS user. They use the same
+version-1 leases, managed markers, credential companions and launch claims, including surviving
+legacy temporary-directory records. Discovery retains the original record's path, even when the
+other editor selected a different port. A private saved credential can reconnect after process
+replacement only when the server rejects anonymous and incorrect-password requests. That fallback
+is attach-only and cannot stop, restart or update the server. Registered connections recover through
+the shared records when another editor restarts their server.
+
 If a server rejects authentication, Varro retries credentials saved for that server URL, then asks for a username and password. It saves verified credentials in the IDE password safe for future connections.
 
 ### Installing from a checkout

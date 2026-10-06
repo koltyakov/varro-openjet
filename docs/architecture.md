@@ -70,6 +70,40 @@ src/main/kotlin/varro/
 
 Server startup is lazy. Several projects can connect to one server. Automatic startup can be disabled while still allowing connection to an existing server.
 
+### Shared Varro server ownership
+
+`ServerOwnership` uses the same version-1 records as Varro for VS Code, with no OpenJet-specific
+ownership namespace. Production records live in `~/Library/Application Support/Varro/servers` on
+macOS, `%LOCALAPPDATA%/Varro/servers` on Windows, and `$XDG_STATE_HOME/varro/servers` on Linux,
+defaulting to `~/.local/state/varro/servers`. A surviving legacy temporary-directory record remains
+its process's coordination point. A configured-port filename can contain a different actual port.
+Discovery verifies registrations under other keys and retains their original lease/marker/claim path.
+Conflicting process registrations fail without rewriting either record.
+
+The `.claim` stays held across spawn, listener confirmation and publication, as well as stop and
+handoff operations. Lifecycle authority requires the sole listener PID, normalized executable,
+process birth identity and current host lease. Failed inspection is not proof of retirement.
+POSIX records must be regular files private to the current user. Writes use exclusive private
+temporary files and atomic replacement. Corrupt or uncertain ownership records are retained.
+
+`RegisteredConnectionVerifier` provides a separate read-only fallback for private lease credentials
+or the `.credentials` companion. Within a three-second total deadline, the health route must reject
+anonymous and incorrect-password requests before accepting the saved username/password and a
+supported API family. Credential-only admission never rewrites old process evidence or grants
+stop, restart, config repair or maintenance authority. Requests recheck at least once per second;
+SSE reconnects force fresh verification. Endpoint or saved-record changes invalidate attachment.
+Unconfirmable fresh launches can retain a private companion and detach their process handle instead
+of claiming ownership. Startup restores private credentials before consulting the IDE vault.
+
+Registered process exits trigger at most three recovery attempts. Followers wait one second before
+rerunning startup, reread the shared registration, and compete under the same launch claim if no
+owner replaces the server. External and credential-only connections are never implicitly relaunched.
+Background registration checks run every thirty seconds. A verified replacement triggers recovery;
+failed inspection is logged without disconnecting an established connection.
+`VARRO_TEST_STATE_ROOT`, when set to an absolute path, isolates server records in its `servers`
+directory and disables legacy server-record discovery. Unit fixtures can also supply a server-state
+directory explicitly; they do not use production records.
+
 With automatic startup disabled and no managed process, the connection is attach-only. It uses the configured port and skips local service discovery, ownership recovery and CLI maintenance. Model routing reads the server's configuration, and summaries and usage reports use API history rather than local databases. Usage reports support up to 250 sessions through the API. File-based configuration, quota polling with local credentials, local CLI actions and local history import report that the action must run on the server host. Session permissions and API-backed Markdown transcript export remain available.
 
 ## Component map

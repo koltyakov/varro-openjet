@@ -8,6 +8,10 @@ import varro.settings.VarroSettings
 import java.net.InetSocketAddress
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.nio.file.Files
+import java.nio.file.Path
+import java.nio.file.attribute.PosixFilePermissions
+import varro.protocol.Json
 
 class AttachOnlyServerTest {
     @Test
@@ -54,6 +58,52 @@ class AttachOnlyServerTest {
                 assertEquals(1, prompts)
                 assertTrue(saved)
                 assertTrue(server.isAttachOnly())
+            }
+        }
+    }
+
+    @Test
+    fun `shared Varro credentials reconnect without a prompt or lifecycle authority`() {
+        for (version in listOf("1.18.34", "2.0.24")) {
+            val root = Files.createTempDirectory("openjet-credential-attachment-")
+            val endpoint = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
+            endpoint.createContext("/") { exchange ->
+                val authorized = exchange.requestHeaders.getFirst("Authorization") == OpenCodeConnection.authorization("secret", "varro-user")
+                val supported = exchange.requestURI.path == if (version.startsWith("1.")) "/global/health" else "/api/info"
+                val status = when { !supported -> 404; !authorized -> 401; else -> 200 }
+                val bytes = """{"healthy":true,"version":"$version","pid":12345}""".toByteArray()
+                exchange.sendResponseHeaders(status, if (status == 200) bytes.size.toLong() else -1)
+                if (status == 200) exchange.responseBody.use { it.write(bytes) } else exchange.close()
+            }
+            endpoint.start()
+            val companion = root.resolve("varro-opencode-server-${endpoint.address.port}.json.credentials")
+            val original = Json.stringify(Json.obj("version" to 1, "port" to endpoint.address.port, "owner" to "vscode-launch",
+                "createdAt" to 1, "password" to "secret", "username" to "varro-user"))
+            Files.writeString(companion, original)
+            if (companion.fileSystem.supportedFileAttributeViews().contains("posix")) Files.setPosixFilePermissions(companion, PosixFilePermissions.fromString("rw-------"))
+            val server = OpenCodeServer(VarroSettings().apply {
+                serverAutoStart = true
+                serverPort = endpoint.address.port
+                serverCommand = "/missing/opencode"
+            }, serverStateDirectory = root) { null }
+            server.authentication = OpenCodeServerAuthentication(read = { fail("Private shared credentials must skip the vault"); null },
+                prompt = { _, _ -> fail("Private shared credentials must skip the prompt"); null })
+            try {
+                val ready = CountDownLatch(1)
+                server.onStatus { if (it is ServerStatus.Running || it is ServerStatus.Error) ready.countDown() }
+                server.ensureStarted()
+                assertTrue(ready.await(10, TimeUnit.SECONDS))
+                assertTrue(server.currentStatus().toString(), server.currentStatus() is ServerStatus.Running)
+                assertTrue(server.isAttachOnly())
+                assertFalse(server.isManaged())
+                assertEquals(OpenCodeServer.RestartOutcome.NOT_MANAGED, server.restart(force = true))
+                assertEquals(original, Files.readString(companion))
+                assertFalse(Files.exists(Path.of(companion.toString().removeSuffix(".credentials"))))
+            } finally {
+                server.dispose()
+                endpoint.stop(0)
+                OpenCodeConnection.forget("http://127.0.0.1:${endpoint.address.port}")
+                root.toFile().deleteRecursively()
             }
         }
     }
