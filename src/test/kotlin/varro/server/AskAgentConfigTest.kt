@@ -55,6 +55,20 @@ class AskAgentConfigTest {
         assertEquals("{}", Files.readString(path))
     }
 
+    @Test fun `runtime config leaves automatic compaction to OpenCode`() {
+        val compaction = """{"compaction":{"auto":false,"reserved":8192}}"""
+        val root = temporary.newFolder("compaction").toPath()
+        val file = root.resolve("opencode.json")
+        Files.writeString(file, compaction)
+        config(mapOf("OPENCODE_CONFIG_CONTENT" to compaction), root).use {
+            val path = Path.of(it.prepare(true).getValue("OPENCODE_CONFIG"))
+            assertFalse(read(path).has("compaction"))
+            assertTrue(it.rewrite(false))
+            assertFalse(read(path).has("compaction"))
+            assertEquals(compaction, Files.readString(file))
+        }
+    }
+
     @Test fun `inline Ask including disabled or differently cased agents is preserved`() {
         listOf("""{"agent":{"Ask":{"disable":true}}}""", "not json").forEach { inline ->
             config(mapOf("OPENCODE_CONFIG_CONTENT" to inline)).use {

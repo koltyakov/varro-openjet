@@ -32,7 +32,7 @@ class SharedCoreSettingsTest {
         val before = SharedCoreSettings.snapshot(settings)
         val invalid = before.deepCopy().apply {
             addProperty("serverPort", 5000)
-            addProperty("chatAutoCompact", "not a boolean")
+            addProperty("chatEnableAskAgent", "not a boolean")
         }
         assertThrows(IllegalArgumentException::class.java) { SharedCoreSettings.apply(invalid, settings) }
         assertEquals(before, SharedCoreSettings.snapshot(settings))
@@ -44,5 +44,21 @@ class SharedCoreSettingsTest {
         assertEquals("provider/commit", settings.commitMessageModel)
         assertEquals(4096, settings.serverPort)
         assertEquals(17, settings.chatFontSize)
+    }
+
+    @Test fun `retired compaction settings are ignored and not shared`() {
+        val settings = VarroSettings()
+        val legacy = SharedCoreSettings.snapshot(settings).apply {
+            addProperty("chatAutoCompact", "obsolete")
+            add("chatAutoCompactionReservedTokens", Json.obj("obsolete" to true))
+            addProperty("chatEnableAskAgent", false)
+        }
+        val before = legacy.deepCopy()
+        SharedCoreSettings.apply(legacy, settings)
+        assertFalse(settings.chatEnableAskAgent)
+        val snapshot = SharedCoreSettings.snapshot(settings)
+        assertFalse(snapshot.has("chatAutoCompact"))
+        assertFalse(snapshot.has("chatAutoCompactionReservedTokens"))
+        assertEquals(before, legacy)
     }
 }

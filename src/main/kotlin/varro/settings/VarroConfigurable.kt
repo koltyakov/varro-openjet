@@ -157,13 +157,7 @@ class VarroConfigurable : BoundConfigurable("Varro") {
                     .bindSelected(settings::chatEnableAskAgent)
                     .comment("Applies to servers started by Varro. Existing configured Ask agents are preserved; no user configuration is written.")
             }
-            row {
-                checkBox("Let OpenCode compact sessions automatically when context fills")
-                    .bindSelected(settings::chatAutoCompact)
-            }
-            row("Compaction reserved tokens:") {
-                intTextField(0..1_000_000).bindIntText(settings::chatAutoCompactionReservedTokens)
-            }
+            row { comment("Configure automatic compaction in OpenCode. On-demand compaction remains available in chat.") }
             row {
                 checkBox("Generate a fallback title for untitled sessions")
                     .bindSelected(settings::chatAutoRenameUntitledSessions)

@@ -68,8 +68,6 @@ class VarroSettings : PersistentStateComponent<VarroSettings> {
 
     var chatAutoRenameUntitledSessions: Boolean = false
     var chatEnableAskAgent: Boolean = true
-    var chatAutoCompact: Boolean = true
-    var chatAutoCompactionReservedTokens: Int = 4096
 
     /**
      * Chat font size. `0` follows the IDE editor font size, which is the closest

@@ -59,8 +59,11 @@
             <li>Shared server ownership with VS Code Varro and safer restart recovery.</li>
             <li>Fixed startup loading, skill insertion and chat handoffs.</li>
             <li>Optional background alerts and sounds.</li>
-            <li>History image previews, faster loading and smoother scrolling.</li>
-            <li>Remembered model choices, Codex credits and quota-reset reminders.</li>
+            <li>History image previews, faster loading and smoother streaming and send scrolling.</li>
+            <li>Pending background task indicators and session filtering.</li>
+            <li>Automatic compaction settings are managed by OpenCode; on-demand compaction remains available.</li>
+            <li>Remembered model choices, reliable queued model selection and model preferences,
+                Codex credits and quota-reset reminders.</li>
         </ul>
         <h3>0.6.x</h3>
         <ul>

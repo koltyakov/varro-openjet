@@ -79,7 +79,7 @@ With the tool window open, hover over the OpenCode status-bar version for CLI an
 
 Settings are under **Settings > Tools > Varro**. You can configure server startup and updates, the default permission mode, chat layout, fonts, and models for commit messages and permission review. The initial permission mode is `auto`; `default` follows OpenCode's rules, and `full` allows a session to act without confirmation. A font size of `0` follows the IDE's font settings.
 
-The Agents settings control the runtime-only read-only `Ask` agent, automatic compaction, reserved context tokens, and fallback titles for untitled sessions. Ask and automatic compaction are enabled by default; fallback titles are disabled.
+The Agents settings control the runtime-only read-only `Ask` agent and fallback titles for untitled sessions. Ask is enabled by default; fallback titles are disabled. Configure automatic compaction in OpenCode. On-demand compaction remains available in chat.
 
 ### Background notifications
 
@@ -128,7 +128,7 @@ In the IDE whose saved preferences you want to keep, open **Settings > Tools > V
 
 Other JetBrains IDEs under the same OS user adopt the shared file when Varro opens. Running instances check for changes every second. Existing shared settings always take precedence during migration. Until you initialize sharing, preferences stay in each IDE.
 
-Shared settings include model visibility, pins, ordering, names, server options, default permission mode, commit-message and auto-approve models, and agent/compaction preferences. Fonts, rendering, chat appearance, and session selections stay local. VS Code's Varro storage and OpenCode's configuration are separate.
+Shared settings include model visibility, pins, ordering, names, server options, default permission mode, commit-message and auto-approve models, and agent preferences. Fonts, rendering, chat appearance, and session selections stay local. VS Code's Varro storage and OpenCode's configuration are separate.
 
 Writes merge changed fields under a cross-process file lock and replace the JSON atomically. Concurrent changes to the same preference use the last write. Invalid or unsupported files remain untouched; synchronization resumes after they are repaired.
 
