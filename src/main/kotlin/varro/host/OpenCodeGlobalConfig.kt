@@ -2,6 +2,7 @@ package varro.host
 
 import com.google.gson.JsonObject
 import varro.protocol.*
+import varro.server.OpenCodeV2Projection
 import varro.store.JsonJournal
 import java.nio.file.Files
 import java.nio.file.Path
@@ -22,12 +23,19 @@ internal class OpenCodeGlobalConfig(private val directory: Path) {
                 if (value.asString.isEmpty()) title.remove("model") else title.add("model", value)
             } else if (key == "agent") {
                 value.asJsonObject.entrySet().forEach { (name, fields) ->
+                    val useNative = if (fields.asJsonObject.str("model") == "") document.obj("agents").obj(name).hasNonNull("model")
+                    else if (name == "vision") document.obj("agents").obj(name) != null || document.obj("agent").obj(name) == null
+                    else native
+                    val targetKey = if (useNative) "agents" else "agent"
+                    val agents = document.obj(targetKey) ?: Json.obj().also { document.add(targetKey, it) }
+                    val agent = agents.obj(name) ?: Json.obj().also { agents.add(name, it) }
                     fields.asJsonObject.entrySet().forEach { (field, setting) ->
-                        val useNative = if (field == "model" && setting.asString.isEmpty()) document.obj("agents").obj(name).hasNonNull("model") else native
-                        val targetKey = if (useNative) "agents" else "agent"
-                        val agents = document.obj(targetKey) ?: Json.obj().also { document.add(targetKey, it) }
-                        val agent = agents.obj(name) ?: Json.obj().also { agents.add(name, it) }
-                        if (field == "model" && setting.asString.isEmpty()) agent.remove(field) else agent.add(field, setting)
+                        when {
+                            field == "model" && setting.asString.isEmpty() -> agent.remove(field)
+                            useNative && field == "prompt" -> agent.add("system", setting)
+                            useNative && field == "permission" -> agent.add("permissions", OpenCodeV2Projection.rules(PermissionService.fromConfig(setting)))
+                            else -> agent.add(field, setting)
+                        }
                     }
                 }
             } else if (key == "small_model" && value.asString.isEmpty()) document.remove(key)

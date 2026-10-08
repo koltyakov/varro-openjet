@@ -142,6 +142,7 @@ V2 session sharing is unavailable. Varro stores V2-only metadata and archive tim
 - Deleted session trees go to the recycle bin for 7 days. Restore them there, or permanently delete them by emptying the bin. Expired entries are removed when the bin is read.
 - Ralph runs support start, pause, resume, stop, and model changes. The host journals their state and reattaches after reconnecting to OpenCode.
 - The Models menu can assign OpenCode's small model and agent models in global OpenCode configuration. Commit-message and auto-approve model assignments use OpenJet's shared settings once sharing is initialized.
+- Assign a vision-capable model to the global `vision` agent in the Models menu. Varro creates a read-only subagent when needed and automatically delegates attached images to it when the selected model supports tools but cannot read images. Existing custom vision-agent settings are preserved.
 - Permission controls can save rules for a session or the project. Project rules update the project's `opencode.jsonc` if present, otherwise `opencode.json`.
 
 ### Provider limits and usage

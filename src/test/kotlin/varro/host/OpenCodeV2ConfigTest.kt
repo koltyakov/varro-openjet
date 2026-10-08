@@ -51,4 +51,48 @@ class OpenCodeV2ConfigTest {
         assertEquals("keep", saved.obj("agent").obj("review").str("description"))
         assertEquals("keep/model", saved.obj("agents").obj("other").str("model"))
     }
+
+    @Test fun `new vision assignments create native v2 subagents with read-only permissions`() {
+        val root = temporary.newFolder().toPath()
+        val path = root.resolve("opencode.json")
+        val service = ModelRoutingService(varro.settings.VarroSettings(), { Json.obj() }, { patch ->
+            OpenCodeGlobalConfig(root).patch(patch)
+            Json.obj()
+        }, {})
+        val request = Json.obj("target" to "agent", "agentName" to "vision", "providerID" to "openai", "modelID" to "viewer")
+        service.update(request)
+        val document = Json.parse(Files.readString(path)).asJsonObject
+        assertFalse(document.has("agent"))
+        val vision = document.obj("agents").obj("vision")!!
+        assertEquals("openai/viewer", vision.str("model"))
+        assertEquals("subagent", vision.str("mode"))
+        assertNotNull(vision.str("system"))
+        assertFalse(vision.has("prompt")); assertFalse(vision.has("permission"))
+        assertEquals(Json.array(listOf(
+            Json.obj("action" to "read", "resource" to "*", "effect" to "allow"),
+            Json.obj("action" to "edit", "resource" to "*", "effect" to "deny"),
+            Json.obj("action" to "shell", "resource" to "*", "effect" to "deny"),
+        )), vision.arr("permissions"))
+
+        service.update(request.apply { addProperty("unset", true) })
+        val cleared = Json.parse(Files.readString(path)).asJsonObject.obj("agents").obj("vision")!!
+        assertFalse(cleared.has("model"))
+        assertEquals(vision.get("system"), cleared.get("system"))
+        assertEquals(vision.get("permissions"), cleared.get("permissions"))
+    }
+
+    @Test fun `vision assignment keeps existing legacy agent format in v2 config`() {
+        val root = temporary.newFolder().toPath()
+        val path = root.resolve("opencode.jsonc")
+        Files.writeString(path, """{"agent":{"vision":{"prompt":"Custom","mode":"all"}},"providers":{},"theme":"keep"}""")
+        OpenCodeGlobalConfig(root).patch(Json.obj("agent" to Json.obj("vision" to Json.obj(
+            "model" to "openai/viewer", "permission" to Json.obj("read" to "allow", "edit" to "deny", "bash" to "deny"),
+        ))))
+        val document = Json.parse(Files.readString(path)).asJsonObject
+        assertFalse(document.has("agents"))
+        assertEquals("Custom", document.obj("agent").obj("vision").str("prompt"))
+        assertEquals("all", document.obj("agent").obj("vision").str("mode"))
+        assertNotNull(document.obj("agent").obj("vision").obj("permission"))
+        assertEquals("keep", document.str("theme"))
+    }
 }

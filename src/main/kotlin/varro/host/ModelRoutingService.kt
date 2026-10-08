@@ -34,7 +34,26 @@ internal class ModelRoutingService(
             "agent" -> {
                 val agent = request.str("agentName")?.trim().orEmpty()
                 require(agent.isNotEmpty()) { "Agent name is required" }
-                patchGlobalConfig(Json.obj("agent" to Json.obj(agent to Json.obj("model" to modelRef))))
+                val fields = Json.obj("model" to modelRef)
+                if (agent == "vision" && modelRef.isNotEmpty()) {
+                    val current = readGlobalConfig()
+                    val existing = current.obj("agent").obj(agent) ?: current.obj("agents").obj(agent)
+                    val defaults = Json.obj(
+                        "description" to "Inspects images for text-only parent agents",
+                        "mode" to "subagent",
+                        "prompt" to "Analyze every supplied image carefully. Return a concise textual description, including visible text, UI state, diagrams, errors, and details relevant to the parent agent's request. Do not modify files or run shell commands.",
+                        "permission" to Json.obj("read" to "allow", "edit" to "deny", "bash" to "deny"),
+                    )
+                    defaults.entrySet().forEach { (key, value) ->
+                        val hasExisting = when (key) {
+                            "prompt" -> existing?.has("prompt") == true || existing?.has("system") == true
+                            "permission" -> existing?.has("permission") == true || existing?.has("permissions") == true
+                            else -> existing?.has(key) == true
+                        }
+                        if (!hasExisting) fields.add(key, value)
+                    }
+                }
+                patchGlobalConfig(Json.obj("agent" to Json.obj(agent to fields)))
             }
             else -> {
                 // Read first so a failed request cannot partially save an IDE setting.
@@ -56,6 +75,7 @@ internal class ModelRoutingService(
         return Json.obj(
             "smallModel" to modelRoute(config.str("small_model") ?: config.str("smallModel")),
             "agentModels" to agents,
+            "globalVisionModel" to agents.get("vision"),
             "commitMessageModel" to modelRoute(settings.commitMessageModel),
             "autoApproveModel" to modelRoute(settings.chatAutoApproveModel),
         )

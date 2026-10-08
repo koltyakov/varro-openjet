@@ -39,7 +39,8 @@ import {
   requestProviderConnection,
 } from '../lib/provider-connection-state';
 import { client } from '../lib/client';
-import { postMessage } from '../lib/bridge';
+import { onMessage, postMessage } from '../lib/bridge';
+import { canDelegateVision, VISION_AGENT_NAME } from '../lib/vision-delegation';
 import { refreshRoutingState } from '../hooks/useOpenCode';
 import type { OpenCodeModelRouting, Provider } from '../types';
 import { FormattedModelName } from './chat-input/ToolbarPickers';
@@ -91,8 +92,12 @@ const MODEL_CATALOG_RESULT_LIMIT = 50;
 const PROVIDER_DRAG_TYPE = 'application/x-varro-provider';
 const MODEL_DRAG_TYPE = 'application/x-varro-model';
 
-function routableAgents() {
-  return state.allAgents.filter((agent) => agent.mode === 'subagent');
+function routableAgentNames() {
+  const names = state.allAgents
+    .filter((agent) => !agent.hidden && (agent.mode === 'subagent' || agent.mode === 'all'))
+    .map((agent) => agent.name);
+  if (!names.includes(VISION_AGENT_NAME)) names.push(VISION_AGENT_NAME);
+  return names;
 }
 
 function shouldSortProviderLast(provider: ModelProvider, models: readonly ProviderModel[]) {
@@ -126,6 +131,12 @@ export function ModelsPanel() {
   onMount(() => {
     void refreshRoutingState();
     void loadJevStatus();
+    onCleanup(
+      onMessage((message) => {
+        if (message.type === 'providers/refresh' || message.type === 'config/update')
+          void loadRouting();
+      })
+    );
   });
 
   const [query, setQuery] = createSignal('');
@@ -252,6 +263,9 @@ export function ModelsPanel() {
       .filter(({ provider, models }) => !shouldSortProviderLast(provider, models))
       .map(({ provider }) => provider.id)
   );
+  const visionDelegationAvailable = createMemo(() =>
+    canDelegateVision(state.allAgents, state.providers)
+  );
   const maxCapabilityCount = createMemo(() =>
     Math.max(
       0,
@@ -261,7 +275,9 @@ export function ModelsPanel() {
             [
               modelSupportsTools(provider.id, model.id, state.providers),
               modelSupportsVariants(provider.id, model.id, state.providers),
-              modelSupportsVision(provider.id, model.id, state.providers),
+              modelSupportsVision(provider.id, model.id, state.providers) ||
+                (visionDelegationAvailable() &&
+                  modelSupportsTools(provider.id, model.id, state.providers)),
               modelSupportsPdf(provider.id, model.id, state.providers),
               modelSupportsAudio(provider.id, model.id, state.providers),
               modelSupportsVideo(provider.id, model.id, state.providers),
@@ -277,11 +293,14 @@ export function ModelsPanel() {
     bodyRef.parentElement?.style.setProperty('--models-scrollbar-inset', `${scrollbarInset}px`);
   }
 
+  let routingRequestId = 0;
   async function loadRouting() {
+    const requestId = ++routingRequestId;
     try {
-      setRouting(normalizeModelRouting(await client.varro.openCodeConfig()));
+      const next = normalizeModelRouting(await client.varro.openCodeConfig());
+      if (requestId === routingRequestId) setRouting(next);
     } catch {
-      setRouting(createEmptyRouting());
+      if (requestId === routingRequestId) setRouting(createEmptyRouting());
     }
   }
 
@@ -298,6 +317,7 @@ export function ModelsPanel() {
     setIsSaving(true);
     try {
       const nextRouting = normalizeModelRouting(await client.varro.saveModelRouting(body));
+      routingRequestId += 1;
       setRouting(nextRouting);
       if (updatesOpenCodeConfig && !state.providerRefreshPending) setPreviousRouting(null);
       await refreshRoutingState();
@@ -762,6 +782,7 @@ export function ModelsPanel() {
                       provider={entry().provider}
                       models={entry().models}
                       maxCapabilityCount={maxCapabilityCount()}
+                      visionDelegationAvailable={visionDelegationAvailable()}
                       reconnectRequired={providerRequiresReconnection(providerID)}
                       forceExpanded={normalizedQuery().length > 0}
                       routing={routing()}
@@ -915,19 +936,35 @@ export function ModelsPanel() {
                   : 'Use for '}
                 <strong>auto-approve</strong>
               </button>
-              <For each={routableAgents()}>
-                {(agent) => {
+              <For each={routableAgentNames()}>
+                {(agentName) => {
                   const isAssigned = () =>
-                    isModelRoute(routing().agentModels[agent.name], menu.providerID, menu.modelID);
+                    isModelRoute(
+                      agentName === VISION_AGENT_NAME && routing().globalVisionModel !== undefined
+                        ? routing().globalVisionModel
+                        : routing().agentModels[agentName],
+                      menu.providerID,
+                      menu.modelID
+                    );
                   return (
                     <button
                       type="button"
                       class="models-context-menu-item"
-                      disabled={isSaving()}
+                      disabled={
+                        isSaving() ||
+                        (agentName === VISION_AGENT_NAME &&
+                          !isAssigned() &&
+                          !modelSupportsVision(menu.providerID, menu.modelID, state.providers))
+                      }
+                      title={
+                        agentName === VISION_AGENT_NAME
+                          ? 'Global vision agent model'
+                          : 'Project agent model'
+                      }
                       onClick={() =>
                         void saveRouting({
                           target: 'agent',
-                          agentName: agent.name,
+                          agentName,
                           providerID: menu.providerID,
                           modelID: menu.modelID,
                           unset: isAssigned() ? true : undefined,
@@ -935,7 +972,7 @@ export function ModelsPanel() {
                       }
                     >
                       {isAssigned() ? "Don't use for " : 'Use for '}
-                      <strong>{agent.name}</strong> agent
+                      <strong>{agentName}</strong> agent
                     </button>
                   );
                 }}
@@ -1336,6 +1373,7 @@ function ProviderSection(props: {
   provider: ModelProvider;
   models: ProviderModel[];
   maxCapabilityCount: number;
+  visionDelegationAvailable: boolean;
   reconnectRequired: boolean;
   forceExpanded: boolean;
   routing: OpenCodeModelRouting;
@@ -1562,6 +1600,8 @@ function ProviderSection(props: {
                   modelSupportsVariants(props.provider.id, model.id, state.providers);
                 const supportsVision = () =>
                   modelSupportsVision(props.provider.id, model.id, state.providers);
+                const usesVisionProxy = () =>
+                  !supportsVision() && supportsTools() && props.visionDelegationAvailable;
                 const supportsPdf = () =>
                   modelSupportsPdf(props.provider.id, model.id, state.providers);
                 const supportsAudio = () =>
@@ -1718,8 +1758,12 @@ function ProviderSection(props: {
                             label="Variants / reasoning"
                           />
                         </Show>
-                        <Show when={supportsVision()}>
-                          <ModelCapabilityBadge capability="vision" label="Vision" />
+                        <Show when={supportsVision() || usesVisionProxy()}>
+                          <ModelCapabilityBadge
+                            capability="vision"
+                            label="Vision"
+                            viaProxy={usesVisionProxy()}
+                          />
                         </Show>
                         <Show when={supportsPdf()}>
                           <ModelCapabilityBadge capability="pdf" label="PDF" />
@@ -1750,16 +1794,26 @@ function ProviderSection(props: {
 
 type ModelCapability = 'tools' | 'variants' | 'vision' | 'pdf' | 'audio' | 'video';
 
-function ModelCapabilityBadge(props: { capability: ModelCapability; label: string }) {
+function ModelCapabilityBadge(props: {
+  capability: ModelCapability;
+  label: string;
+  viaProxy?: boolean;
+}) {
+  const description = () => (props.viaProxy ? 'Vision (via proxy model)' : props.label);
   return (
-    <Tooltip content={props.label}>
+    <Tooltip content={description()}>
       <span
-        class={`model-capability-tag model-capability-tag-${props.capability}`}
-        aria-label={props.label}
+        class={`model-capability-tag model-capability-tag-${props.capability}${props.viaProxy ? ' model-capability-tag-vision-proxy' : ''}`}
+        aria-label={description()}
       >
         <span class="models-capability-icon" aria-hidden="true">
           <CapabilityIcon capability={props.capability} />
         </span>
+        <Show when={props.viaProxy}>
+          <span class="models-capability-proxy-marker" aria-hidden="true">
+            *
+          </span>
+        </Show>
         <span class="models-capability-label">
           {props.capability === 'variants' ? 'Variants' : props.label}
         </span>
@@ -1997,6 +2051,9 @@ function normalizeModelRouting<T>(value: T): OpenCodeModelRouting {
     commitMessageModel,
     autoApproveModel,
   };
+  if (record.globalVisionModel !== undefined) {
+    normalized.globalVisionModel = parseModelRoute(record.globalVisionModel);
+  }
   if (Object.keys(providerConfigPaths).length > 0)
     normalized.providerConfigPaths = providerConfigPaths;
   return normalized;

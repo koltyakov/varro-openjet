@@ -49,6 +49,48 @@ class ModelRoutingServiceTest {
     }
 
     @Test
+    fun `vision assignment creates a global read-only subagent and unsets only its model`() {
+        val fixture = Fixture()
+        val request = request("agent").apply { addProperty("agentName", "vision") }
+        val result = fixture.service().update(request)
+        val agent = fixture.config.obj("agent").obj("vision")
+        assertEquals("subagent", agent.str("mode"))
+        assertTrue(agent.str("prompt")!!.contains("Do not modify files or run shell commands."))
+        assertEquals(Json.obj("read" to "allow", "edit" to "deny", "bash" to "deny"), agent.obj("permission"))
+        assertEquals(result.obj("agentModels").obj("vision"), result.obj("globalVisionModel"))
+        assertEquals(result, fixture.service().read())
+
+        val cleared = fixture.service().update(request.apply { addProperty("unset", true) })
+        assertTrue(cleared.get("globalVisionModel").isJsonNull)
+        assertEquals("subagent", fixture.config.obj("agent").obj("vision").str("mode"))
+        assertEquals(Json.obj("agent" to Json.obj("vision" to Json.obj("model" to ""))), fixture.patches.last())
+    }
+
+    @Test
+    fun `vision assignment preserves custom instructions permissions and agent mode`() {
+        for (config in listOf(
+            """{"agent":{"vision":{"description":"Custom","mode":"all","prompt":"Keep me","permission":{"read":"ask"},"hidden":true}}}""",
+            """{"agents":{"vision":{"description":"Custom","mode":"all","system":"Keep me","permissions":[]}}}""",
+        )) {
+            val fixture = Fixture()
+            fixture.config = Json.parse(config).asJsonObject
+            fixture.service().update(request("agent").apply { addProperty("agentName", "vision") })
+            assertEquals(Json.obj("agent" to Json.obj("vision" to Json.obj("model" to "openai/gpt-6/astra"))), fixture.patches.single())
+        }
+    }
+
+    @Test
+    fun `vision config read failures do not write or notify`() {
+        val fixture = Fixture()
+        val service = ModelRoutingService(fixture.settings, { error("Read failed") }, { fixture.patches.add(it); it }, { fixture.changes++ })
+        assertThrows(IllegalStateException::class.java) {
+            service.update(request("agent").apply { addProperty("agentName", "vision") })
+        }
+        assertTrue(fixture.patches.isEmpty())
+        assertEquals(0, fixture.changes)
+    }
+
+    @Test
     fun `IDE model roles persist through settings serialization without patching OpenCode`() {
         val fixture = Fixture()
         fixture.service().update(request("commit_message"))

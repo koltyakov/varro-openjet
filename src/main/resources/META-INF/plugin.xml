@@ -56,11 +56,13 @@
     <change-notes><![CDATA[
         <h3>0.7.x</h3>
         <ul>
+            <li>Global vision-agent assignment, automatic image delegation and delegated-vision badges.</li>
+            <li>Improved file links and scrolling when returning to background chats.</li>
             <li>Shared server ownership with VS Code Varro and safer restart recovery.</li>
             <li>Fixed startup loading, skill insertion and chat handoffs.</li>
             <li>Optional background alerts and sounds.</li>
             <li>History image previews, faster loading and smoother streaming and send scrolling.</li>
-            <li>Pending background task indicators and session filtering.</li>
+            <li>Pending background task and compaction indicators, with session filtering.</li>
             <li>Automatic compaction settings are managed by OpenCode; on-demand compaction remains available.</li>
             <li>Remembered model choices, reliable queued model selection and model preferences,
                 Codex credits and quota-reset reminders.</li>
