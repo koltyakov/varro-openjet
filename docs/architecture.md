@@ -146,6 +146,8 @@ The synthetic origin gives dynamic `import()` a resolvable base URL. `webview.ve
 
 **Messaging.** Webview to host is a `JBCefJSQuery`, injected as `window.__varroHostSend`. Host to webview is `executeJavaScript` calling `window.__varroReceive`, which the shim re-dispatches as a `MessageEvent`. Outbound messages produced before the document finishes loading are queued and flushed on `onLoadEnd`.
 
+`link-integration.ts` handles unclaimed anchor clicks at window-bubble phase, after Solid's delegated document handlers. This prevents duplicate external opens. It translates upstream's `data-vscode-context` link and file metadata into `host/link-context-menu`; `WebviewHost` shows a native copy popup and writes the selected URL or full path to the IDE clipboard. Both layers validate the context, and copying never opens its target.
+
 **Theme.** `ThemeBridge` derives `--vscode-*` custom properties from IntelliJ UI keys, the editor color scheme and the console ANSI palette. Theme changes update variables without reloading the page.
 
 ## Background notification state
@@ -217,6 +219,8 @@ Permanent deletion and expiry retain the recycle entry until OpenCode returns `t
 `PermissionService` applies session rules to OpenCode before acknowledging a save. `ProjectPermissionConfig` writes project rules to an existing `opencode.jsonc`, otherwise `opencode.json`. It preserves other configuration fields but rewrites the document as JSON, so JSONC comments and formatting are not retained.
 
 Scoped Always Allow approvals resolve the owning session before reading pending permissions. An explicit directory must match the session's directory, and the pending permission must belong to that session. Session rules and project configuration writes use that owning directory, including sessions in other content roots or repository subdirectories. Attach-only connections support session approvals but cannot write project configuration files.
+
+Only ready views can own automatic permission handling, with the tool window preferred over editor views. Reloading or disposing an owner transfers its lease. `RestProxy` checks the current view and lease before judging or sending automatic replies, including subsequent transport requests. Manual replies remain available without a lease. A non-owner retains actionable prompts and tells the owner to reconcile them; rejected stale leases leave requests pending without a chat-wide error.
 
 `PermissionJudge` handles known read-only tools locally and can review other requests through a hidden child session with tools denied except structured output. It asks on invalid responses or review failures. The model selection checks the configured judge model, OpenCode's `small_model`, then a supplied fallback.
 

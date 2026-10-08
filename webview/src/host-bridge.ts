@@ -31,6 +31,7 @@ import { registerHostExtension } from '../vendor/webview/host/extensions';
 import { adaptHostContext, databaseProvider } from './database-extension';
 import pluginMetadata from './plugin-metadata';
 import { supportsDetachedEditors } from './host-capabilities';
+import { installLinkIntegration } from './link-integration';
 
 type HostWindow = Window & {
   __varroHostSend?: (json: string) => void;
@@ -85,24 +86,7 @@ function installReceiveChannel() {
  * restart recovers from. Route those intents to the host instead.
  */
 function guardNavigation() {
-  document.addEventListener(
-    'click',
-    (event) => {
-      if (event.defaultPrevented || event.button !== 0) return;
-      const anchor = (event.target as Element | null)?.closest?.('a[href]');
-      if (!anchor) return;
-      const href = anchor.getAttribute('href') ?? '';
-      if (!href || href.startsWith('#')) return;
-      event.preventDefault();
-      if (/^https?:/i.test(href)) {
-        hostWindow.__sendToExtension?.({
-          type: 'vscode/open-external',
-          payload: { url: href },
-        });
-      }
-    },
-    true
-  );
+  installLinkIntegration(document, window, (message) => hostWindow.__sendToExtension?.(message));
 
   window.addEventListener('dragover', (event) => event.preventDefault());
   document.addEventListener(

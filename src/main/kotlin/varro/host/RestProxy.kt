@@ -54,6 +54,7 @@ class RestProxy(
     private val selections: SessionSelections = SessionSelections(store, request = { method, path, body, directory ->
         server.transport.request(method, path, body, RequestOptions(directory = directory)).data
     }),
+    private val isPermissionAutomationLeaseCurrent: (Long) -> Boolean = { false },
 ) {
     private val log = logger<RestProxy>()
     private val modelPricing = ModelPricingCatalog()
@@ -122,6 +123,8 @@ class RestProxy(
         var success = false
         var rejected = false
         try {
+            fun checkPermissionLease() = PermissionAutomationLease.assertCurrent(payload, isPermissionAutomationLeaseCurrent)
+            checkPermissionLease()
             if (payload.obj("queuedMessageDispatch") != null && !admitQueuedDispatch(payload)) {
                 error("Queued message dispatch lease is no longer current")
             }
@@ -129,7 +132,10 @@ class RestProxy(
             val data = if (path.startsWith(ApiRoutes.NAMESPACE)) {
                 handleVarroRequest(method, path, payload.get("body"))
             } else {
-                forward(method, path, payload.get("body"), payload.obj("queuedMessageDispatch") != null) { cancelled.get() || disposed.get() }
+                forward(method, path, payload.get("body"), payload.obj("queuedMessageDispatch") != null) {
+                    checkPermissionLease()
+                    cancelled.get() || disposed.get()
+                }
             }
             success = true
             if (admitted) completeQueuedDispatch(payload, true, false)

@@ -3,6 +3,12 @@ package varro.host
 import com.google.gson.JsonElement
 import com.google.gson.JsonObject
 import com.intellij.ide.ui.LafManagerListener
+import com.intellij.openapi.actionSystem.AnAction
+import com.intellij.openapi.actionSystem.AnActionEvent
+import com.intellij.openapi.actionSystem.DefaultActionGroup
+import com.intellij.openapi.ide.CopyPasteManager
+import com.intellij.openapi.ui.popup.JBPopupFactory
+import com.intellij.ui.awt.RelativePoint
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.diagnostic.logger
@@ -14,6 +20,7 @@ import com.intellij.openapi.util.Disposer
 import com.intellij.ui.jcef.JBCefBrowser
 import com.intellij.ui.jcef.JBCefJSQuery
 import varro.protocol.Json
+import varro.protocol.int
 import varro.settings.VarroSettings
 import org.cef.browser.CefBrowser
 import org.cef.browser.CefFrame
@@ -27,6 +34,8 @@ import org.cef.misc.BoolRef
 import org.cef.network.CefRequest
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicBoolean
+import java.awt.Point
+import java.awt.datatransfer.StringSelection
 import javax.swing.JComponent
 
 /**
@@ -52,6 +61,7 @@ class WebviewHost(
     private val initialStateProvider: () -> JsonObject,
     private val viewStateProvider: () -> JsonObject,
     private val onMessage: (JsonObject) -> Unit,
+    private val onReadinessChanged: () -> Unit = {},
 ) : Disposable {
 
     enum class Surface(val id: String) { SIDEBAR("sidebar"), EDITOR("editor") }
@@ -78,6 +88,7 @@ class WebviewHost(
     }
 
     val component: JComponent get() = browser.component
+    val isReady: Boolean get() = ready.get() && !disposed.get()
 
     init {
         Disposer.register(this, browser)
@@ -163,8 +174,9 @@ class WebviewHost(
 
     fun markReady() {
         if (disposed.get()) return
-        ready.set(true)
+        val changed = !ready.getAndSet(true)
         flushPending()
+        if (changed) onReadinessChanged()
     }
 
     // --- Asset serving --------------------------------------------------------
@@ -250,7 +262,7 @@ class WebviewHost(
 
     /** Builds the page shell; invoked by the asset handler on every document load. */
     private fun renderDocument(): String {
-        ready.set(false)
+        if (ready.getAndSet(false)) onReadinessChanged()
         return runCatching {
             WebviewHtml.render(
                 theme = ThemeBridge.current(),
@@ -274,7 +286,7 @@ class WebviewHost(
     /** Rebuilds the document from current state. Used after a theme or config change. */
     fun reload() {
         if (disposed.get()) return
-        ready.set(false)
+        if (ready.getAndSet(false)) onReadinessChanged()
         pendingOutbound.clear()
         browser.loadURL(WebviewAssets.INDEX_URL)
     }
@@ -342,6 +354,25 @@ class WebviewHost(
         if (disposed.get()) return
         runCatching { browser.openDevtools() }
             .onFailure { log.warn("Failed to open Varro webview devtools", it) }
+    }
+
+    fun showLinkContextMenu(payload: JsonObject) {
+        val item = LinkContextMenu.from(payload) ?: return
+        val x = payload.int("x") ?: return
+        val y = payload.int("y") ?: return
+        ApplicationManager.getApplication().invokeLater {
+            if (disposed.get() || project.isDisposed || !component.isShowing) return@invokeLater
+            val action = object : AnAction(item.label) {
+                override fun actionPerformed(event: AnActionEvent) {
+                    CopyPasteManager.getInstance().setContents(StringSelection(item.text))
+                }
+            }
+            JBPopupFactory.getInstance().createActionGroupPopup(
+                null, DefaultActionGroup(action),
+                com.intellij.ide.DataManager.getInstance().getDataContext(component),
+                JBPopupFactory.ActionSelectionAid.SPEEDSEARCH, false,
+            ).show(RelativePoint(component, Point(x.coerceIn(0, component.width), y.coerceIn(0, component.height))))
+        }
     }
 
     override fun dispose() {

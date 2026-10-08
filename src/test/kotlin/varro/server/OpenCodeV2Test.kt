@@ -144,6 +144,73 @@ class OpenCodeV2Test {
         }
     }
 
+    @Test fun `external credentials accept custom profiles without starting OAuth`() {
+        val integration = Json.obj("id" to "amazon-bedrock", "methods" to listOf(
+            Json.obj("id" to "env", "type" to "env"),
+            Json.obj("id" to "api-key", "type" to "key"),
+            Json.obj("id" to "aws-profile", "type" to "external", "label" to "AWS profile", "form" to listOf(
+                Json.obj("key" to "profile", "type" to "string", "custom" to true, "placeholder" to "Profile name",
+                    "options" to listOf(Json.obj("label" to "Default", "value" to "default")))))))
+        var sent: JsonObject? = null
+        val native = adapter { method, path, body -> when (path) {
+            "/api/provider" -> Json.obj("data" to emptyList<Any>())
+            "/api/integration" -> Json.obj("data" to listOf(integration))
+            "/api/provider/amazon-bedrock" -> Json.obj("data" to Json.obj())
+            "/api/integration/amazon-bedrock" -> Json.obj("data" to integration)
+            "/api/integration/amazon-bedrock/connect/external" -> { assertEquals("POST", method); sent = body.asObjectOrNull(); null }
+            else -> error("Unexpected request $path")
+        } }
+        val methods = native.request("GET", "/provider/auth", null, RequestOptions()).data.asObjectOrNull().arr("amazon-bedrock")!!
+        assertEquals(listOf("api", "external"), methods.map { it.asJsonObject.str("type") })
+        val prompt = methods[1].asJsonObject.arr("prompts")!![0].asJsonObject
+        assertEquals("text", prompt.str("type"))
+        assertEquals("Profile name", prompt.str("placeholder"))
+        assertNull(prompt.arr("options"))
+        assertEquals(Json.obj("url" to "", "method" to "complete", "instructions" to ""), native.request(
+            "POST", "/provider/amazon-bedrock/oauth/authorize",
+            Json.obj("method" to 1, "inputs" to Json.obj("profile" to "new-profile")), RequestOptions()).data)
+        assertEquals(Json.obj("methodID" to "aws-profile", "answer" to Json.obj("profile" to "new-profile")), sent)
+        assertThrows(IllegalStateException::class.java) {
+            native.request("POST", "/provider/amazon-bedrock/oauth/callback", null, RequestOptions())
+        }
+    }
+
+    @Test fun `external credentials preserve typed answers hidden defaults and workspace scope`() {
+        val integration = Json.obj("methods" to listOf(Json.obj("id" to "external", "type" to "external", "form" to listOf(
+            Json.obj("key" to "enabled", "type" to "boolean", "default" to false),
+            Json.obj("key" to "count", "type" to "integer", "default" to 0),
+            Json.obj("key" to "ratio", "type" to "number"),
+            Json.obj("key" to "internal", "type" to "string", "hidden" to true, "default" to "default",
+                "when" to listOf(Json.obj("key" to "enabled", "op" to "eq", "value" to false))),
+            Json.obj("key" to "inactive", "type" to "string", "hidden" to true, "default" to "omit",
+                "when" to listOf(Json.obj("key" to "enabled", "op" to "eq", "value" to true)))))))
+        var sent: JsonObject? = null
+        val native = adapter { _, path, body ->
+            assertTrue(path.endsWith("?location%5Bdirectory%5D=%2Frepo"))
+            when (path.substringBefore('?')) {
+                "/api/provider/fixture" -> Json.obj("data" to Json.obj())
+                "/api/integration/fixture" -> Json.obj("data" to integration)
+                "/api/integration/fixture/connect/external" -> { sent = body.asObjectOrNull().obj("answer"); null }
+                else -> error("Unexpected request $path")
+            }
+        }
+        native.request("POST", "/provider/fixture/oauth/authorize", Json.obj("inputs" to Json.obj(
+            "enabled" to "false", "count" to "0", "ratio" to "1.25")), RequestOptions(directory = "/repo"))
+        assertEquals(Json.obj("enabled" to false, "count" to 0, "ratio" to 1.25, "internal" to "default"), sent)
+    }
+
+    @Test fun `rejected external credentials are not reported as complete`() {
+        val native = adapter { _, path, _ -> when (path) {
+            "/api/provider/azure" -> Json.obj("data" to Json.obj())
+            "/api/integration/azure" -> Json.obj("data" to Json.obj("methods" to listOf(Json.obj("id" to "azure-cli", "type" to "external"))))
+            "/api/integration/azure/connect/external" -> error("400 Azure resource name is required")
+            else -> error("Unexpected request $path")
+        } }
+        assertEquals("400 Azure resource name is required", assertThrows(IllegalStateException::class.java) {
+            native.request("POST", "/provider/azure/oauth/authorize", Json.obj("method" to 0), RequestOptions())
+        }.message)
+    }
+
     @Test fun `native history skips control records and keeps inbox and parent identities`() {
         val native = adapter { _, path, _ -> when {
             path.endsWith("/inbox") -> Json.obj("data" to listOf(Json.obj("id" to "msg_pending", "type" to "user", "delivery" to "steer", "time" to Json.obj("created" to 4), "payload" to Json.obj("text" to "queued"))))

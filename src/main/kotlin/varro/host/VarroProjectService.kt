@@ -236,6 +236,7 @@ class VarroProjectService(private val project: Project) : Disposable {
             initialStateProvider = { buildInitialState(surface, viewId) },
             viewStateProvider = { store.viewState(viewId) },
             onMessage = { message -> handleMessage(host, message) },
+            onReadinessChanged = ::reconcilePermissionOwner,
         )
         proxies[host] = RestProxy(project, server, store, context, hostServices, host::post,
             admitQueuedDispatch = { request -> queue.admit(viewId, request) },
@@ -248,6 +249,7 @@ class VarroProjectService(private val project: Project) : Disposable {
                 )
             },
             selections = selections,
+            isPermissionAutomationLeaseCurrent = { lease -> isPermissionAutomationLeaseCurrent(host, lease) },
         )
         panels.add(host)
         Disposer.register(host) {
@@ -601,6 +603,8 @@ class VarroProjectService(private val project: Project) : Disposable {
 
                 "vscode/open-external" -> payload.str("url")?.let(::openExternal)
 
+                "host/link-context-menu" -> payload?.let { host?.showLinkContextMenu(it) }
+
                 "vscode/open-settings" -> openSettings()
 
                 "vscode/show-output" -> showLog()
@@ -759,7 +763,11 @@ class VarroProjectService(private val project: Project) : Disposable {
                 }
                 "webview/focus" -> if (payload.bool("focused") == true) focusedHost = host
 
-                "permission/reveal" -> payload.text("permissionId")?.let(notifications::revealPermission)
+                "permission/reveal" -> payload.text("permissionId")?.let { permissionId ->
+                    notifications.revealPermission(permissionId)
+                    reconcilePermissionOwner()
+                    permissionOwner?.post("permission/actionable", Json.obj("permissionId" to permissionId))
+                }
                 "session/seen" -> payload.text("sessionId")?.let(notifications::seen)
 
                 "config/update" -> applyWebviewConfig(payload)
@@ -1063,7 +1071,7 @@ class VarroProjectService(private val project: Project) : Disposable {
     }
 
     private fun openExternal(url: String) {
-        if (!url.startsWith("http://") && !url.startsWith("https://")) return
+        if (!isAllowedExternalUrl(url)) return
         com.intellij.ide.BrowserUtil.browse(url)
     }
 
@@ -1152,9 +1160,9 @@ class VarroProjectService(private val project: Project) : Disposable {
     @Synchronized
     private fun reconcilePermissionOwner() {
         val current = permissionOwner
-        val next = panels.firstOrNull { it.surface == WebviewHost.Surface.SIDEBAR }
-            ?: current?.takeIf { it in panels }
-            ?: panels.firstOrNull()
+        val next = panels.firstOrNull { it.isReady && it.surface == WebviewHost.Surface.SIDEBAR }
+            ?: current?.takeIf { it.isReady && it in panels }
+            ?: panels.firstOrNull { it.isReady }
         if (next === current) return
         permissionOwner = next
         if (next != null) permissionLease++
@@ -1163,6 +1171,10 @@ class VarroProjectService(private val project: Project) : Disposable {
 
     private fun permissionAutomation(host: WebviewHost): JsonObject =
         Json.obj("owner" to (host === permissionOwner), "lease" to permissionLease)
+
+    @Synchronized
+    private fun isPermissionAutomationLeaseCurrent(host: WebviewHost, lease: Long): Boolean =
+        !project.isDisposed && host.isReady && host in panels && host === permissionOwner && lease == permissionLease
 
     private fun broadcastEditorTabs() = broadcast("editor-tabs/state", Json.obj(
         "open" to panels.any { it.surface == WebviewHost.Surface.EDITOR },

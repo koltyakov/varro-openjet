@@ -490,8 +490,12 @@ internal class OpenCodeV2Adapter(
             return Json.toElement(true)
         }
         if (action == "authorize") {
-            val methods = data("GET", base).asObjectOrNull().arr("methods").orEmpty().mapNotNull { it.asObjectOrNull() }.filter { it.str("type") in setOf("key", "oauth") }
+            val methods = data("GET", base).asObjectOrNull().arr("methods").orEmpty().mapNotNull { it.asObjectOrNull() }.filter { it.str("type") in setOf("key", "oauth", "external") }
             val selected = methods.getOrNull(input.int("method") ?: 0)
+            if (selected.str("type") == "external") {
+                raw("POST", "$base/connect/external", Json.obj("methodID" to selected?.get("id"), "answer" to authAnswers(selected.arr("form"), input.get("inputs"))))
+                return Json.obj("url" to "", "method" to "complete", "instructions" to "")
+            }
             require(selected.str("type") == "oauth") { "Unsupported OpenCode authentication method" }
             val attempt = data("POST", "$base/connect/oauth", Json.obj("methodID" to selected?.get("id"), "answer" to authAnswers(selected.arr("form"), input.get("inputs")))).asObjectOrNull()
             val id = attempt.str("attemptID") ?: error("Invalid OpenCode OAuth attempt")
@@ -528,15 +532,15 @@ internal class OpenCodeV2Adapter(
     }
 
     private fun authMethods(integration: JsonObject?) = Json.array(integration.arr("methods").orEmpty().mapNotNull { it.asObjectOrNull() }
-        .filter { it.str("type") in setOf("oauth", "key") }.map { method -> Json.obj("type" to if (method.str("type") == "key") "api" else "oauth", "label" to (method.str("label") ?: "API key"),
+        .filter { it.str("type") in setOf("oauth", "key", "external") }.map { method -> Json.obj("type" to if (method.str("type") == "key") "api" else method.str("type"), "label" to (method.str("label") ?: "API key"),
             "prompts" to method.arr("form").orEmpty().mapNotNull { it.asObjectOrNull() }.filter { it.str("type") != "external" }.map { field ->
                 Json.obj("key" to field.get("key"), "message" to (field.str("title") ?: field.str("description") ?: field.str("key")),
                     "required" to (field.bool("required") == true), "hidden" to field.get("hidden"),
                     "default" to field.get("default")?.takeIf { it.isJsonPrimitive }?.asString,
                     "placeholder" to field.get("placeholder"), "when" to field.arr("when")?.map { condition -> condition.asJsonObject.deepCopy().apply { addProperty("value", get("value").asString) } },
-                    "type" to if (field.str("type") == "boolean" || (field.str("type") == "string" && field.has("options"))) "select" else "text",
+                    "type" to if (field.str("type") == "boolean" || (field.str("type") == "string" && field.has("options") && field.bool("custom") != true)) "select" else "text",
                     "options" to if (field.str("type") == "boolean") listOf(Json.obj("value" to "true", "label" to "Yes"), Json.obj("value" to "false", "label" to "No"))
-                    else field.arr("options")?.map { option ->
+                    else field.arr("options")?.takeIf { field.bool("custom") != true }?.map { option ->
                         Json.obj("label" to option.asObjectOrNull().str("label"), "value" to option.asObjectOrNull()?.get("value")?.asString, "hint" to option.asObjectOrNull().str("description")) })
             }) })
 
