@@ -26,7 +26,7 @@
     "solid-js": "^1.9.17"
   },
   "devDependencies": {
-    "@types/node": "26.6.4",
+    "@types/node": "26.6.5",
     "@tailwindcss/vite": "4.3.3",
     "iconoir": "7.12.1",
     "material-icon-theme": "5.39.0",
