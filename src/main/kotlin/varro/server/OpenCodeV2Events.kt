@@ -31,9 +31,13 @@ internal object OpenCodeV2Events {
             "session.deleted" -> return listOf(emit(type, Json.obj("sessionID" to sessionID, "info" to Json.obj("id" to sessionID))))
             "session.status.updated" -> return listOf(emit("session.status"))
             "session.execution.started" -> return listOf(emit("session.status", Json.obj("sessionID" to sessionID, "status" to if (context.bool("backgroundPending") == true) background else status("busy"))))
-            "session.execution.succeeded", "session.execution.interrupted" -> return listOf(emit("session.status", Json.obj("sessionID" to sessionID, "status" to if (context.bool("backgroundPending") == true) background else status("idle")).apply {
-                if (type == "session.execution.interrupted") addProperty("interrupted", true)
-            }))
+            "session.execution.succeeded" -> return listOf(emit("session.status", Json.obj("sessionID" to sessionID, "status" to if (context.bool("backgroundPending") == true) background else status("idle"))))
+            "session.execution.interrupted" -> return listOf(
+                emit("session.error", Json.obj("sessionID" to sessionID, "error" to Json.obj("name" to "MessageAbortedError", "data" to Json.obj()))),
+                emit("session.status", Json.obj("sessionID" to sessionID, "status" to if (context.bool("backgroundPending") == true) background else status("idle"))).apply {
+                    addProperty("id", "${event.str("id")}:idle"); remove("seq")
+                },
+            )
             "session.execution.failed" -> {
                 val result = mutableListOf<JsonObject>()
                 if (context.bool("hasAssistant") != true && event.str("id") != null) {

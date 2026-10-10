@@ -10,6 +10,21 @@ The shared per-user directories are:
 - Linux: `$XDG_STATE_HOME/varro/servers/`, or `~/.local/state/varro/servers/`
 - Windows: `%LOCALAPPDATA%\Varro\servers\`, or `~/AppData/Local/Varro/servers/`
 
+New managed V2 launches use `serve --service` with a child-only `XDG_STATE_HOME`
+under `servers/opencode-service/`. Their registration is
+`opencode-service/opencode/service.json`, shared with Varro for VS Code but separate
+from OpenCode Desktop's global service. Nested CLIs inherit this registration.
+Configuration, provider credentials, and session database locations remain unchanged.
+Do not run the same session concurrently through independent servers.
+
+Discovery prefers the private registration. Once selected, reloads, recovery, and
+restarts stay in that service directory rather than falling back to Desktop.
+Fresh V2 launches wait for private registration credentials and matching health
+PID/version within the startup deadline; global credentials cannot satisfy readiness.
+Service selection never grants stop rights. Existing running global servers remain
+usable without migration; a later managed relaunch uses the private registration.
+V1 launch arguments and state directories are unchanged.
+
 Each configured port uses `varro-opencode-server-<port>.json`, a `.managed`
 recovery marker, and a `.claim` coordination file. The lease stores the actual
 listening port, including fallback ports. A valid legacy temporary-directory lease

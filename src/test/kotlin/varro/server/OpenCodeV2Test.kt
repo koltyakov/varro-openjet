@@ -382,4 +382,55 @@ class OpenCodeV2Test {
         assertThrows(IllegalArgumentException::class.java) { native.request("GET", "/session/ses_test/message", null, RequestOptions()) }
         assertThrows(OpenCodeResponseTooLargeException::class.java) { native.request("GET", "/session/ses_test/message", null, RequestOptions(maxResponseBytes = 8)) }
     }
+
+    @Test fun `interruption events record cancellation before idle without duplicating durable sequence`() {
+        val projected = OpenCodeV2Events.project(Json.obj("id" to "evt_interrupted", "type" to "session.execution.interrupted",
+            "created" to 10, "durable" to Json.obj("seq" to 7), "data" to Json.obj("sessionID" to "ses_test")), Json.obj())
+        assertEquals(listOf("session.error", "session.status"), projected.map { it.str("type") })
+        assertEquals("MessageAbortedError", projected[0].obj("properties").obj("error").str("name"))
+        assertEquals(7L, projected[0].long("seq"))
+        assertEquals("evt_interrupted:idle", projected[1].str("id"))
+        assertFalse(projected[1].has("seq"))
+        assertEquals("idle", projected[1].obj("properties").obj("status").str("type"))
+    }
+
+    @Test fun `interrupted history retains markers and user parent across page boundaries`() {
+        val interrupted = Json.obj("id" to "msg_interrupted", "type" to "idle", "outcome" to "interrupted", "time" to Json.obj("created" to 10))
+        assertTrue(OpenCodeV2Projection.transcript(interrupted))
+        assertFalse(OpenCodeV2Projection.transcript(interrupted.deepCopy().apply { addProperty("outcome", "succeeded") }))
+        val projected = OpenCodeV2Projection.message(interrupted, "ses_test")
+        assertEquals("MessageAbortedError", projected.obj("info").obj("error").str("name"))
+        assertEquals(10L, projected.obj("info").obj("time").long("completed"))
+        assertTrue(projected.arr("parts")!!.isEmpty)
+        val calls = mutableListOf<String>()
+        val native = adapter { _, path, _ ->
+            calls.add(path)
+            when {
+                path.endsWith("inbox") -> Json.obj("data" to emptyList<Any>())
+                path.contains("cursor=older") -> Json.obj("data" to listOf(Json.obj("id" to "msg_user", "type" to "user", "text" to "Prompt")))
+                path.contains("/message?") -> Json.obj("data" to listOf(interrupted), "cursor" to Json.obj("next" to "older"))
+                else -> error("Unexpected request $path")
+            }
+        }
+        val response = native.request("GET", "/session/ses_test/message?limit=1", null, RequestOptions(captureNextCursor = true))
+        val messages = response.data!!.asJsonArray
+        assertEquals(1, messages.size())
+        assertEquals("msg_user", messages.single().asJsonObject.obj("info").str("parentID"))
+        assertEquals("MessageAbortedError", messages.single().asJsonObject.obj("info").obj("error").str("name"))
+        assertEquals("older", response.nextCursor)
+        assertEquals(1, calls.count { it.contains("cursor=older") })
+    }
+
+    @Test fun `interruption markers are not suppressed by preceding assistant failure`() {
+        val native = adapter { _, path, _ ->
+            if (path.endsWith("inbox")) Json.obj("data" to emptyList<Any>()) else Json.obj("data" to listOf(
+                Json.obj("id" to "msg_interrupted", "type" to "idle", "outcome" to "interrupted", "time" to Json.obj("created" to 3)),
+                Json.obj("id" to "msg_failed", "type" to "idle", "outcome" to "failed", "time" to Json.obj("created" to 2)),
+                Json.obj("id" to "msg_assistant", "type" to "assistant", "error" to Json.obj("type" to "APIError"), "time" to Json.obj("created" to 2)),
+                Json.obj("id" to "msg_user", "type" to "user", "text" to "Prompt", "time" to Json.obj("created" to 1))))
+        }
+        val messages = native.request("GET", "/session/ses_test/message", null, RequestOptions()).data!!.asJsonArray
+        assertEquals(listOf("msg_user", "msg_assistant", "msg_interrupted"), messages.map { it.asJsonObject.obj("info").str("id") })
+        assertEquals("msg_user", messages.last().asJsonObject.obj("info").str("parentID"))
+    }
 }

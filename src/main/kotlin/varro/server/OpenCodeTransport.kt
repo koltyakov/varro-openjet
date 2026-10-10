@@ -312,17 +312,43 @@ class OpenCodeTransport(
         return current
     }
 
-    fun readHealthInfo(): HealthInfo {
+    fun readHealthInfo(): HealthInfo = readHealthInfo(HEALTH_TIMEOUT_MS * 3) { false }
+
+    internal fun readHealthInfo(timeoutMs: Long, isCancelled: () -> Boolean): HealthInfo {
+        val deadline = System.nanoTime() + java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(timeoutMs)
+        fun checkCurrent() {
+            if (isCancelled() || disposed.get()) throw java.util.concurrent.CancellationException("OpenCode health probe cancelled")
+        }
+        fun <T> await(future: CompletableFuture<T>): T {
+            inFlight.add(future)
+            try {
+                while (true) {
+                    checkCurrent()
+                    val remaining = deadline - System.nanoTime()
+                    if (remaining <= 0) throw HttpTimeoutException("OpenCode health probe timed out")
+                    try { return future.get(minOf(remaining, java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(100)), java.util.concurrent.TimeUnit.NANOSECONDS) }
+                    catch (_: java.util.concurrent.TimeoutException) { /* Recheck cancellation and the shared deadline. */ }
+                }
+            } finally {
+                inFlight.remove(future)
+                future.cancel(true)
+            }
+        }
         var failure: String? = null
         for (path in listOf("/api/info", "/api/status", HEALTH_PATH)) {
+            checkCurrent()
+            val remaining = java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(deadline - System.nanoTime())
+            if (remaining <= 0) break
             val health = runCatching {
-                val builder = HttpRequest.newBuilder(URI.create("${getUrl()}$path")).timeout(Duration.ofMillis(HEALTH_TIMEOUT_MS)).GET()
+                val builder = HttpRequest.newBuilder(URI.create("${getUrl()}$path")).timeout(Duration.ofMillis(minOf(HEALTH_TIMEOUT_MS, remaining))).GET()
                 getAuthorization()?.let { builder.header("Authorization", it) }
-                val response = client.send(builder.build(), HttpResponse.BodyHandlers.ofInputStream())
-                val text = response.body().use { readBounded(it, 65536) }
-                if (response.statusCode() !in 200..299) {
-                    if (response.statusCode() in setOf(401, 403)) failure = "OpenCode rejected authentication. Check the registered service credentials or OPENCODE_SERVER_PASSWORD."
-                    return@runCatching null
+                val response = await(client.sendAsync(builder.build(), HttpResponse.BodyHandlers.ofInputStream()))
+                val text = response.body().use { body ->
+                    if (response.statusCode() !in 200..299) {
+                        if (response.statusCode() in setOf(401, 403)) failure = "OpenCode rejected authentication. Check the registered service credentials or OPENCODE_SERVER_PASSWORD."
+                        return@runCatching null
+                    }
+                    await(CompletableFuture.supplyAsync { readBounded(body, 65536) })
                 }
                 val record = Json.parseOrNull(text).asObjectOrNull() ?: return@runCatching null
                 val version = record.str("version") ?: return@runCatching null
@@ -334,7 +360,14 @@ class OpenCodeTransport(
                     apiVersion = 2
                 }
                 HealthInfo(true, version, record.get("pid")?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isNumber }?.asLong)
-            }.getOrNull()
+            }.getOrElse {
+                if (it is java.util.concurrent.CancellationException) throw it
+                if (it is InterruptedException) {
+                    Thread.currentThread().interrupt()
+                    throw java.util.concurrent.CancellationException("OpenCode health probe interrupted")
+                }
+                null
+            }
             if (health != null) { healthFailure = null; return health }
             // Never bypass explicit credential rejection with another health route.
             if (failure != null) break

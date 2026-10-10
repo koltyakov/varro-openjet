@@ -66,8 +66,11 @@ class OpenCodeV2ParityTest {
         event("session.step.ended", Json.obj("sessionID" to "ses_one", "finish" to "stop"))
         val resumed = event("session.step.started", Json.obj("sessionID" to "ses_one"))
         assertEquals(1, resumed.size)
-        val finished = event("session.execution.interrupted", Json.obj("sessionID" to "ses_one")).single()
-        assertEquals("idle", finished.obj("properties").obj("status").str("type"))
+        val finished = event("session.execution.interrupted", Json.obj("sessionID" to "ses_one"))
+        assertEquals(listOf("session.error", "session.status"), finished.map { it.str("type") })
+        assertEquals("MessageAbortedError", finished.first().obj("properties").obj("error").str("name"))
+        assertEquals("idle", finished.last().obj("properties").obj("status").str("type"))
+        assertFalse(finished.last().has("seq"))
     }
 
     @Test fun `OAuth callbacks isolate attempts by id and directory and clean up cancellation`() {

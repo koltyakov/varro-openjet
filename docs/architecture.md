@@ -80,6 +80,14 @@ its process's coordination point. A configured-port filename can contain a diffe
 Discovery verifies registrations under other keys and retains their original lease/marker/claim path.
 Conflicting process registrations fail without rewriting either record.
 
+`OpenCodeServiceRouting` keeps new managed V2 service registration under the shared
+`servers/opencode-service/` directory. Only the child process receives that
+`XDG_STATE_HOME`; configuration, authentication, and database paths are not moved.
+Private service selection survives verified lease or marker restoration and stays
+private through recovery. Startup waits for that registration's credentials and
+matching PID/version before confirming ownership. Existing global services can still
+be adopted before private selection, and V1 launches retain their original behavior.
+
 The `.claim` stays held across spawn, listener confirmation and publication, as well as stop and
 handoff operations. Lifecycle authority requires the sole listener PID, normalized executable,
 process birth identity and current host lease. Failed inspection is not proof of retirement.
@@ -161,7 +169,8 @@ Permissions wait for `permission/reveal` or a 20-second fallback. Successful rep
 authoritative reply events remove alerts. Reconnect reads of `/permission` and `/question` use
 mutation revisions so late snapshots cannot overwrite newer asks, replies or session deletions.
 Completion alerts exclude failed, interrupted, child and blocked turns; terminal tool steps wait
-for authoritative idle while the server is busy. V2 interrupted status carries an explicit flag.
+for authoritative idle while the server is busy. V2 interruptions emit `MessageAbortedError`
+before idle, so both unread markers and notifications distinguish cancellation from completion.
 
 A fixed 300 ms batch window and five-second cooldown group delivery. Focus, scope and settings
 are checked again before delivery. macOS also checks Cocoa window occlusion, including detached

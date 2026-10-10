@@ -14,14 +14,16 @@ internal object OpenCodeConnection {
     fun register(url: String, password: String, username: String = "opencode") { managed[url] = authorization(password, username) }
     fun forget(url: String) { managed.remove(url) }
     fun forget(url: String, password: String, username: String) { managed.remove(url, authorization(password, username)) }
-    fun credentials(url: String, environment: Map<String, String>): String? {
+    fun credentials(url: String, environment: Map<String, String>, service: () -> Registration? = { registration(environment) }): String? {
         managed[url]?.let { return it }
-        registration(environment)?.takeIf { it.url == url }?.let { return authorization(it.password) }
+        service()?.takeIf { it.url == url }?.let { return authorization(it.password) }
         return environment["OPENCODE_SERVER_PASSWORD"]?.takeIf { it.isNotEmpty() }?.let { authorization(it, environment["OPENCODE_SERVER_USERNAME"] ?: "opencode") }
     }
-    data class Registration(val url: String, val password: String, val pid: Long, val version: String)
-    fun registration(environment: Map<String, String>): Registration? = runCatching {
-        val path = Path.of(environment["XDG_STATE_HOME"] ?: Path.of(environment["HOME"] ?: System.getProperty("user.home"), ".local", "state").toString(), "opencode", "service.json")
+    data class Registration(val url: String, val password: String, val pid: Long, val version: String, val file: Path)
+    fun registration(environment: Map<String, String>): Registration? = registration(serviceFile(environment))
+    fun serviceFile(environment: Map<String, String>): Path =
+        Path.of(environment["XDG_STATE_HOME"] ?: Path.of(environment["HOME"] ?: System.getProperty("user.home"), ".local", "state").toString(), "opencode", "service.json")
+    fun registration(path: Path): Registration? = runCatching {
         if (!Files.exists(path) || Files.size(path) > 16384) return null
         val value = Json.parse(Files.readString(path)).asObjectOrNull() ?: return null
         val url = value.str("url") ?: return null
@@ -31,7 +33,7 @@ internal object OpenCodeConnection {
         val pid = value.long("pid")?.takeIf { it > 0 } ?: return null
         if (ProcessHandle.of(pid).orElse(null)?.isAlive != true) return null
         val version = value.str("version")?.takeIf { it.startsWith("2.") } ?: return null
-        Registration("http://127.0.0.1:${uri.port}", password, pid, version)
+        Registration("http://127.0.0.1:${uri.port}", password, pid, version, path)
     }.getOrNull()
 }
 

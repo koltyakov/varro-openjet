@@ -47,12 +47,16 @@ class OpenCodeProcess(
     @Volatile private var serverPassword: String? = null
     @Volatile private var serverUsername = "opencode"
     private var credentialPort = 0
+    private val services = OpenCodeServiceRouting(cli.serverEnvironment(), serverStateDirectory ?: ServerOwnership.sharedDirectory())
+    private var v2Launch = false
+    private var launchRegistration: OpenCodeConnection.Registration? = null
 
     fun restoreConnection(): Boolean {
         val connection = ownership.connection() ?: return false
         connection.let { (port, password, username) ->
             adoptPort(port)
-            val servicePassword = if (password == null) OpenCodeConnection.registration(cli.serverEnvironment())?.takeIf {
+            services.rememberVerified(ownership.registeredPid, port)
+            val servicePassword = if (password == null) services.registrations("http://127.0.0.1:$port").firstOrNull {
                 it.url == "http://127.0.0.1:$port" && it.pid == ownership.registeredPid
             }?.password else null
             val savedPassword = password ?: servicePassword
@@ -77,6 +81,14 @@ class OpenCodeProcess(
                 OpenCodeConnection.register("http://127.0.0.1:$port", it, connection.username)
             }
         }
+    }
+
+    internal val canProbeUnregisteredService: Boolean get() = !services.privateSelected
+    internal fun serviceRegistrations(allowGlobal: Boolean) = services.registrations(privateOnly = services.privateSelected || !allowGlobal)
+
+    internal fun adoptService(registration: OpenCodeConnection.Registration) {
+        services.rememberVerified(registration)
+        restoreDiscoveredOwnership(registration.password)
     }
 
     fun verifyConnection(reconnect: Boolean = false) = ownership.verifyConnection(port, reconnect)
@@ -120,7 +132,8 @@ class OpenCodeProcess(
 
     fun authorization(): String? {
         verifyConnection()
-        return OpenCodeConnection.credentials("http://127.0.0.1:$port", cli.serverEnvironment())
+        val url = "http://127.0.0.1:$port"
+        return OpenCodeConnection.credentials(url, cli.serverEnvironment()) { services.registrations(url).firstOrNull() }
     }
 
     val isManaged: Boolean get() = managed.get()
@@ -171,10 +184,14 @@ class OpenCodeProcess(
         if (!info.found) throw OpenCodeCliMissingException(info)
 
         val launchPort = currentPort.get()
-        val commandLine = cli.launchCommandLine(info.command, listOf("serve", "--port", launchPort.toString()))
-        log.info("Starting OpenCode server: ${info.command} serve --port $launchPort")
+        val version = cli.readInstalledVersion()
+        v2Launch = version?.startsWith("2.") == true
+        launchRegistration = null
+        val args = services.launchArguments(version, launchPort)
+        val commandLine = cli.launchCommandLine(info.command, args)
+        log.info("Starting OpenCode server: ${info.command} ${args.joinToString(" ")}")
 
-        val environment = cli.serverEnvironment(askAgentConfig.prepare(askAgentEnabled())).toMutableMap()
+        val environment = services.launchEnvironment(version, cli.serverEnvironment(askAgentConfig.prepare(askAgentEnabled()))).toMutableMap()
         serverPassword = environment["OPENCODE_SERVER_PASSWORD"]?.takeIf { it.isNotEmpty() }
             ?: java.util.UUID.randomUUID().toString() + java.util.UUID.randomUUID().toString()
         serverUsername = environment["OPENCODE_SERVER_USERNAME"]?.takeIf { it.isNotEmpty() } ?: "opencode"
@@ -226,14 +243,22 @@ class OpenCodeProcess(
     }
 
     /** V2 can retain a service password instead of using the launch environment. */
-    fun refreshLaunchCredentials() {
-        if (handler.get() == null) return
-        OpenCodeConnection.registration(cli.serverEnvironment())?.takeIf { it.url == "http://127.0.0.1:$port" }?.let {
-            serverPassword = it.password
-            serverUsername = "opencode"
-            OpenCodeConnection.register(it.url, it.password)
-        }
+    fun refreshLaunchCredentials(): Boolean {
+        val launched = handler.get() ?: return false
+        if (!v2Launch) return true
+        val endpoint = "http://127.0.0.1:$port"
+        val registration = services.registrations(endpoint, privateOnly = true).firstOrNull() ?: return false
+        if (handler.get() !== launched || launched.isProcessTerminated || endpoint != "http://127.0.0.1:$port") return false
+        serverPassword = registration.password
+        serverUsername = "opencode"
+        launchRegistration = registration
+        OpenCodeConnection.register(registration.url, registration.password)
+        return true
     }
+
+    fun launchHealthMatches(health: HealthInfo): Boolean = health.healthy && (!v2Launch || launchRegistration?.let {
+        it.url == "http://127.0.0.1:$port" && health.pid == it.pid && health.version == it.version
+    } == true)
 
     /**
      * Stops a server whose shared lease this host currently owns. Graceful first so OpenCode can flush

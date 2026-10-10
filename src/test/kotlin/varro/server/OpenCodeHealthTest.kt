@@ -54,4 +54,45 @@ class OpenCodeHealthTest {
             assertTrue(transport.healthFailure!!.contains("authentication"))
         } finally { transport.dispose(); server.stop(0) }
     }
+
+    @Test fun `startup health deadline includes a stalled response body`() {
+        val endpoint = com.sun.net.httpserver.HttpServer.create(java.net.InetSocketAddress("127.0.0.1", 0), 0)
+        val release = java.util.concurrent.CountDownLatch(1)
+        endpoint.createContext("/") { exchange ->
+            exchange.sendResponseHeaders(200, 100)
+            exchange.responseBody.write('{'.code)
+            exchange.responseBody.flush()
+            release.await(5, java.util.concurrent.TimeUnit.SECONDS)
+            exchange.close()
+        }
+        endpoint.start()
+        val transport = OpenCodeTransport({ "http://127.0.0.1:${endpoint.address.port}" }, { null }, { ServerStatus.Stopped }, { false }, {}, {})
+        try {
+            val started = System.nanoTime()
+            assertFalse(transport.readHealthInfo(200) { false }.healthy)
+            assertTrue("Health body escaped the shared deadline", System.nanoTime() - started < java.util.concurrent.TimeUnit.SECONDS.toNanos(2))
+        } finally { release.countDown(); transport.dispose(); endpoint.stop(0) }
+    }
+
+    @Test fun `replaced startup cancels an in-flight health probe`() {
+        val endpoint = com.sun.net.httpserver.HttpServer.create(java.net.InetSocketAddress("127.0.0.1", 0), 0)
+        val entered = java.util.concurrent.CountDownLatch(1)
+        val release = java.util.concurrent.CountDownLatch(1)
+        val cancelled = java.util.concurrent.atomic.AtomicBoolean(false)
+        endpoint.createContext("/") { exchange ->
+            entered.countDown()
+            release.await(5, java.util.concurrent.TimeUnit.SECONDS)
+            exchange.close()
+        }
+        endpoint.start()
+        val transport = OpenCodeTransport({ "http://127.0.0.1:${endpoint.address.port}" }, { null }, { ServerStatus.Stopped }, { false }, {}, {})
+        val worker = java.util.concurrent.Executors.newSingleThreadExecutor()
+        try {
+            val result = worker.submit<HealthInfo> { transport.readHealthInfo(5000, cancelled::get) }
+            assertTrue(entered.await(2, java.util.concurrent.TimeUnit.SECONDS))
+            cancelled.set(true)
+            val failure = assertThrows(java.util.concurrent.ExecutionException::class.java) { result.get(2, java.util.concurrent.TimeUnit.SECONDS) }
+            assertTrue(failure.cause is java.util.concurrent.CancellationException)
+        } finally { release.countDown(); transport.dispose(); endpoint.stop(0); worker.shutdownNow() }
+    }
 }

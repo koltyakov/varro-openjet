@@ -91,7 +91,7 @@ internal object OpenCodeV2Projection {
         })
 
     fun transcript(message: JsonObject) = message.str("type") in setOf("user", "synthetic", "assistant", "compaction", "skill", "shell") ||
-        (message.str("type") == "idle" && message.str("outcome") == "failed")
+        (message.str("type") == "idle" && message.str("outcome") in setOf("failed", "interrupted"))
 
     fun toolOutput(value: JsonElement?) = value.asArrayOrNull().orEmpty().mapNotNull { it.asObjectOrNull() }
         .filter { it.str("type") == "text" }.joinToString("\n") { it.str("text").orEmpty() }
@@ -137,7 +137,8 @@ internal object OpenCodeV2Projection {
             value.obj("retry")?.let { retry -> info.add("retry", Json.obj("attempt" to retry.get("attempt"), "at" to retry.get("at"))) }
             val error = value.obj("error") ?: if (type == "idle") context.obj("error") ?: Json.obj("type" to "UnknownError",
                 "message" to "OpenCode failed before a response was recorded. Check the provider connection and the OpenCode server log.") else null
-            if (error != null) info.add("error", Json.obj("name" to (error.str("type") ?: "UnknownError"),
+            if (type == "idle" && value.str("outcome") == "interrupted") info.add("error", Json.obj("name" to "MessageAbortedError", "data" to Json.obj()))
+            else if (error != null) info.add("error", Json.obj("name" to (error.str("type") ?: "UnknownError"),
                 "data" to Json.obj("message" to error.str("message"), "statusCode" to error.get("status"))))
             if (type == "idle") info.add("time", time.deepCopy().apply { add("completed", time.get("created")) })
             // Stream ordinals count each content type separately, including empty blocks.

@@ -193,25 +193,35 @@ class OpenCodeServer(
 
         try {
             val restored = settings.serverAutoStart && process.restoreConnection()
+            var discovered = false
             // Validate the registered service identity before adopting its port.
-            if (settings.serverAutoStart && settings.serverCommand.isBlank() && !restored) {
-                OpenCodeConnection.registration(cli.serverEnvironment())?.let { registration ->
+            if (settings.serverAutoStart && !restored) {
+                for (registration in process.serviceRegistrations(allowGlobal = settings.serverCommand.isBlank())) {
+                    if (disposeGeneration.get() != generation) return
                     process.adoptPort(java.net.URI(registration.url).port)
+                    OpenCodeConnection.register(registration.url, registration.password)
                     val health = transport.readHealthInfo()
+                    if (disposeGeneration.get() != generation) return
                     if (!health.healthy || health.pid != registration.pid || health.version != registration.version) {
+                        OpenCodeConnection.forget(registration.url, registration.password, "opencode")
                         process.resetPortState()
                         transport.resetProtocol()
-                    } else process.restoreDiscoveredOwnership(registration.password)
+                    } else {
+                        process.adoptService(registration)
+                        discovered = true
+                        break
+                    }
                 }
             }
             // 1. Adopt a healthy server rather than fighting it for the port.
-            var existing = transport.readHealthInfo()
-            if (!existing.healthy && transport.healthFailure?.contains("authentication") == true) {
+            val probeExisting = restored || discovered || process.canProbeUnregisteredService || !settings.serverAutoStart
+            var existing = if (probeExisting) transport.readHealthInfo() else HealthInfo(false)
+            if (probeExisting && !existing.healthy && transport.healthFailure?.contains("authentication") == true) {
                 // Another editor can publish the credential lease during handoff.
                 if (settings.serverAutoStart) process.restoreConnection()
                 existing = transport.readHealthInfo()
             }
-            if (!existing.healthy && transport.healthFailure?.contains("authentication") == true) {
+            if (probeExisting && !existing.healthy && transport.healthFailure?.contains("authentication") == true) {
                 val endpoint = url()
                 existing = authentication.recover(endpoint, checkCurrent = {
                     check(disposeGeneration.get() == generation && url() == endpoint) { "OpenCode connection changed during authentication" }
@@ -233,7 +243,7 @@ class OpenCodeServer(
                 finishStart(generation)
                 return
             }
-            transport.healthFailure?.let { message ->
+            transport.healthFailure?.takeIf { probeExisting }?.let { message ->
                 setStatus(ServerStatus.Error(message))
                 return
             }
@@ -276,8 +286,9 @@ class OpenCodeServer(
             }
             try {
                 // The editor holding the claim may have just published its server.
-                process.restoreConnection()
-                val shared = transport.readHealthInfo()
+                val sharedRestored = process.restoreConnection()
+                val probeShared = sharedRestored || process.canProbeUnregisteredService
+                val shared = if (probeShared) transport.readHealthInfo() else HealthInfo(false)
                 if (shared.healthy) {
                     process.refreshOwnership()
                     serverVersion.set(shared.version)
@@ -285,7 +296,7 @@ class OpenCodeServer(
                     finishStart(generation)
                     return
                 }
-                transport.healthFailure?.let { setStatus(ServerStatus.Error(it)); return }
+                transport.healthFailure?.takeIf { probeShared }?.let { setStatus(ServerStatus.Error(it)); return }
                 process.resetPortState()
                 while (true) {
                     if (disposeGeneration.get() != generation) return
@@ -356,10 +367,28 @@ class OpenCodeServer(
                 process.stop()
                 return false
             }
-            process.refreshLaunchCredentials()
-            if (transport.checkHealth()) {
-                check(process.confirmOwnership()) { "Could not confirm shared OpenCode server ownership" }
-                return true
+            if (process.refreshLaunchCredentials()) {
+                val remaining = deadline - System.currentTimeMillis()
+                if (remaining <= 0) break
+                val health = try {
+                    transport.readHealthInfo(remaining) { disposeGeneration.get() != generation }
+                } catch (_: java.util.concurrent.CancellationException) {
+                    process.stop()
+                    return false
+                }
+                if (disposeGeneration.get() != generation) {
+                    process.stop()
+                    return false
+                }
+                if (process.launchHealthMatches(health)) {
+                    check(process.confirmOwnership()) { "Could not confirm shared OpenCode server ownership" }
+                    return true
+                }
+                if (transport.healthFailure != null) {
+                    process.stop()
+                    setStatus(ServerStatus.Error(transport.healthFailure!!))
+                    return false
+                }
             }
             if (process.hasPortInUseDetected()) {
                 process.stop()

@@ -434,7 +434,7 @@ internal class OpenCodeV2Adapter(
             require(cursor == null || seen.add(cursor)) { "OpenCode repeated a message pagination cursor" }
         } while (cursor != null && count < limit)
         val ordered = records.asReversed()
-        val firstAssistant = ordered.indexOfFirst { it.str("type") in setOf("assistant", "skill", "shell") || (it.str("type") == "idle" && it.str("outcome") == "failed") }
+        val firstAssistant = ordered.indexOfFirst { it.str("type") in setOf("assistant", "skill", "shell") || (it.str("type") == "idle" && it.str("outcome") in setOf("failed", "interrupted")) }
         val firstUser = ordered.indexOfFirst { it.str("type") == "user" }
         var parent = ordered.getOrNull(firstAssistant)?.str("id")?.let { parents[it] }.orEmpty()
         var assistantFailed = false
@@ -458,7 +458,7 @@ internal class OpenCodeV2Adapter(
         ordered.forEach { message ->
             if (message.str("type") == "agent-switched") context.add("agent", message.get("agent"))
             if (message.str("type") == "model-switched") context.add("model", message.get("model"))
-            if (!OpenCodeV2Projection.transcript(message) || (message.str("type") == "idle" && assistantFailed)) return@forEach
+            if (!OpenCodeV2Projection.transcript(message) || (message.str("type") == "idle" && message.str("outcome") == "failed" && assistantFailed)) return@forEach
             val details = context.deepCopy().apply { failures[message.str("id")]?.entrySet()?.forEach { add(it.key, it.value) } }
             val projected = OpenCodeV2Projection.message(message, id, directory.orEmpty(), parent, details)
             if (message.str("type") == "user") { parent = message.str("id").orEmpty(); assistantFailed = false }
