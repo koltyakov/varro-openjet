@@ -424,7 +424,7 @@ export type Command = {
 };
 
 export type SessionStatus =
-  | { type: 'idle' }
+  | { type: 'idle'; backgroundServices?: number }
   | {
       type: 'retry';
       attempt: number;
@@ -439,7 +439,13 @@ export type SessionStatus =
       };
       next: number;
     }
-  | { type: 'busy'; background?: boolean; backgroundStartedAt?: number };
+  | {
+      type: 'busy';
+      background?: boolean;
+      backgroundStartedAt?: number;
+      backgroundCommand?: string;
+      backgroundServices?: number;
+    };
 
 export type FileDiff = {
   file?: string;

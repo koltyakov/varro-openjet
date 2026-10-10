@@ -915,6 +915,17 @@ export function MessageList() {
     });
     return starts.length > 0 ? Math.min(...starts) : undefined;
   });
+  const backgroundWorkCommand = createMemo(() => {
+    const sessionId = state.activeSessionId;
+    if (!sessionId) return undefined;
+    const rootId = getSessionTreeRootId(sessionId) || sessionId;
+    for (const id of [sessionId, rootId, ...getSessionTreeIds(rootId)]) {
+      const status = state.sessionStatus[id];
+      if (status?.type === 'busy' && status.background && status.backgroundCommand)
+        return status.backgroundCommand;
+    }
+    return undefined;
+  });
   const activePermissionReviewInFlight = createMemo(() => {
     const sessionId = state.activeSessionId;
     if (!sessionId) return false;
@@ -10199,14 +10210,19 @@ export function MessageList() {
               outerListVirtualized={shouldVirtualize()}
               previousTrailingFileEventSignatureMap={previousTrailingFileEventSignatureMap()}
               assistantDialogSummaryMap={rowAssistantDialogSummaryMap()}
-              isFinalAssistantMessage={(messageId) =>
-                assistantDialogSummaryMap().has(messageId) ||
-                (state.activeSessionId !== null &&
-                  state.sessionStatus[state.activeSessionId]?.type !== 'busy' &&
-                  state.sessionStatus[state.activeSessionId]?.type !== 'retry' &&
-                  !activeSessionWorking() &&
-                  trailingFinalResponseMessageId() === messageId)
-              }
+              isFinalAssistantMessage={(messageId) => {
+                // Worked can retain a terminal step while execution continues. Only mark
+                // the trailing answer once work and its queued presentation have settled.
+                if (structurallyTrailingFinalResponseCandidateMessageId() === messageId) {
+                  return (
+                    state.activeSessionId !== null &&
+                    !activeSessionWorking() &&
+                    !waitingForBackground() &&
+                    trailingFinalResponseMessageId() === messageId
+                  );
+                }
+                return assistantDialogSummaryMap().has(messageId);
+              }}
               assistantActivityGroupMap={assistantActivityGroupMap()}
               messageBlockBoundaryMap={messageBlockBoundaryMap()}
               retainedActivityPartKeys={renderedRetainedActivityPartKeys()}
@@ -10263,6 +10279,7 @@ export function MessageList() {
                   waiting={waitingForBackground()}
                   toolsRunning={waitingForTools()}
                   waitingStartedAt={backgroundWorkStartedAt()}
+                  waitingCommand={backgroundWorkCommand()}
                   turnStartedAt={loadingTurnStartedAt()}
                   elapsedStartedAt={loadingElapsedStartedAt()}
                   visible={!state.messagesLoading && showLoadingRow()}

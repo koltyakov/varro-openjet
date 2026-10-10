@@ -12,6 +12,8 @@ import java.util.concurrent.ConcurrentHashMap
 internal class OpenCodeV2Adapter(
     private val wire: (String, String, JsonElement?, RequestOptions) -> OpenCodeResponse,
     private val annotations: OpenCodeV2SessionState = OpenCodeV2SessionState(),
+    classifyBackgroundProcess: ((JsonObject, String?, () -> Boolean) -> Boolean?)? = null,
+    private val backgroundChanged: ((String, String?) -> Unit)? = null,
 ) {
     private val permissions = ConcurrentHashMap<String, String>()
     private val forms = ConcurrentHashMap<String, JsonObject>()
@@ -23,12 +25,14 @@ internal class OpenCodeV2Adapter(
     private data class OAuthAttempt(val integration: String, val id: String, val provider: String, val directory: String?)
     private val oauth = ConcurrentHashMap<String, OAuthAttempt>()
     private val backgroundWork = OpenCodeV2BackgroundWork()
+    private val backgroundServices = OpenCodeV2BackgroundServices(annotations, backgroundWork, classifyBackgroundProcess, backgroundChanged)
 
-    fun reset() { permissions.clear(); forms.clear(); contexts.clear(); inputTypes.clear(); failures.clear(); parents.clear(); oauth.clear(); backgroundWork.reset() }
+    fun reset() { backgroundServices.reset(); permissions.clear(); forms.clear(); contexts.clear(); inputTypes.clear(); failures.clear(); parents.clear(); oauth.clear(); backgroundWork.reset() }
 
     fun events(event: JsonObject): List<JsonObject> {
         val type = event.str("type").orEmpty()
         val data = event.obj("data") ?: return emptyList()
+        if (type in setOf("shell.exited", "shell.deleted")) data.str("id")?.let(backgroundServices::cancel)
         backgroundWork.observe(type, data, event.obj("location").str("directory"))
         val sessionID = data.str("sessionID")
         val context = sessionID?.let { id -> contexts.compute(id) { _, old -> (old?.deepCopy() ?: Json.obj()).apply {
@@ -51,8 +55,12 @@ internal class OpenCodeV2Adapter(
         return OpenCodeV2Events.project(event, context.deepCopy().apply {
             addProperty("backgroundPending", sessionID?.let(backgroundWork::isWaiting) == true)
             add("backgroundStartedAt", Json.toElement(sessionID?.let(backgroundWork::startedAt)))
+            add("backgroundCommand", Json.toElement(sessionID?.let(backgroundWork::command)))
+            addProperty("backgroundServices", sessionID?.let(backgroundWork::serviceCount) ?: 0)
         })
     }
+
+    fun backgroundServiceCount(sessionID: String) = backgroundWork.serviceCount(sessionID)
 
     fun request(method: String, path: String, body: JsonElement?, options: RequestOptions): OpenCodeResponse {
         options.checkCancelled()
@@ -127,13 +135,27 @@ internal class OpenCodeV2Adapter(
                 val version = backgroundWork.snapshotVersion()
                 val active = data("GET", "/api/session/active").asObjectOrNull() ?: error("Invalid OpenCode v2 active sessions")
                 val shells = objects(data("GET", scoped("/api/shell")))
-                val waiting = backgroundWork.reconcile(shells, active.keySet(), directory, version)
+                val choices = shells.mapNotNull { it.obj("metadata").str("sessionID") }.distinct().associateWith(backgroundServices::read)
+                val serviceIDs = shells.filter { choices[it.obj("metadata").str("sessionID")].bool(it.str("id").orEmpty()) == true }.mapNotNull { it.str("id") }.toSet()
+                val waiting = backgroundWork.reconcile(shells, active.keySet(), directory, version, serviceIDs)
+                shells.forEach { backgroundServices.review(it, directory, choices[it.obj("metadata").str("sessionID")] ?: Json.obj()) }
+                fun status(id: String, type: String) = Json.obj("type" to type).apply {
+                    val count = backgroundWork.serviceCount(id)
+                    if (count > 0) addProperty("backgroundServices", count)
+                }
                 return result(Json.obj().apply {
                 active.entrySet().forEach { (id, status) ->
                     require(status.asObjectOrNull().str("type") == "running") { "Invalid OpenCode v2 active status" }
-                    add(id, Json.obj("type" to "busy"))
+                    add(id, status(id, "busy"))
                 }
-                waiting.forEach { add(it, Json.obj("type" to "busy", "background" to true, "backgroundStartedAt" to backgroundWork.startedAt(it))) }
+                waiting.forEach { id -> add(id, status(id, "busy").apply {
+                    addProperty("background", true)
+                    backgroundWork.startedAt(id)?.let { addProperty("backgroundStartedAt", it) }
+                    backgroundWork.command(id)?.let { addProperty("backgroundCommand", it) }
+                }) }
+                backgroundWork.serviceSessionIDs().filter { it !in active.keySet() && it !in waiting }.forEach {
+                    add(it, status(it, "idle"))
+                }
                 })
             }
             "/session", "/experimental/session" -> if (method == "GET") {
@@ -148,7 +170,7 @@ internal class OpenCodeV2Adapter(
                     "location" to directory?.let { Json.obj("directory" to it) })
                 if (input.hasNonNull("permission")) payload.add("permissions", OpenCodeV2Projection.rules(input.get("permission")))
                 val created = data("POST", "/api/session", payload).asJsonObject
-                input.str("parentID")?.let { annotations.update(created.str("id")!!, Json.obj("parentID" to it), options::checkCancelled) }
+                input.str("parentID")?.let { annotations.update(created.str("id")!!, Json.obj("parentID" to it), checkCancelled = options::checkCancelled) }
                 return result(session(created))
             }
             "/permission" -> {
@@ -217,6 +239,48 @@ internal class OpenCodeV2Adapter(
         }
         Regex("^/session/([^/]+)(?:/(.*))?$").matchEntire(route)?.let { match ->
             val id = decode(match.groupValues[1]); val endpoint = "/api/session/${encode(id)}"; val action = match.groupValues[2]
+            if (method == "GET" && action == "background-process") {
+                val choices = backgroundServices.read(id)
+                return result(objects(data("GET", scoped("/api/shell"))).filter { it.obj("metadata").str("sessionID") == id }.map { shell ->
+                    Json.obj().apply {
+                        for (key in listOf("id", "status", "cwd", "pid", "exit", "signal", "time")) if (shell.hasNonNull(key)) add(key, shell.get(key))
+                        addProperty("command", shell.str("command")?.take(16 * 1024).orEmpty())
+                        if (choices.bool(shell.str("id").orEmpty()) == true) addProperty("service", true)
+                    }
+                })
+            }
+            Regex("^background-process/([^/]+)(/output)?$").matchEntire(action)?.let { process ->
+                val shellID = decode(process.groupValues[1])
+                val output = process.groupValues[2].isNotEmpty()
+                require((output && method == "GET") || (!output && method in setOf("PATCH", "DELETE"))) { "Unsupported background process operation" }
+                val service = if (method == "PATCH") input.bool("service") ?: error("Background process service must be a boolean") else false
+                val cursor = query["cursor"]
+                require(cursor == null || (Regex("[0-9]+").matches(cursor) && cursor.toLongOrNull()?.let { it <= 9_007_199_254_740_991L } == true)) { "Invalid background output cursor" }
+                val target = "/api/shell/${encode(shellID)}"
+                val shell = data("GET", scoped(target)).asObjectOrNull() ?: error("Invalid background process")
+                check(shell.obj("metadata").str("sessionID") == id) { "404 Background process not found" }
+                if (method == "DELETE") {
+                    raw("DELETE", scoped(target))
+                    backgroundServices.cancel(shellID)
+                    backgroundWork.observe("shell.deleted", Json.obj("id" to shellID), directory)
+                    notifyBackgroundChange(id, directory)
+                    return result(true)
+                }
+                if (method == "PATCH") {
+                    check(shell.str("status") == "running") { "Background process is no longer running" }
+                    backgroundServices.setService(shell, id, directory, service, options::checkCancelled)
+                    notifyBackgroundChange(id, directory)
+                    return result(true)
+                }
+                fun outputAt(offset: String, limit: Int) = data("GET", scoped("$target/output?cursor=$offset&limit=$limit")).asObjectOrNull()
+                    ?: error("Invalid background process output")
+                val first = outputAt(cursor ?: "0", if (cursor == null) 1 else 64 * 1024)
+                if (cursor != null) return result(first)
+                val size = first.num("size")?.takeIf { it.isFinite() && it >= 0 && it <= 9_007_199_254_740_991.0 && it % 1 == 0.0 }?.toLong()
+                    ?: error("Invalid background process output size")
+                val start = maxOf(0L, size - 64 * 1024)
+                return result(outputAt(start.toString(), 64 * 1024).apply { addProperty("truncated", start > 0 || bool("truncated") == true) })
+            }
             if (action.isEmpty()) when (method) {
                 "GET" -> return result(session(data("GET", endpoint).asJsonObject))
                 "DELETE" -> { raw("DELETE", endpoint); annotations.remove(id); return result(true) }
@@ -226,7 +290,7 @@ internal class OpenCodeV2Adapter(
                     })
                     val patch = Json.obj()
                     for (key in listOf("metadata", "time")) if (input.has(key)) patch.add(key, input.get(key))
-                    if (patch.size() > 0) annotations.update(id, patch, options::checkCancelled)
+                    if (patch.size() > 0) annotations.update(id, patch, checkCancelled = options::checkCancelled)
                     return result(session(data("GET", endpoint).asJsonObject))
                 }
             }
@@ -337,6 +401,13 @@ internal class OpenCodeV2Adapter(
         state.entrySet().forEach { result.add(it.key, it.value) }
         result.add("time", time)
         return result
+    }
+
+    private fun notifyBackgroundChange(id: String, directory: String?) {
+        // The process mutation succeeded even if its status refresh fails.
+        runCatching { backgroundChanged?.invoke(id, directory) }.onFailure {
+            com.intellij.openapi.diagnostic.logger<OpenCodeV2Adapter>().warn("Could not publish background process status", it)
+        }
     }
 
     private fun messages(id: String, directory: String?, query: Map<String, String>, options: RequestOptions): OpenCodeResponse {

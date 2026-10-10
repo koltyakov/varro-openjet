@@ -1,4 +1,9 @@
 import { apiCall, onMessage, postMessage } from './bridge';
+import {
+  parseBackgroundProcess,
+  parseBackgroundProcessOutput,
+} from '../../shared/background-process';
+import type { BackgroundProcess, BackgroundProcessOutput } from '../../shared/background-process';
 import { validateFileDiffs } from './validate-diffs';
 import type {
   Session,
@@ -74,6 +79,69 @@ export const client = {
   },
 
   session: {
+    async setBackgroundProcessService(
+      id: string,
+      processID: string,
+      service: boolean,
+      options?: { directory?: string; signal?: AbortSignal }
+    ): Promise<boolean> {
+      return apiCall(
+        'PATCH',
+        withDirectory(
+          `/session/${encodeURIComponent(id)}/background-process/${encodeURIComponent(processID)}`,
+          options?.directory
+        ),
+        { service },
+        { signal: options?.signal }
+      );
+    },
+    async stopBackgroundProcess(
+      id: string,
+      processID: string,
+      options?: { directory?: string; signal?: AbortSignal }
+    ): Promise<boolean> {
+      return apiCall(
+        'DELETE',
+        withDirectory(
+          `/session/${encodeURIComponent(id)}/background-process/${encodeURIComponent(processID)}`,
+          options?.directory
+        ),
+        undefined,
+        { signal: options?.signal }
+      );
+    },
+    async backgroundProcesses(
+      id: string,
+      options?: { directory?: string; signal?: AbortSignal }
+    ): Promise<BackgroundProcess[]> {
+      const path = withDirectory(
+        `/session/${encodeURIComponent(id)}/background-process`,
+        options?.directory
+      );
+      const response = await apiCall('GET', path, undefined, { signal: options?.signal });
+      if (!Array.isArray(response)) throw malformedResponse(path, 'a background process list');
+      const processes = response.map(parseBackgroundProcess);
+      if (processes.some((process) => process === null))
+        throw malformedResponse(path, 'background process details');
+      return processes.filter((process): process is BackgroundProcess => process !== null);
+    },
+    async backgroundProcessOutput(
+      id: string,
+      processID: string,
+      options?: { directory?: string; cursor?: number; signal?: AbortSignal }
+    ): Promise<BackgroundProcessOutput> {
+      let path = withDirectory(
+        `/session/${encodeURIComponent(id)}/background-process/${encodeURIComponent(processID)}/output`,
+        options?.directory
+      );
+      if (options?.cursor !== undefined)
+        path += `${path.includes('?') ? '&' : '?'}cursor=${options.cursor}`;
+      const output = parseBackgroundProcessOutput(
+        await apiCall('GET', path, undefined, { signal: options?.signal })
+      );
+      if (!output) throw malformedResponse(path, 'background process output');
+      return output;
+    },
     async list(options?: {
       limit?: number;
       search?: string;
@@ -219,7 +287,18 @@ export const client = {
         withDirectory(`/session/${encodeURIComponent(id)}/diff${query}`, options?.directory)
       ).then(validateFileDiffs);
     },
-    async status(): Promise<Record<string, SessionStatus>> {
+    async status(options?: {
+      fresh?: boolean;
+      signal?: AbortSignal;
+    }): Promise<Record<string, SessionStatus>> {
+      if (options?.fresh || options?.signal) {
+        const path = '/session/status';
+        // SAFETY: The status route returns a record; individual event/status consumers validate its discriminants.
+        return requireRecord(
+          await apiCall('GET', path, undefined, { signal: options.signal }),
+          path
+        ) as Record<string, SessionStatus>;
+      }
       return getSharedSessionStatus();
     },
     async messages(

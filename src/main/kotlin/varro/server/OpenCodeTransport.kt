@@ -5,6 +5,7 @@ import com.intellij.openapi.diagnostic.logger
 import varro.protocol.Json
 import varro.protocol.asObjectOrNull
 import varro.protocol.bool
+import varro.protocol.obj
 import varro.protocol.str
 import java.io.InputStream
 import java.net.URI
@@ -82,7 +83,21 @@ class OpenCodeTransport(
     @Volatile var healthFailure: String? = null
         private set
     private val v2 = OpenCodeV2Adapter(::performRequest,
-        sessionStateDirectory?.let(::OpenCodeV2SessionState) ?: OpenCodeV2SessionState())
+        sessionStateDirectory?.let(::OpenCodeV2SessionState) ?: OpenCodeV2SessionState(),
+        BackgroundProcessJudge(::request)::classify, ::publishBackgroundStatus)
+
+    private fun publishBackgroundStatus(sessionID: String, directory: String?) {
+        if (disposed.get() || isDisposing() || apiVersion != 2) return
+        val statuses = request("GET", "/session/status", options = RequestOptions(directory = directory)).data.asObjectOrNull()
+        val status = (statuses.obj(sessionID) ?: Json.obj("type" to "idle")).deepCopy().apply {
+            addProperty("backgroundServices", v2.backgroundServiceCount(sessionID))
+        }
+        if (disposed.get() || isDisposing() || apiVersion != 2) return
+        val event = Json.obj("type" to "session.status", "workspaceDirectory" to directory,
+            "properties" to Json.obj("sessionID" to sessionID, "status" to status))
+        ServerEvents.observe(event, pendingAttentionRequests, observedSessionDirectories)
+        emitEvent(event)
+    }
 
     fun resetProtocol() { apiVersion = 1; v2.reset() }
 
@@ -576,6 +591,7 @@ class OpenCodeTransport(
 
     fun dispose() {
         if (!disposed.compareAndSet(false, true)) return
+        v2.reset()
         stopEventStream()
         abortRequests()
         streamExecutor.shutdownNow()

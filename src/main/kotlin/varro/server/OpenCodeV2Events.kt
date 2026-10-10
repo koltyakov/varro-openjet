@@ -13,7 +13,14 @@ internal object OpenCodeV2Events {
             "workspaceDirectory" to ((event.obj("location") ?: data.obj("location")).str("directory") ?: context.str("directory")))
         fun emit(name: String, props: JsonObject = properties) = base.deepCopy().apply { addProperty("type", name); add("properties", props) }
         fun next(props: JsonObject = properties) = listOf(emit(type.replaceFirst("session.", "session.next."), props))
-        val background = Json.obj("type" to "busy", "background" to true, "backgroundStartedAt" to context.get("backgroundStartedAt"))
+        fun status(type: String) = Json.obj("type" to type).apply {
+            if (context.hasNonNull("backgroundServices")) add("backgroundServices", context.get("backgroundServices"))
+        }
+        val background = status("busy").apply {
+            addProperty("background", true)
+            add("backgroundStartedAt", context.get("backgroundStartedAt"))
+            add("backgroundCommand", context.get("backgroundCommand"))
+        }
         when (type) {
             "server.connected" -> return listOf(emit(type))
             "session.created" -> return listOf(emit(type, Json.obj("info" to data.deepCopy().apply {
@@ -23,8 +30,8 @@ internal object OpenCodeV2Events {
             "session.renamed" -> return listOf(emit("session.updated", Json.obj("info" to Json.obj("id" to sessionID, "title" to data.get("title"), "time" to Json.obj("updated" to event.get("created"))))))
             "session.deleted" -> return listOf(emit(type, Json.obj("sessionID" to sessionID, "info" to Json.obj("id" to sessionID))))
             "session.status.updated" -> return listOf(emit("session.status"))
-            "session.execution.started" -> return listOf(emit("session.status", Json.obj("sessionID" to sessionID, "status" to if (context.bool("backgroundPending") == true) background else Json.obj("type" to "busy"))))
-            "session.execution.succeeded", "session.execution.interrupted" -> return listOf(emit("session.status", Json.obj("sessionID" to sessionID, "status" to if (context.bool("backgroundPending") == true) background else Json.obj("type" to "idle")).apply {
+            "session.execution.started" -> return listOf(emit("session.status", Json.obj("sessionID" to sessionID, "status" to if (context.bool("backgroundPending") == true) background else status("busy"))))
+            "session.execution.succeeded", "session.execution.interrupted" -> return listOf(emit("session.status", Json.obj("sessionID" to sessionID, "status" to if (context.bool("backgroundPending") == true) background else status("idle")).apply {
                 if (type == "session.execution.interrupted") addProperty("interrupted", true)
             }))
             "session.execution.failed" -> {
@@ -36,7 +43,7 @@ internal object OpenCodeV2Events {
                 }
                 result.add(emit("session.error", Json.obj("sessionID" to sessionID, "error" to Json.obj("name" to "APIError", "data" to Json.obj(
                     "message" to (data.obj("error").str("message") ?: "OpenCode execution failed"), "statusCode" to data.obj("error")?.get("status"))))))
-                result.add(emit("session.status", Json.obj("sessionID" to sessionID, "status" to Json.obj("type" to "idle"))).apply { addProperty("id", "${event.str("id")}:idle"); remove("seq") })
+                result.add(emit("session.status", Json.obj("sessionID" to sessionID, "status" to status("idle"))).apply { addProperty("id", "${event.str("id")}:idle"); remove("seq") })
                 return result
             }
             "permission.asked" -> return listOf(emit(type, OpenCodeV2Projection.permission(data)))

@@ -343,6 +343,19 @@ object ApiRoutes {
         route("/session/:id/todo") { request, _ ->
             request.method == "GET" && request.optionalDirectory()
         },
+        route("/session/:id/background-process") { request, _ ->
+            request.method == "GET" && request.optionalDirectory()
+        },
+        route("/session/:id/background-process/:processId") { request, _ ->
+            request.method in setOf("PATCH", "DELETE") && request.optionalDirectory()
+        },
+        route("/session/:id/background-process/:processId/output") { request, _ ->
+            val cursors = request.query["cursor"].orEmpty()
+            request.method == "GET" && request.withOptionalDirectory("cursor") &&
+                cursors.size <= 1 && (cursors.isEmpty() ||
+                (Regex("[0-9]+").matches(cursors[0]) &&
+                    cursors[0].toLongOrNull()?.let { it <= 9_007_199_254_740_991L } == true))
+        },
         route("/session/:id/share") { request, _ ->
             (request.method == "POST" || request.method == "DELETE") && request.optionalDirectory()
         },

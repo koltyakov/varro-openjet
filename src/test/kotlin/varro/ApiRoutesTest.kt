@@ -12,6 +12,26 @@ import org.junit.Test
  */
 class ApiRoutesTest {
 
+    @Test fun `background processes accept only scoped actions and safe output cursors`() {
+        val list = "/session/ses_one/background-process"
+        val process = "$list/shell_one"
+        assertTrue(ApiRoutes.isAllowed("GET", list))
+        assertTrue(ApiRoutes.isAllowed("GET", "$list?directory=%2Frepo"))
+        for (method in listOf("PATCH", "DELETE")) assertTrue(ApiRoutes.isAllowed(method, "$process?directory=%2Frepo"))
+        for (method in listOf("POST", "PUT", "GET")) assertFalse(ApiRoutes.isAllowed(method, process))
+        assertFalse(ApiRoutes.isAllowed("DELETE", list))
+        for (cursor in listOf("0", "65536", "9007199254740991")) {
+            assertTrue(ApiRoutes.isAllowed("GET", "$process/output?cursor=$cursor&directory=%2Frepo"))
+        }
+        for (query in listOf("cursor=", "cursor=-1", "cursor=1.5", "cursor=1e3", "cursor=9007199254740992",
+            "cursor=0&cursor=1", "directory=", "directory=/a&directory=/b", "limit=100000000")) {
+            assertFalse(ApiRoutes.isAllowed("GET", "$process/output?$query"))
+        }
+        assertFalse(ApiRoutes.isAllowed("DELETE", "$process/output"))
+        assertFalse(ApiRoutes.isAllowed("PATCH", "$list/a%2fb"))
+        assertFalse(ApiRoutes.isAllowed("PATCH", "$process?service=true"))
+    }
+
     @Test fun `message content reads only accept bounded thumbnail and directory queries`() {
         val path = "/session/ses_one/message/msg_one/part/call%3Afile%3A0"
         assertTrue(ApiRoutes.isAllowed("GET", path))
