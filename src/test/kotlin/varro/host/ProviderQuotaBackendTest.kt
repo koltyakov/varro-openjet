@@ -72,6 +72,135 @@ class ProviderQuotaBackendTest {
         }
     }
 
+    @Test fun `V2 Codex limits use database OAuth and account metadata instead of legacy auth`() {
+        val creds = credentials()
+        // An unreadable V1 store must not interfere with a valid V2 connection.
+        Files.writeString(creds.authPath, "not JSON")
+        writeQuotaCredentials(creds.v2DatabasePath, Json.array(listOf(
+            Json.obj("active" to false, "integrationID" to "codex-account", "value" to Json.obj("type" to "oauth", "access" to "inactive-token")),
+            Json.obj("active" to true, "integrationID" to "codex-account", "value" to Json.obj("type" to "oauth", "access" to "v2-token",
+                "metadata" to Json.obj("accountID" to "v2-account"))),
+        )))
+        var polls = 0
+        val updates = mutableListOf<JsonObject>()
+        ProviderQuotaBackend(creds, { method, path, body, directory ->
+            assertEquals("GET", method)
+            assertNull(body)
+            when (path) {
+                "/config/providers" -> {
+                    assertEquals("/work", directory)
+                    Json.obj("providers" to listOf(Json.obj("id" to "openai", "integrationID" to "codex-account", "models" to JsonObject())))
+                }
+                else -> error("Unexpected OpenCode request")
+            }
+        }, QuotaHttp {
+            polls++
+            assertEquals("https://chatgpt.com/backend-api/wham/usage", it.url)
+            assertEquals("Bearer v2-token", it.headers["Authorization"])
+            assertEquals("v2-account", it.headers["ChatGPT-Account-Id"])
+            response("""{"plan_type":"pro","rate_limit":{"primary_window":{"used_percent":20},"secondary_window":{"used_percent":40}}}""")
+        }, updates::add, apiVersion = { 2 }).use { backend ->
+            val result = backend.get("openai", "gpt-test", "/work")
+            assertEquals("available", result.str("status"))
+            assertEquals(80, result.arr("windows")!![0].asJsonObject.int("remaining"))
+            assertEquals(result, backend.get("openai", "gpt-test", "/work"))
+            assertEquals(1, polls)
+            for (status in updates + result) {
+                assertFalse(Json.stringify(status).contains("v2-token"))
+                assertFalse(Json.stringify(status).contains("v2-account"))
+                assertFalse(Json.stringify(status).contains("inactive-token"))
+            }
+        }
+    }
+
+    @Test fun `V2 API keys bypass stale V1 credentials`() {
+        val creds = credentials(Json.obj("openrouter" to Json.obj("type" to "api", "key" to "stale-v1-key")))
+        writeQuotaCredentials(creds.v2DatabasePath, Json.array(listOf(Json.obj("active" to true, "integrationID" to "openrouter",
+            "value" to Json.obj("type" to "key", "key" to "v2-key")))))
+        ProviderQuotaBackend(creds, { _, path, _, _ ->
+            when (path) {
+                "/config/providers" -> metadata("openrouter")
+                else -> error("Unexpected OpenCode request")
+            }
+        }, QuotaHttp {
+            assertEquals("Bearer v2-key", it.headers["Authorization"])
+            response("""{"data":{"limit":100,"usage":35}}""")
+        }, apiVersion = { 2 }).use { backend ->
+            assertEquals("available", backend.get("openrouter", null, null).str("status"))
+        }
+    }
+
+    @Test fun `missing invalid or unavailable V2 credentials never fall back to V1`() {
+        for (failure in listOf("empty", "invalid", "unavailable")) {
+            val creds = credentials(Json.obj("openai" to Json.obj("type" to "oauth", "access" to "stale-v1-token")))
+            if (failure != "unavailable") writeQuotaCredentials(creds.v2DatabasePath, Json.array(
+                if (failure == "empty") emptyList() else listOf(Json.obj("active" to true, "integrationID" to "openai", "rawValue" to "invalid JSON"))))
+            ProviderQuotaBackend(creds, { _, path, _, _ ->
+                when (path) {
+                    "/config/providers" -> metadata("openai")
+                    else -> error("Unexpected OpenCode request")
+                }
+            }, QuotaHttp { error("Must not use stale credentials") }, apiVersion = { 2 }).use { backend ->
+                val result = backend.get("openai", "gpt-test", null)
+                assertEquals(failure, if (failure == "empty") "unsupported" else "error", result.str("status"))
+                assertFalse(result.has("windows"))
+                assertFalse(Json.stringify(result).contains("stale-v1-token"))
+            }
+        }
+    }
+
+    @Test fun `V2 account changes invalidate cached quotas and last-good fallback`() {
+        var account = "first"
+        var polls = 0
+        val creds = credentials()
+        fun writeAccount() = writeQuotaCredentials(creds.v2DatabasePath, Json.array(listOf(Json.obj("active" to true, "integrationID" to "openai",
+            "value" to Json.obj("type" to "oauth", "access" to "$account-token", "metadata" to Json.obj("accountId" to account))))))
+        writeAccount()
+        ProviderQuotaBackend(creds, { _, path, _, _ ->
+            when (path) {
+                "/config/providers" -> metadata("openai")
+                else -> error("Unexpected OpenCode request")
+            }
+        }, QuotaHttp {
+            polls++
+            assertEquals(account, it.headers["ChatGPT-Account-Id"])
+            if (account == "first") response("""{"rate_limit":{"primary_window":{"used_percent":20}}}""")
+            else response("{}", 429)
+        }, apiVersion = { 2 }).use { backend ->
+            assertEquals("available", backend.get("openai", null, null).str("status"))
+            account = "second"
+            writeAccount()
+            val next = backend.get("openai", null, null)
+            assertEquals("error", next.str("status"))
+            assertFalse(next.has("windows"))
+            assertEquals(2, polls)
+        }
+    }
+
+    @Test fun `V2 owns OAuth refresh instead of quota polling writing legacy secrets`() {
+        var polls = 0
+        val creds = credentials()
+        writeQuotaCredentials(creds.v2DatabasePath, Json.array(listOf(Json.obj("active" to true, "integrationID" to "xai",
+            "value" to Json.obj("type" to "oauth", "access" to "server-token", "refresh" to "server-refresh", "expires" to 1)))))
+        val before = Files.readAllBytes(creds.v2DatabasePath)
+        ProviderQuotaBackend(creds, { method, path, _, _ ->
+            assertEquals("GET", method)
+            when (path) {
+                "/config/providers" -> metadata("xai")
+                else -> error("Unexpected OpenCode request")
+            }
+        }, QuotaHttp {
+            polls++
+            assertEquals("https://cli-chat-proxy.grok.com/v1/billing?format=credits", it.url)
+            assertEquals("Bearer server-token", it.headers["Authorization"])
+            response("{}", 401)
+        }, apiVersion = { 2 }).use { backend ->
+            assertEquals("unsupported", backend.get("xai", null, null).str("status"))
+            assertEquals(1, polls)
+            assertArrayEquals(before, Files.readAllBytes(creds.v2DatabasePath))
+        }
+    }
+
     @Test fun `credential changes bypass a cached result and never reuse another account's quota`() {
         val creds = credentials(Json.obj("openrouter" to Json.obj("type" to "api", "key" to "first")))
         ProviderQuotaBackend(creds, { _, _, _, _ -> metadata("openrouter") }, QuotaHttp {

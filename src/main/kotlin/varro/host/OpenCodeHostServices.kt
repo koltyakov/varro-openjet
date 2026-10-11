@@ -43,6 +43,7 @@ class OpenCodeHostServices(
             server.transport.request(method, path, body, RequestOptions(directory = directory)).data
         },
         onUpdate = onProviderLimitUpdate,
+        apiVersion = { server.transport.apiVersion },
     )
 
     fun clearProviderQuotaCache() {

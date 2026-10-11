@@ -276,13 +276,26 @@ The memory cache holds at most 64 successful thumbnails and 4 MiB of accounted s
 
 `OpenCodeHostServices.providerLimit` delegates to the project-owned Kotlin `ProviderQuotaBackend`. It runs polls on virtual threads and uses IntelliJ `HttpRequests`, including the IDE's HTTP proxy and certificate configuration. Requests have connection/read timeouts, bounded response bodies, and disabled redirects.
 
-Metadata reads and xAI refreshed-auth writes go through `OpenCodeTransport`, preserving workspace scope. Credentials come from OpenCode's XDG data directory, provider configuration/environment, or the supported provider credential files. Local Claude credential refresh compares the previous refresh token and replaces the file atomically while preserving unrelated fields. Credentials never enter the webview.
+Metadata reads and V1 xAI refreshed-auth writes go through `OpenCodeTransport`, preserving workspace scope. V1 reads `auth.json` from OpenCode's XDG data directory. Like upstream Varro, V2 opens `opencode.db` read-only, using `OPENCODE_DB` when set or the OpenCode XDG data directory otherwise. `OpenCodeV2QuotaCredentials` selects by active status, newest creation time, then descending ID. It scopes queries to the requested provider's integration and shared credential aliases, maps integration IDs to providers, and preserves OAuth account metadata. V2 never substitutes stale V1 credentials, and OpenCode owns its OAuth rotation. Metadata-only and local IPC adapters do not need the OpenCode credential store. Adapters also support provider configuration/environment and provider credential files. Local Claude credential refresh compares the previous refresh token and replaces the file atomically while preserving unrelated fields. Credentials never enter the webview.
 
 Caches are model/workspace scoped and fingerprint credential identity before reuse. Concurrent requests for the same key share a poll. HTTP 429 errors use exponential backoff, and provider errors can use a last-successful snapshot for at most 15 minutes. Configuration changes retire in-flight generations so their results cannot overwrite refreshed state. Cache coordination is project-local rather than shared through upstream's cross-process snapshot files.
 
 `Json.stringifyMessage` preserves explicit null fields in API responses and quota events. The webview rejects quota windows when required nullable fields such as `limit` and `resetAt` are omitted.
 
 `npm run build` builds only the browser bundle. Kotlin tests cover the quota backend, and `npm run test:host` checks the webview quota event contract. The Kotlin port used [upstream quota sources at revision `6f0d0f9ffd1f`](https://github.com/koltyakov/varro/tree/6f0d0f9ffd1f69290bdcd5c1ab0c7dca6e94c8ef/src/extension) as its reference.
+
+### Remaining quota parity differences
+
+The V2 credential reader follows `src/extension/provider-v2-auth-store.ts` at vendored revision `6dcb5e2eb9de`. Tests cover all 13 credential-backed provider IDs on V1 and V2 with isolated SQLite and HTTP fixtures, plus local and metadata adapters. Live provider responses, IDE badge rendering, and every provider-specific fallback branch have not been verified.
+
+| Behavior not fully ported | Upstream implementation | OpenJet implementation and user impact |
+| --- | --- | --- |
+| Strict local Claude response validation | `src/extension/provider-limits/adapters/opencode-claude.ts`, descriptor-provided loopback endpoint | `QuotaAdapters.kt` checks the envelope but does not validate every window, nullable field, or reset credit. A malformed response can reach the webview and fail its contract checks instead of producing a host error. |
+| Configured header-probe base URLs | `src/extension/util/provider-limit.ts` and `provider-limits/adapters/header-probe.ts`, configured base URL plus `/models` | `QuotaAdapters.kt` uses fixed OpenAI and xAI `/v1/models` endpoints. Custom proxy or API base URLs are not honored for header quota probes. |
+| xAI monthly fallback preserves earlier windows on non-auth HTTP failures | `src/extension/provider-limits/adapters/xai.ts`, `/v1/billing` | `QuotaAdapters.kt` rejects any failed monthly response, even if the first billing request supplied usable non-credit windows. Those limits may be hidden or replaced with an older cached snapshot. |
+| Cross-process polling and snapshot observations | `src/extension/provider-limit-service.ts`, its quota coordinator and `provider-limit/updated` events | `ProviderQuotaBackend.kt` shares in-flight polls and caches only within one project. Multiple IDE projects or hosts may duplicate quota HTTP requests and observe updates at different times. |
+
+These differences are separate from the V2 credential-source fix and remain unported.
 
 ## Server ownership and workspace scope
 

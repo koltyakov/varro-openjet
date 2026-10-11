@@ -17,6 +17,7 @@ class ProviderQuotaBackend(
     private val http: QuotaHttp = IdeQuotaHttp(),
     private val onUpdate: (JsonObject) -> Unit = {},
     private val clock: () -> Long = System::currentTimeMillis,
+    private val apiVersion: () -> Int = { 1 },
 ) : AutoCloseable {
     private data class Key(val provider: String, val model: String?, val directory: String?)
     private data class Entry(val identity: String, val status: JsonObject, val expires: Long)
@@ -65,7 +66,9 @@ class ProviderQuotaBackend(
             val providers = metadata.asObjectOrNull().elements("providers").ifEmpty { metadata.asArrayOrNull()?.toList().orEmpty() }
             val provider = providers.firstOrNull { it.asObjectOrNull().str("id") == key.provider }.asObjectOrNull()
                 ?: throw QuotaFailure("Provider was not found in OpenCode configuration")
-            val auth = credentials.authStore()
+            val v2 = apiVersion() == 2
+            val auth = if (!QuotaAdapters.requiresOpenCodeAuth(key.provider)) JsonObject()
+                else if (v2) credentials.v2AuthStore(provider) else credentials.authStore()
             val token = credentials.token(provider, auth)
             // Re-read identity before using a quota cache, so logging in with a new
             // account cannot show the previous account's remaining allowance.
@@ -76,11 +79,12 @@ class ProviderQuotaBackend(
                 token.orEmpty(),
                 if (key.provider == "github-copilot" && token == null) credentials.copilotFallback().orEmpty() else "")
             cache[key]?.takeIf { it.identity == identity && it.expires > clock() }?.let { return it.status }
-            val adapters = QuotaAdapters(http, credentials) { id, value ->
+            val writeAuth: ((String, JsonObject) -> Unit)? = if (v2) null else { id, value ->
                 check(version == generation.get() && !closed) { "Provider quota poll was retired" }
                 if (credentials.authStore().obj(id) != auth.obj(id)) throw QuotaFailure("Provider credentials changed during refresh; retrying with current credentials")
                 request("PUT", "/auth/$id", value, key.directory)
             }
+            val adapters = QuotaAdapters(http, credentials, writeAuth)
             adapters.poll(provider, auth, key.model, clock()) ?: run {
                 var windows = directWindows(provider.obj("models").obj(key.model.orEmpty()), clock())
                     .ifEmpty { directWindows(provider, clock()) }

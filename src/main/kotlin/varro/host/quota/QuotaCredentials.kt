@@ -30,6 +30,11 @@ class QuotaCredentials(val home: Path, val environment: Map<String, String>) {
 
     fun authStore(): JsonObject = read(authPath) ?: JsonObject()
 
+    val v2DatabasePath: Path get() = environment["OPENCODE_DB"]?.trim()?.takeIf { it.isNotEmpty() }?.let(Path::of)
+        ?: authPath.resolveSibling("opencode.db")
+
+    internal fun v2AuthStore(provider: JsonObject): JsonObject = OpenCodeV2QuotaCredentials(v2DatabasePath).read(listOf(provider))
+
     fun token(provider: JsonObject, auth: JsonObject): String? {
         val id = provider.str("id") ?: return null
         val stored = auth.obj(id) ?: if (id in setOf("zai", "zai-coding-plan"))
@@ -102,6 +107,7 @@ class QuotaCredentials(val home: Path, val environment: Map<String, String>) {
     companion object {
         const val OAUTH_DUMMY = "opencode-oauth-dummy-key"
         private val CLAUDE_WRITE_LOCK = Any()
+
         internal fun fingerprint(vararg values: String): String = MessageDigest.getInstance("SHA-256")
             .digest(values.joinToString("\u0000").toByteArray()).joinToString("") { "%02x".format(it) }
     }

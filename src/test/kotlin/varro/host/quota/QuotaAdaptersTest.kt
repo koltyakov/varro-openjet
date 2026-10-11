@@ -119,6 +119,15 @@ class QuotaAdaptersTest {
         assertEquals("current", creds.codex(preferred).str("accountId"))
     }
 
+    @Test fun `malformed V2 keys cannot appear in credential errors`() {
+        val creds = QuotaCredentials(temporary.newFolder().toPath(), emptyMap())
+        val data = Json.array(listOf(Json.obj("active" to true, "integrationID" to "openai",
+            "value" to Json.obj("type" to "key", "key" to Json.obj("secret" to "private-key")))))
+        writeQuotaCredentials(creds.v2DatabasePath, data)
+        val error = assertThrows(QuotaFailure::class.java) { creds.v2AuthStore(Json.obj("id" to "openai")) }
+        assertEquals("OpenCode V2 returned an invalid provider API key", error.message)
+    }
+
     @Test fun `Claude token refresh preserves unrelated fields and rejects changed credentials`() {
         val creds = QuotaCredentials(temporary.newFolder().toPath(), emptyMap())
         Files.createDirectories(creds.claudePath.parent)

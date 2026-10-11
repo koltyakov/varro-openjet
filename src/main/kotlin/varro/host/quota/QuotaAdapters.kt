@@ -11,7 +11,7 @@ import java.nio.file.Files
 internal class QuotaAdapters(
     private val http: QuotaHttp,
     private val credentials: QuotaCredentials,
-    private val setAuth: (String, JsonObject) -> Unit,
+    private val setAuth: ((String, JsonObject) -> Unit)?,
 ) {
     fun poll(provider: JsonObject, auth: JsonObject, model: String?, now: Long): JsonObject? {
         val id = provider.str("id") ?: return null
@@ -27,8 +27,8 @@ internal class QuotaAdapters(
         fun token(): String = credentials.token(provider, auth) ?: throw QuotaFailure("No $id credentials available. Connect the provider in OpenCode.", 401)
         return when (id) {
             "antigravity" -> available(AntigravityQuota(http, credentials.environment).poll(model, now))
-            "claude-code" -> {
-                val descriptor = provider.obj("options").obj("claude-code").obj("providerLimits")
+            "claude-code", "varro-claude" -> {
+                val descriptor = provider.obj("options").obj(id).obj("providerLimits")
                 val url = descriptor.string("url") ?: return null
                 if (descriptor.int("schemaVersion") != 1 || descriptor.str("transport") != "http" || !isLoopbackUrl(url)) {
                     throw QuotaFailure("Claude Code provider-limit endpoint is not a valid loopback descriptor")
@@ -188,11 +188,14 @@ internal class QuotaAdapters(
                 if (oauth.str("type") != "oauth") return available(headerWindows("https://api.x.ai/v1/models", token(), now))
                 var access = oauth.string("access") ?: throw QuotaFailure("No SuperGrok OAuth token available", 401)
                 fun refresh(): Boolean {
+                    // OpenCode V2 owns OAuth rotation and cannot accept a secret
+                    // replacement through the legacy auth endpoint.
+                    val writeAuth = setAuth ?: return false
                     val refresh = oauth.string("refresh") ?: return false
                     val form = "grant_type=refresh_token&client_id=b1a00492-073a-47ea-816f-4c329264a828&refresh_token=${URLEncoder.encode(refresh, Charsets.UTF_8)}"
                     val next = checked(http.send(QuotaRequest("https://auth.x.ai/oauth2/token", body = form.toByteArray(), contentType = "application/x-www-form-urlencoded"))).json()
                     access = next.string("access_token") ?: throw QuotaFailure("SuperGrok refresh returned no access token")
-                    setAuth(id, Json.obj("type" to "oauth", "access" to access, "refresh" to (next.string("refresh_token") ?: refresh),
+                    writeAuth(id, Json.obj("type" to "oauth", "access" to access, "refresh" to (next.string("refresh_token") ?: refresh),
                         "expires" to now + ((next.number("expires_in") ?: 3600.0) * 1000).toLong()))
                     return true
                 }
@@ -231,12 +234,18 @@ internal class QuotaAdapters(
         val response = checked(send(url, token))
         val headers = Json.obj(*response.headers.map { it.key to it.value }.toTypedArray())
         return listOf("requests", "tokens", "limit").mapNotNull { id ->
-            val prefix = if (id == "limit") "x-ratelimit" else "x-ratelimit"
             val suffix = if (id == "limit") "" else "-$id"
-            window(id, label(id), headers.number("$prefix-remaining$suffix", "ratelimit-remaining"),
-                headers.number("$prefix-limit$suffix", "ratelimit-limit"), headers.reset(now, "$prefix-reset$suffix", "ratelimit-reset"),
+            fun names(field: String) = if (id == "limit") arrayOf("ratelimit-$field", "x-ratelimit-$field")
+                else arrayOf("x-ratelimit-$field$suffix")
+            window(id, label(id), headers.number(*names("remaining")),
+                headers.number(*names("limit")), headers.reset(now, *names("reset")),
                 unit = if (id == "limit") "unknown" else id)
         }
+    }
+
+    companion object {
+        fun requiresOpenCodeAuth(id: String) = id in setOf("anthropic", "openai", "github-copilot", "openrouter", "opencode-go",
+            "ollama-cloud", "google", "gemini", "zai", "zai-coding-plan", "minimax", "kimi-for-coding", "xai")
     }
 }
 
