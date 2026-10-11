@@ -46,7 +46,11 @@ class ProviderQuotaMatrixTest {
                 Files.writeString(creds.authPath, "unreadable V1 fixture")
                 writeQuotaCredentials(creds.v2DatabasePath, Json.array(listOf(Json.obj("active" to true, "integrationID" to "integration-${fixture.id}",
                     "value" to auth.deepCopy().apply { if (!fixture.oauth) addProperty("type", "key") }))))
+            } else {
+                // V1 must ignore even an unreadable V2 database for every adapter.
+                Files.writeString(creds.v2DatabasePath, "invalid SQLite fixture")
             }
+            val databaseBefore = Files.readAllBytes(creds.v2DatabasePath)
             val updates = mutableListOf<JsonObject>()
             ProviderQuotaBackend(creds, { method, path, body, directory ->
                 assertEquals(description, "GET", method)
@@ -74,6 +78,7 @@ class ProviderQuotaMatrixTest {
                 assertTrue(description, window.has("limit"))
                 assertTrue(description, window.has("resetAt"))
                 assertFalse(description, Json.stringifyMessage(wire).contains(token))
+                assertArrayEquals(description, databaseBefore, Files.readAllBytes(creds.v2DatabasePath))
             }
         }
     }
