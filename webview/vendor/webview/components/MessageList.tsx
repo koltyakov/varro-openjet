@@ -183,7 +183,10 @@ import {
   getVisibleThreadMessages,
   hasVisibleRunningToolPart,
 } from './message-list/thread-visibility';
-import { getLatestPlanImplementationMessageId } from './message-list/plan-actions';
+import {
+  getLatestPlanImplementationMessageId,
+  isPlanImplementationMessage,
+} from './message-list/plan-actions';
 import {
   sameAssistantRetryScanState,
   scanAssistantRetryStates,
@@ -317,6 +320,10 @@ type VisibleScrollAnchor = {
   elementTag?: string;
   elementOrdinal?: number;
   elementText?: string;
+};
+
+type PaintedScrollAnchorSelection = {
+  candidate: { element: HTMLElement; renderItem: HTMLElement | null; rect: DOMRect } | null;
 };
 
 type ActivityExitSummaryAnchor = {
@@ -3647,35 +3654,35 @@ export function MessageList() {
     if (!containerRef) return null;
     const containerRect = containerRef.getBoundingClientRect();
     const selector = 'p, h1, h2, h3, h4, h5, h6, pre, table, li';
-    const assistantCandidates = Array.from(
-      containerRef.querySelectorAll<HTMLElement>('[data-assistant-render-key]')
-    ).flatMap((renderItem) =>
-      Array.from(renderItem.querySelectorAll<HTMLElement>(selector))
-        .filter((element) => !skipThinking || !element.closest('.chat-thinking-box'))
-        .map((element) => ({ element, renderItem }))
-    );
-    const userCandidates = Array.from(
-      containerRef.querySelectorAll<HTMLElement>('.user-message-card')
-    ).map((element) => ({ element, renderItem: null }));
-    const candidates = [...assistantCandidates, ...userCandidates]
-      .filter(({ element }) => {
-        const rect = element.getBoundingClientRect();
-        return (
-          rect.top - predictedMovement >= containerRect.top + 8 &&
-          rect.bottom - predictedMovement <= containerRect.bottom - 8 &&
-          rect.height > 8
-        );
-      })
-      .toSorted(
-        (left, right) =>
-          left.element.getBoundingClientRect().top - right.element.getBoundingClientRect().top
-      );
-    const selected = candidates[0];
+    const selection: PaintedScrollAnchorSelection = { candidate: null };
+    const consider = (element: HTMLElement, renderItem: HTMLElement | null) => {
+      const rect = element.getBoundingClientRect();
+      if (
+        rect.top - predictedMovement >= containerRect.top + 8 &&
+        rect.bottom - predictedMovement <= containerRect.bottom - 8 &&
+        rect.height > 8 &&
+        (!selection.candidate || rect.top < selection.candidate.rect.top)
+      ) {
+        selection.candidate = { element, renderItem, rect };
+      }
+    };
+    // Preserve assistant-before-user ordering for ties without sorting or rereading rectangles.
+    for (const renderItem of containerRef.querySelectorAll<HTMLElement>(
+      '[data-assistant-render-key]'
+    )) {
+      for (const element of renderItem.querySelectorAll<HTMLElement>(selector)) {
+        if (!skipThinking || !element.closest('.chat-thinking-box')) consider(element, renderItem);
+      }
+    }
+    for (const element of containerRef.querySelectorAll<HTMLElement>('.user-message-card')) {
+      consider(element, null);
+    }
+    const selected = selection.candidate;
     const row = selected?.element.closest<HTMLElement>('[data-msg-id]');
     const messageId = row?.dataset.msgId;
     if (!selected || !row || !messageId) return null;
 
-    const rect = selected.element.getBoundingClientRect();
+    const rect = selected.rect;
     const sameTag = selected.renderItem
       ? Array.from(selected.renderItem.querySelectorAll<HTMLElement>(selected.element.tagName))
       : [];
@@ -4555,6 +4562,7 @@ export function MessageList() {
       const nextMessage = currentMessages[index];
       if (nextMessage?.info.role !== 'user') continue;
       if (steeringIds.has(nextMessage.info.id)) continue;
+      if (isPlanImplementationMessage(nextMessage.info, nextMessage.parts)) continue;
 
       const nextRow = mountedMessageRows.get(nextMessage.info.id);
       if (!nextRow) return null;
@@ -4581,8 +4589,12 @@ export function MessageList() {
     if (!containerRef) return null;
     const steeringIds = steeringMessageIds();
     for (const row of containerRef.querySelectorAll<HTMLElement>('.interactive-request')) {
-      if (row.dataset.msgId === messageId) continue;
-      if (row.dataset.msgId && steeringIds.has(row.dataset.msgId)) continue;
+      const rowMessageId = row.dataset.msgId;
+      if (rowMessageId === messageId) continue;
+      if (rowMessageId && steeringIds.has(rowMessageId)) continue;
+      const rowMessageIndex = rowMessageId ? messageIndexById().get(rowMessageId) : undefined;
+      const rowMessage = rowMessageIndex === undefined ? undefined : messages()[rowMessageIndex];
+      if (rowMessage && isPlanImplementationMessage(rowMessage.info, rowMessage.parts)) continue;
       const source = row.querySelector<HTMLElement>(
         '.user-message-card, .inline-edit-composer-slot'
       );

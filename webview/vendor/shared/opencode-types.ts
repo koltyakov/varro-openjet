@@ -51,6 +51,7 @@ export type OpenCodeModelRouting = {
   globalVisionModel?: OpenCodeModelRoute | null;
   commitMessageModel: OpenCodeModelRoute | null;
   autoApproveModel: OpenCodeModelRoute | null;
+  promptCompletionModel?: OpenCodeModelRoute | null;
   providerConfigPaths?: Record<string, string[]>;
 };
 
@@ -381,6 +382,8 @@ export type Session = {
   workspaceID?: string;
   directory: string;
   workspaceScope?: SessionWorkspaceScope;
+  /** Local link retained in the workspace where this session was transferred from. */
+  transfer?: { originDirectory: string; available: boolean };
   path?: string;
   parentID?: string;
   summary?: {

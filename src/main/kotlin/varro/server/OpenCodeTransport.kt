@@ -41,6 +41,8 @@ data class RequestOptions(
     /** Override the directory this request is scoped to. */
     val directory: String? = null,
     val timeoutMs: Long? = null,
+    /** Check the caller's cancellation/deadline while waiting for a response body. */
+    val cancellableBody: Boolean = false,
     val isCancelled: () -> Boolean = { false },
 ) {
     fun checkCancelled() {
@@ -230,7 +232,27 @@ class OpenCodeTransport(
             inFlight.remove(future)
         }
 
-        val text = response.body().use { readBounded(it, options.maxResponseBytes) }
+        val text = response.body().use { stream ->
+            if (!options.cancellableBody) readBounded(stream, options.maxResponseBytes)
+            else {
+                val read = CompletableFuture.supplyAsync { readBounded(stream, options.maxResponseBytes) }
+                inFlight.add(read)
+                try {
+                    var text: String? = null
+                    while (text == null) {
+                        options.checkCancelled()
+                        try { text = read.get(100, java.util.concurrent.TimeUnit.MILLISECONDS) }
+                        catch (_: java.util.concurrent.TimeoutException) { /* Recheck the caller's deadline. */ }
+                    }
+                    text
+                } catch (failure: java.util.concurrent.ExecutionException) {
+                    throw failure.cause ?: failure
+                } finally {
+                    inFlight.remove(read)
+                    read.cancel(true)
+                }
+            }
+        }
         val data = Json.parseOrNull(text)
 
         if (response.statusCode() !in 200..299) {

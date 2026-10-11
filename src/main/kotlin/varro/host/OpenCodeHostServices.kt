@@ -33,6 +33,7 @@ class OpenCodeHostServices(
     private val server: OpenCodeServer,
     private val editor: EditorIntegration,
     private val settings: VarroSettings,
+    private val workspaceRoots: () -> List<String> = { listOfNotNull(project.basePath) },
     onProviderLimitUpdate: (JsonObject) -> Unit = {},
 ) : RestProxy.HostServices {
 
@@ -44,9 +45,15 @@ class OpenCodeHostServices(
         onUpdate = onProviderLimitUpdate,
     )
 
-    fun clearProviderQuotaCache() = providerQuotas.clearCache()
+    fun clearProviderQuotaCache() {
+        providerQuotas.clearCache()
+        promptCompletion.invalidate()
+    }
 
-    fun dispose() = providerQuotas.close()
+    fun dispose() {
+        promptCompletion.invalidate()
+        providerQuotas.close()
+    }
 
     override fun openPlanDocument(content: String, title: String?): String? =
         editor.openPlanDocument(content, title)
@@ -59,12 +66,42 @@ class OpenCodeHostServices(
 
     // --- OpenCode configuration -----------------------------------------------
 
+    private val promptCompletion = PromptCompletionService(
+        apiVersion = { server.transport.apiVersion },
+        serverUrl = server::url,
+        request = { method, path, body, options -> server.transport.request(method, path, body, options).data },
+    )
+
+    override fun promptCompletionModels(isCancelled: () -> Boolean): JsonObject =
+        promptCompletion.availability(server.workspaceDirectory(), isCancelled)
+
+    override fun completePrompt(body: JsonElement?, directory: String?, isCancelled: () -> Boolean): JsonObject {
+        require(directory == null || varro.server.WorkspacePaths.isSame(directory, server.workspaceDirectory()) ||
+            workspaceRoots().any { varro.server.WorkspacePaths.isSame(directory, it) }) { "Workspace directory is not an open project folder" }
+        return promptCompletion.complete(body, settings.chatPromptCompletionModel, directory ?: server.workspaceDirectory(), isCancelled)
+    }
+
+    override fun testPromptCompletion(body: JsonElement?, isCancelled: () -> Boolean): JsonObject {
+        val model = PromptCompletionService.parseModel(body)
+        val result = promptCompletion.test(body, server.workspaceDirectory(), isCancelled)
+        if (!isCancelled()) {
+            val label = "${model.providerID}/${model.modelID}"
+            val duration = "%.2f s".format(java.util.Locale.ROOT, (result.get("elapsedMs").asLong / 1000.0))
+            if (result.get("success").asBoolean) notify("Prompt completion test succeeded for $label in $duration.", NotificationType.INFORMATION)
+            else notify("Prompt completion test failed for $label after $duration: ${result.str("error")}", NotificationType.ERROR)
+        }
+        return result
+    }
+
     private val modelRouting = ModelRoutingService(
         settings = settings,
         readGlobalConfig = { requestGlobalConfig("GET") },
         patchGlobalConfig = { requestGlobalConfig("PATCH", it) },
         onChanged = {
             ApplicationManager.getApplication().messageBus.syncPublisher(VarroSettings.TOPIC).settingsChanged()
+        },
+        assertCompletionAvailable = { provider, model ->
+            promptCompletion.assertAvailable(provider, model, server.workspaceDirectory())
         },
     )
 

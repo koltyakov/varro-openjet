@@ -8,7 +8,7 @@ internal object SharedCoreSettings {
     private val gson = Gson()
     private val names = setOf(
         "serverPort", "serverCommand", "serverAutoUpdate", "serverAutoStart",
-        "chatDefaultPermissionMode", "chatAutoApproveModel", "commitMessageModel",
+        "chatDefaultPermissionMode", "chatAutoApproveModel", "chatPromptCompletionModel", "commitMessageModel",
         "chatAutoRenameUntitledSessions", "chatEnableAskAgent",
     )
     private val fields = VarroSettings::class.java.declaredFields.filter { it.name in names }.onEach { it.isAccessible = true }

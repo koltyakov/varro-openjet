@@ -12,6 +12,18 @@ import org.junit.Test
  */
 class ApiRoutesTest {
 
+    @Test fun `completion allows only its named endpoints without exposing credentials`() {
+        assertTrue(ApiRoutes.isAllowed("GET", "/varro/prompt-completion/models"))
+        assertTrue(ApiRoutes.isAllowed("POST", "/varro/prompt-completion/test"))
+        assertTrue(ApiRoutes.isAllowed("POST", "/varro/prompt-completion"))
+        assertTrue(ApiRoutes.isAllowed("POST", "/varro/prompt-completion?directory=%2Frepo"))
+        for ((method, path) in listOf("GET" to "/varro/prompt-completion", "GET" to "/varro/prompt-completion/test",
+            "POST" to "/varro/prompt-completion/models", "GET" to "/varro/prompt-completion/models?directory=/other",
+            "POST" to "/varro/prompt-completion/test?model=other", "POST" to "/varro/prompt-completion?directory=",
+            "POST" to "/varro/prompt-completion?directory=/a&directory=/b", "POST" to "/varro/prompt-completion?url=https://example.com",
+            "GET" to "/api/credential")) assertFalse("$method $path", ApiRoutes.isAllowed(method, path))
+    }
+
     @Test fun `background processes accept only scoped actions and safe output cursors`() {
         val list = "/session/ses_one/background-process"
         val process = "$list/shell_one"

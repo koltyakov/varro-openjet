@@ -49,6 +49,7 @@ const KNOWN_TYPES = new Set<string>([
   'database/attached',
   'config/update',
   'session/catalog-invalidated',
+  'session/transferred',
   'theme/update',
   'vscode/open-result',
   'api/response',
@@ -91,6 +92,27 @@ export function parseExtensionMessage<T>(value: T): ExtensionMessage | null {
   if (!isKnownExtensionMessageType(type)) return null;
 
   switch (type) {
+    case 'session/transferred': {
+      const payload = asRecord(record.payload);
+      if (
+        !payload ||
+        !isSafePersistedSessionId(payload.sessionId) ||
+        !isString(payload.directory) ||
+        !payload.directory.trim() ||
+        payload.directory.length > 4096 ||
+        /\p{Cc}/u.test(payload.directory) ||
+        !isBoolean(payload.available)
+      )
+        return null;
+      return {
+        type,
+        payload: {
+          sessionId: payload.sessionId,
+          directory: payload.directory,
+          available: payload.available,
+        },
+      };
+    }
     case 'command/attach-problems': {
       const payload = asRecord(record.payload);
       if (
@@ -310,6 +332,8 @@ export function parseExtensionMessage<T>(value: T): ExtensionMessage | null {
       if (isBoolean(payload.expandThinking)) config.expandThinking = payload.expandThinking;
       if (isBoolean(payload.showChangedFiles)) config.showChangedFiles = payload.showChangedFiles;
       if (isBoolean(payload.showTurnTimer)) config.showTurnTimer = payload.showTurnTimer;
+      if (isString(payload.promptCompletionModel))
+        config.promptCompletionModel = payload.promptCompletionModel;
       if (isBoolean(payload.debugShowQuotaWarning))
         config.debugShowQuotaWarning = payload.debugShowQuotaWarning;
       if (

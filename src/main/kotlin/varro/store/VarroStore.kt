@@ -65,6 +65,9 @@ class VarroStore : PersistentStateComponent<VarroStore.StoreState> {
         /** `RecycleBinEntry[]` - recycled session trees awaiting restore or expiry. */
         @JvmField var recycleBin: String = "[]"
 
+        /** Server-bound links to conversations moved out of this project. */
+        @JvmField var sessionTransfers: String = "[]"
+
         /** `directory` | `descendants` | `project` */
         @JvmField var sessionHistoryScope: String = "directory"
 
@@ -236,6 +239,10 @@ class VarroStore : PersistentStateComponent<VarroStore.StoreState> {
     var recycleBin: JsonArray
         get() = readArray(state.recycleBin)
         set(value) { state.recycleBin = Json.stringify(value) }
+
+    var sessionTransfers: JsonArray
+        @Synchronized get() = readArray(state.sessionTransfers)
+        @Synchronized set(value) { state.sessionTransfers = Json.stringify(value) }
 
     // --- Scalars --------------------------------------------------------------
 

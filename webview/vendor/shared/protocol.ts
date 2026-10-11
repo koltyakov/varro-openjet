@@ -445,6 +445,9 @@ export type WorkspaceStatusEventSummary = {
 export const VARRO_API_NAMESPACE = '/varro' as const;
 
 export const VARRO_API_ENDPOINTS = {
+  promptCompletion: `${VARRO_API_NAMESPACE}/prompt-completion`,
+  promptCompletionModels: `${VARRO_API_NAMESPACE}/prompt-completion/models`,
+  promptCompletionTest: `${VARRO_API_NAMESPACE}/prompt-completion/test`,
   modelPricing: `${VARRO_API_NAMESPACE}/model-pricing`,
   providerLimit: `${VARRO_API_NAMESPACE}/provider-limit`,
   planOpen: `${VARRO_API_NAMESPACE}/plan/open`,
@@ -866,6 +869,7 @@ export type InitialWebviewState = {
   expandThinking?: boolean;
   showChangedFiles?: boolean;
   showTurnTimer?: boolean;
+  promptCompletionModel?: string;
   debugShowQuotaWarning?: boolean;
   debugResetWarningDays?: number;
   enableProblemsContext?: boolean;
@@ -1029,6 +1033,10 @@ export type ExtensionMessage =
     }
   | { type: 'command/new-session'; payload?: { prefill: string } }
   | { type: 'command/open-session'; payload: { sessionId: string; directory?: string } }
+  | {
+      type: 'session/transferred';
+      payload: { sessionId: string; directory: string; available: boolean };
+    }
   | { type: 'command/highlight-session' }
   | { type: 'command/focus-input' }
   | { type: 'command/attach-problems'; payload: { diagnostics: EditorDiagnostic[] } }
@@ -1052,6 +1060,7 @@ export type WebviewMessage =
       };
     }
   | { type: 'session/seen'; payload: { sessionId: string } }
+  | { type: 'session/open-transferred'; payload: { sessionId: string } }
   | { type: 'session-read-state/update'; payload: { sessionId: string; seenAt: number } }
   | { type: 'webview/focus'; payload: { focused: boolean } }
   | { type: 'permission/reveal'; payload: { permissionId: string } }

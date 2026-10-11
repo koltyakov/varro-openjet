@@ -122,6 +122,7 @@ export interface AppState {
   currentDocumentEnabled: boolean;
   issuesEnabled: boolean;
   enableProblemsContext: boolean;
+  promptCompletionModel: string;
   debugShowQuotaWarning: boolean;
   debugResetWarningDays?: number;
   draftCurrentDocumentEnabled: boolean | null;
@@ -139,6 +140,7 @@ export interface AppState {
   pinnedSessionIds: string[];
   recycleBinEntries: RecycleBinEntry[];
   activeSessionId: string | null;
+  transferredSessions: Record<string, string>;
   editorTabsOpen: boolean;
   /** Root session ids currently visible in editor tabs. */
   editorSessionIds: string[];
@@ -386,6 +388,7 @@ export function createAppState(): AppStateInstance {
         ? storedInlineProblems.filter(isInlineProblem)
         : [],
     enableProblemsContext: initialWebviewState.enableProblemsContext ?? true,
+    promptCompletionModel: initialWebviewState.promptCompletionModel ?? '',
     debugShowQuotaWarning: initialWebviewState.debugShowQuotaWarning ?? false,
     debugResetWarningDays: initialWebviewState.debugResetWarningDays,
     emptyStateLogoUri: initialWebviewState.emptyStateLogoUri ?? '',
@@ -407,6 +410,7 @@ export function createAppState(): AppStateInstance {
     sessionsPaginationError: null,
     recycleBinLoadError: null,
     messagesLoading: false,
+    transferredSessions: {},
     pendingSessionSelectionId: null,
     pinnedSessionIds: initialWebviewState.pinnedSessionIds ?? [],
     recycleBinEntries: initialWebviewState.recycleBinEntries ?? [],

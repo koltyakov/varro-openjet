@@ -16,6 +16,7 @@ import com.intellij.openapi.util.Disposer
 import com.intellij.openapi.wm.ToolWindowManager
 import varro.protocol.Json
 import varro.protocol.asObjectOrNull
+import varro.protocol.arr
 import varro.protocol.bool
 import varro.protocol.int
 import varro.protocol.long
@@ -96,6 +97,18 @@ class VarroProjectService(private val project: Project) : Disposable {
 
     val context: ContextProvider = ContextProvider(project)
 
+    private fun transferRoots(): List<String> = (listOfNotNull(project.basePath) +
+        context.context.arr("workspaceFolders")?.mapNotNull { it.asObjectOrNull().text("path") }.orEmpty()).distinct()
+
+    private val transfers = SessionTransfers(store.sessionTransfers, { store.sessionTransfers = it }, server::url, ::transferRoots,
+        readSession = { id -> server.transport.request("GET", "/session/${java.net.URLEncoder.encode(id, Charsets.UTF_8)}",
+            options = varro.server.RequestOptions(unscoped = true)).data },
+        publish = { payload ->
+            broadcast("session/transferred", payload)
+            broadcast("session/catalog-invalidated")
+        },
+    )
+
     private val notifications = ProjectNotifications(project, server, settings, store) { sessionId ->
         sidebarCommand("command/open-session", Json.obj("sessionId" to sessionId))
     }
@@ -114,6 +127,7 @@ class VarroProjectService(private val project: Project) : Disposable {
             ))
         },
         request = { method, path, body, directory ->
+            if (method != "GET") path.substringAfter("/session/", "").substringBefore('/').takeIf { it.isNotEmpty() }?.let(transfers::checkWritable)
             server.transport.request(method, path, body, varro.server.RequestOptions(directory = directory)).data
         },
     )
@@ -121,7 +135,7 @@ class VarroProjectService(private val project: Project) : Disposable {
     private fun selectionDirectory(sessionId: String): String? =
         server.transport.observedSessionDirectories()[sessionId] ?: project.basePath
 
-    private val hostServices = OpenCodeHostServices(project, server, editor, settings) { update ->
+    private val hostServices = OpenCodeHostServices(project, server, editor, settings, workspaceRoots = ::transferRoots) { update ->
         broadcast("provider-limit/updated", update)
     }
     private val ralphJournal = varro.store.JsonJournal(java.nio.file.Path.of(
@@ -146,8 +160,13 @@ class VarroProjectService(private val project: Project) : Disposable {
 
     init {
         server.transport.onSessionObserved = { session ->
-            selections.observe(session)
-            notifications.observeSession(session)
+            if (InternalHelperSessions.isHidden(session)) {
+                session.text("id")?.let { synchronized(store) { store.hiddenSessionIds = store.hiddenSessionIds + it } }
+            } else {
+                transfers.observe(session)
+                selections.observe(session)
+                notifications.observeSession(session)
+            }
         }
         server.transport.onRequestSucceeded = notifications::requestSucceeded
         Disposer.register(this, notifications)
@@ -250,6 +269,7 @@ class VarroProjectService(private val project: Project) : Disposable {
             },
             selections = selections,
             isPermissionAutomationLeaseCurrent = { lease -> isPermissionAutomationLeaseCurrent(host, lease) },
+            transfers = transfers,
         )
         panels.add(host)
         Disposer.register(host) {
@@ -357,6 +377,7 @@ class VarroProjectService(private val project: Project) : Disposable {
             addProperty("expandThinking", settings.chatExpandThinking)
             addProperty("showChangedFiles", settings.chatShowChangedFiles)
             addProperty("showTurnTimer", settings.chatShowTurnTimer)
+            addProperty("promptCompletionModel", settings.chatPromptCompletionModel)
             addProperty("desktopSessionPaneSide", settings.sessionPaneSide())
             addProperty("defaultPermissionMode", settings.permissionMode())
             add("permissionAutomation", Json.obj("owner" to (permissionOwner?.viewId == viewId), "lease" to permissionLease))
@@ -395,6 +416,7 @@ class VarroProjectService(private val project: Project) : Disposable {
                 "expandThinking" to settings.chatExpandThinking,
                 "showChangedFiles" to settings.chatShowChangedFiles,
                 "showTurnTimer" to settings.chatShowTurnTimer,
+                "promptCompletionModel" to settings.chatPromptCompletionModel,
                 "desktopSessionPaneSide" to settings.sessionPaneSide(),
                 "defaultPermissionMode" to settings.permissionMode(),
                 "chatFontSize" to resolvedChatFontSize(),
@@ -416,10 +438,35 @@ class VarroProjectService(private val project: Project) : Disposable {
      */
     private fun forwardServerEvent(event: JsonElement) {
         val parsed = ServerEvents.parse(event) ?: return
+        val info = parsed.properties.obj("info")
+        if (info != null && InternalHelperSessions.isHidden(info)) {
+            info.text("id")?.let { synchronized(store) { store.hiddenSessionIds = store.hiddenSessionIds + it } }
+        }
+        val eventSessionId = parsed.properties.text("sessionID") ?: info.text("id") ?: parsed.properties.obj("part").text("sessionID")
+        if (eventSessionId in store.hiddenSessionIds) return
+        if (parsed.type in setOf("catalog.updated", "global.disposed", "integration.updated", "integration.connection.updated")) {
+            hostServices.clearProviderQuotaCache()
+        }
+        if (parsed.type == "session.next.moved") {
+            val id = parsed.properties.text("sessionID") ?: return
+            val directory = parsed.properties.obj("location").text("directory") ?: return
+            ApplicationManager.getApplication().executeOnPooledThread {
+                runCatching {
+                    if (transfers.owns(id, parsed.workspaceDirectory) && !project.isDisposed) {
+                        parsed.seq?.let { seq ->
+                            broadcast("server/event", Json.obj("type" to "session.next.moved", "seq" to seq,
+                                "sequenceOnly" to true, "properties" to Json.obj("sessionID" to id)))
+                        }
+                        transfers.moved(id, directory, parsed.workspaceDirectory)
+                    }
+                }.onFailure { log.warn("Could not follow transferred conversation", it) }
+            }
+            return
+        }
         val eventDirectory = parsed.workspaceDirectory
         val projectDirectory = project.guessProjectDir()?.path ?: project.basePath
         if (eventDirectory != null && projectDirectory != null &&
-            !varro.server.WorkspacePaths.isSame(eventDirectory, projectDirectory)
+            transferRoots().none { varro.server.WorkspacePaths.isSame(eventDirectory, it) }
         ) {
             // Another IDE window owns this directory; forwarding it would make this
             // project's session list show sessions it cannot act on.
@@ -463,6 +510,7 @@ class VarroProjectService(private val project: Project) : Disposable {
             "session.idle", "session.error" -> busySessions.remove(sessionId)
             "session.deleted" -> {
                 busySessions.remove(sessionId)
+                transfers.remove(sessionId)
                 store.removeSessionUnreadState(listOf(sessionId))
             }
         }
@@ -750,6 +798,7 @@ class VarroProjectService(private val project: Project) : Disposable {
 
                 "session/open-in-editor" -> payload?.let { openEditor(it, inWindow = it.bool("inWindow") == true) }
                 "session/import-v1" -> importLegacySession(payload.str("sessionId"), payload.str("directory"))
+                "session/open-transferred" -> payload.text("sessionId")?.let(::openTransferredSession)
                 "session/open-in-sidebar" ->
                     payload.str("sessionId")?.let { sessionId ->
                         sidebarCommand("command/open-session", Json.obj("sessionId" to sessionId, "directory" to payload.str("directory")))
@@ -819,6 +868,23 @@ class VarroProjectService(private val project: Project) : Disposable {
         payload.bool("showChangedFiles")?.let { settings.chatShowChangedFiles = it }
         payload.bool("showTurnTimer")?.let { settings.chatShowTurnTimer = it }
         broadcastConfig()
+    }
+
+    private fun openTransferredSession(sessionId: String) {
+        if (explainAttachOnly("Opening a transferred conversation's folder")) return
+        ApplicationManager.getApplication().executeOnPooledThread {
+            try {
+                val directory = transfers.openDirectory(sessionId) ?: return@executeOnPooledThread
+                check(java.nio.file.Files.isDirectory(java.nio.file.Path.of(directory))) { "The conversation's folder is not available on this computer." }
+                ApplicationManager.getApplication().invokeLater {
+                    if (!project.isDisposed) com.intellij.ide.impl.ProjectUtil.openOrImport(
+                        java.nio.file.Path.of(directory), com.intellij.ide.impl.OpenProjectTask.build().withForceOpenInNewFrame(true),
+                    )
+                }
+            } catch (failure: Exception) {
+                notify(failure.message ?: "Could not open transferred conversation", NotificationType.ERROR)
+            }
+        }
     }
 
     private fun logFromWebview(payload: JsonObject?) {

@@ -77,6 +77,10 @@ Other actions are under Tools > Varro and in Find Action, including **New Varro 
 
 With the tool window open, hover over the OpenCode status-bar version for CLI and server versions, port, available process uptime, and the OpenJet version. An asterisk marks a CLI older than the pinned upstream verified version or a server running an older version than the installed CLI. Attach-only connections show the server address instead of local CLI update advice.
 
+For inline prompt suggestions, assign a supported model through **Use for prompt completion** in the Models menu, or set **Prompt completion model** in Settings > Tools > Varro. This requires OpenCode V2 and an API-key connection, not an OAuth subscription. Suggestions send your unfinished draft, recent user prompts, and the latest assistant reply directly to the provider. They never run tools or create sessions. Tab accepts a suggestion; Escape dismisses it. Clear the assignment to disable suggestions. **Test prompt completion** makes one sample request and may consume provider usage.
+
+If another client moves a conversation to a different folder, the original project keeps a history link. A conversation moved outside the project's open folders is read-only there. Click **Open folder** to open its destination in a new IDE window. The host verifies the current destination before opening it; attach-only connections cannot open folders on the server host.
+
 Settings are under **Settings > Tools > Varro**. You can configure server startup and updates, the default permission mode, chat layout, fonts, and models for commit messages and permission review. The initial permission mode is `auto`; `default` follows OpenCode's rules, and `full` allows a session to act without confirmation. A font size of `0` follows the IDE's font settings.
 
 The Agents settings control the runtime-only read-only `Ask` agent and fallback titles for untitled sessions. Ask is enabled by default; fallback titles are disabled. Configure automatic compaction in OpenCode. On-demand compaction remains available in chat.
@@ -128,7 +132,7 @@ In the IDE whose saved preferences you want to keep, open **Settings > Tools > V
 
 Other JetBrains IDEs under the same OS user adopt the shared file when Varro opens. Running instances check for changes every second. Existing shared settings always take precedence during migration. Until you initialize sharing, preferences stay in each IDE.
 
-Shared settings include model visibility, pins, ordering, names, server options, default permission mode, commit-message and auto-approve models, and agent preferences. Fonts, rendering, chat appearance, and session selections stay local. VS Code's Varro storage and OpenCode's configuration are separate.
+Shared settings include model visibility, pins, ordering, names, server options, default permission mode, commit-message, auto-approve and prompt-completion models, and agent preferences. Fonts, rendering, chat appearance, and session selections stay local. VS Code's Varro storage and OpenCode's configuration are separate.
 
 Writes merge changed fields under a cross-process file lock and replace the JSON atomically. Concurrent changes to the same preference use the last write. Invalid or unsupported files remain untouched; synchronization resumes after they are repaired.
 

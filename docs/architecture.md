@@ -139,6 +139,8 @@ With automatic startup disabled and no managed process, the connection is attach
 | Workspace Memento stores | `store/VarroStore.kt`, `store/JsonJournal.kt` |
 | Shared model preferences | `store/VarroModelStore.kt` |
 | Model assignments | `host/ModelRoutingService.kt` |
+| `prompt-completion-service.ts` | `host/PromptCompletionService.kt` |
+| `session-transfer-catalog.ts` and move handling | `host/SessionTransfers.kt` |
 | Permission rules and review | `host/PermissionService.kt`, `host/ProjectPermissionConfig.kt`, `host/PermissionJudge.kt` |
 | Queued sends and Ralph orchestration | `host/QueuedDispatches.kt`, `host/RalphRunner.kt` |
 | `attention-notifications.ts`, `native-notifications.ts` | `host/AttentionNotifications.kt`, `host/ProjectNotifications.kt` |
@@ -223,7 +225,11 @@ Permanent deletion and expiry retain the recycle entry until OpenCode returns `t
 
 ## Model and permission controls
 
-`ModelRoutingService` writes small-model and agent-model assignments through OpenCode's global configuration API. Commit-message and auto-approve model assignments update `VarroSettings`.
+`ModelRoutingService` writes small-model and agent-model assignments through OpenCode's global configuration API. Commit-message, auto-approve and prompt-completion model assignments update `VarroSettings`.
+
+Prompt completion uses V2 provider/config catalogs and credentials read through the selected authenticated server. Credentials never reach the webview or come from a local database. The host admits only checked provider packages with a resolved API key and HTTPS or explicit loopback HTTP endpoints. It chooses the lowest advertised reasoning effort, strips tools and competing output budgets, and makes one non-streaming inference request with an eight-second total deadline. Catalogs are cached for thirty seconds by server and directory; credentials refresh on every request. Refresh, authentication and config events invalidate the cache. Response bodies are bounded, redirects and retries are disabled, and errors never expose arbitrary provider bodies. Autocomplete never creates helper sessions. Legacy helper metadata or exact helper titles plus deny-all rules keep older Varro utility sessions out of catalogs and notifications.
+
+`SessionTransfers` persists at most 512 server-bound summaries in the originating project's store. A verified move updates the local link and publishes `session/transferred`, without patching the server session. Stale durable move events are acknowledged but cannot reopen an obsolete destination. Older catalog snapshots cannot undo a confirmed move. Links authorize only history reads when the destination is outside the project's open roots; prompts, metadata changes and other session actions are rejected. Reads use the destination scope without activating that folder. Opening the destination requires an explicit `session/open-transferred` action, a fresh location check, and a locally available folder. The folder opens in a new IDE window; attach-only connections do not translate server paths into local projects.
 
 `PermissionService` applies session rules to OpenCode before acknowledging a save. `ProjectPermissionConfig` writes project rules to an existing `opencode.jsonc`, otherwise `opencode.json`. It preserves other configuration fields but rewrites the document as JSON, so JSONC comments and formatting are not retained.
 

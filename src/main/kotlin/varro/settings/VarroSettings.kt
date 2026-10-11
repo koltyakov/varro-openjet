@@ -60,6 +60,9 @@ class VarroSettings : PersistentStateComponent<VarroSettings> {
     /** `providerID/modelID` for the auto-approve judge; empty lets Varro pick. */
     var chatAutoApproveModel: String = ""
 
+    /** Direct API autocomplete; empty disables it. Requires an API key and OpenCode V2. */
+    var chatPromptCompletionModel: String = ""
+
     /**
      * Mirrors `varro.decisions.jev.autoApprove`: let TypeSafe's Jev judge Auto-mode
      * permission requests before the model judge. The API key lives in the password safe.

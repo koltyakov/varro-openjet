@@ -17,6 +17,7 @@ class ModelRoutingServiceTest {
             "small_model" to "smallModel",
             "commit_message" to "commitMessageModel",
             "auto_approve" to "autoApproveModel",
+            "prompt_completion" to "promptCompletionModel",
             "agent" to "agentModels",
         )) {
             val fixture = Fixture()
@@ -95,9 +96,11 @@ class ModelRoutingServiceTest {
         val fixture = Fixture()
         fixture.service().update(request("commit_message"))
         fixture.service().update(request("auto_approve"))
+        fixture.service().update(request("prompt_completion"))
         val restored = XmlSerializer.deserialize(XmlSerializer.serialize(fixture.settings.state), VarroSettings::class.java)
         assertEquals("openai/gpt-6/astra", restored.commitMessageModel)
         assertEquals("openai/gpt-6/astra", restored.chatAutoApproveModel)
+        assertEquals("openai/gpt-6/astra", restored.chatPromptCompletionModel)
         assertTrue(fixture.patches.isEmpty())
     }
 
@@ -125,6 +128,23 @@ class ModelRoutingServiceTest {
         "target" to target, "providerID" to "openai", "modelID" to "gpt-6/astra",
         "agentName" to "explore", "unset" to unset,
     )
+
+    @Test fun `unsupported completion connections are rejected before saving and can still be unset`() {
+        val settings = VarroSettings().apply { chatPromptCompletionModel = "old/model" }
+        var changes = 0
+        var checks = 0
+        val service = ModelRoutingService(settings, { JsonObject() }, { error("Must not patch OpenCode") }, { changes++ },
+            assertCompletionAvailable = { _, _ -> checks++; error("API key required") })
+        val failure = assertThrows(IllegalStateException::class.java) { service.update(request("prompt_completion")) }
+        assertEquals("API key required", failure.message)
+        assertEquals("old/model", settings.chatPromptCompletionModel)
+        assertEquals(0, changes)
+        assertEquals(1, checks)
+        service.update(request("prompt_completion", unset = true))
+        assertEquals("", settings.chatPromptCompletionModel)
+        assertEquals(1, checks)
+        assertEquals(1, changes)
+    }
 
     private class Fixture {
         val settings = VarroSettings()

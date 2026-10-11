@@ -119,6 +119,19 @@ A local sync copies the checkout's current files, including uncommitted edits. T
 
 Review the vendor diff for protocol changes and new host requests. Sync updates version specifiers for existing dependencies in `webview/package.json`; check upstream for any new dependencies the webview needs. When dependencies change, run `npm install` in `webview/` with the pinned toolchain and include the updated lockfile. Keep toolchain versions aligned with `Dockerfile`.
 
+### Required backend review
+
+Sync copies the browser UI and shared sources, not upstream's `src/extension` backend. A successful build or `sync:check` does not establish parity with the Kotlin host.
+
+Before reporting a sync complete:
+
+1. Record the previous commit from `webview/vendor/UPSTREAM.json` before syncing. Compare it with the new revision, including upstream `src/extension`, `src/shared`, and configuration changes in `package.json`. If the previous revision or its diff is unavailable, report that limitation rather than assuming no backend changes.
+2. Trace new or changed endpoints, messages, settings, persistence, server adapters, and platform behavior to their equivalents in `src/main/kotlin/varro/`. Check backend fixes even when they have no vendor diff.
+3. List each missing, partially ported, or uncertain behavior separately. Include the exact feature or fix, upstream files and endpoints or messages, corresponding OpenJet files or the absence of an implementation, and the impact on users. Distinguish confirmed gaps from unverified behavior and platform-specific changes that do not apply to OpenJet. Do not report only a generic warning that backend work may be missing.
+4. Ask explicitly which listed gaps the user wants implemented. Do not silently leave them out or start porting them unless the user already authorized that backend work. Keep the vendor sync and backend implementation status separate in the result.
+
+If no gaps are found, state that explicitly and name any review or verification limitations. Do not claim full backend parity for behavior that was not checked.
+
 Run browser checks, then `./gradlew check buildPlugin` from the root, and verify the affected flows in the sandbox.
 
 ## Submit a change

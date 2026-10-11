@@ -154,6 +154,7 @@ import {
   updatePermissionModeForSession,
 } from '../hooks/useOpenCode';
 import { normalizeModelVariant } from '../../shared/model-variant';
+import { getPromptCompletionVariant } from '../../shared/prompt-completion';
 import {
   editingMessage,
   getMessageEditDraftBackup,
@@ -213,7 +214,7 @@ import {
   type ComposerHistoryAction,
   type ComposerSnapshot,
 } from '../lib/composer-history';
-import { getSessionHistoryPrompts } from '../lib/message-window';
+import { getCachedSessionMessages, getSessionHistoryPrompts } from '../lib/message-window';
 import { recordSessionPause } from '../lib/session-pauses';
 import { isSessionResumeMessage } from '../../shared/session-pauses';
 import { setError } from '../lib/app-state';
@@ -295,6 +296,7 @@ import {
 } from './chat-input/toolbar-compact';
 import { createToolbarFitter } from './chat-input/toolbar-fit';
 import { planMessageHistoryNavigation } from './chat-input/message-history-navigation';
+import { PromptCompletion } from './chat-input/prompt-completion';
 import { queuedMessageWasAdmitted } from './chat-input/queued-message-history';
 import {
   SKILLS_COMMAND_NAME,
@@ -1069,6 +1071,8 @@ export function ChatInput(props: { newSession?: boolean; onBeforeSend?: () => vo
   });
 
   const [isFocused, setIsFocused] = createSignal(false);
+  const [promptComposing, setPromptComposing] = createSignal(false);
+  const [composerSelectionCollapsed, setComposerSelectionCollapsed] = createSignal(true);
   const [historyIndex, setHistoryIndex] = createSignal<number | null>(null);
   const [historyDraft, setHistoryDraft] = createSignal('');
   const [loadingOlderMessageHistory, setLoadingOlderMessageHistory] = createSignal(false);
@@ -1478,7 +1482,10 @@ export function ChatInput(props: { newSession?: boolean; onBeforeSend?: () => vo
       state.providerDefaults,
       { allowHidden: true }
     );
-    const selected = editSelection || resolvedSelection || state.selectedModel;
+    const selected =
+      editSelection?.providerID && editSelection.modelID
+        ? editSelection
+        : resolvedSelection || state.selectedModel;
     if (selected) {
       const provider = state.providers.find((item) => item.id === selected.providerID);
       const model = provider?.models[selected.modelID];
@@ -2792,6 +2799,31 @@ export function ChatInput(props: { newSession?: boolean; onBeforeSend?: () => vo
           item?.type !== 'slash' ||
             (item.name !== SKILLS_COMMAND_NAME && item.name !== PROBLEMS_COMMAND_NAME)
         );
+        return;
+      }
+    }
+
+    if (
+      promptCompletion.suggestion() &&
+      !anyComposerPopupOpen() &&
+      !e.altKey &&
+      !e.ctrlKey &&
+      !e.metaKey &&
+      !e.shiftKey &&
+      !e.isComposing
+    ) {
+      if (e.key === 'Tab') {
+        e.preventDefault();
+        const value = inputText() + promptCompletion.suggestion();
+        batch(() => {
+          setComposerValue(value);
+          promptCompletion.dismiss();
+        });
+        return;
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        promptCompletion.dismiss();
         return;
       }
     }
@@ -4119,11 +4151,81 @@ export function ChatInput(props: { newSession?: boolean; onBeforeSend?: () => vo
     const seen = new Set<string>();
     return entries
       .map((entry) => {
-        if (entry.info.role !== 'user' || seen.has(entry.info.id)) return null;
+        if (
+          entry.info.sessionID !== sessionId ||
+          entry.info.role !== 'user' ||
+          seen.has(entry.info.id)
+        )
+          return null;
         seen.add(entry.info.id);
         return getUserMessageHistoryText(entry.parts);
       })
       .filter((text): text is string => !!text);
+  });
+
+  const promptCompletion = new PromptCompletion({
+    draft: inputText,
+    model: () => state.promptCompletionModel,
+    scope: () =>
+      JSON.stringify([
+        getFileSearchScopeKey(),
+        selectedWorkspacePath(),
+        composerSessionId(),
+        getNewChatDraftGeneration(),
+      ]),
+    history: messageHistory,
+    lastAssistantResponse: () => {
+      const sessionId = composerSessionId();
+      if (!sessionId) return undefined;
+      const live = getMessageLookup().bySessionId.get(sessionId);
+      const entries = live?.length ? live : getCachedSessionMessages(sessionId);
+      for (let index = entries.length - 1; index >= 0; index -= 1) {
+        const entry = entries[index]!;
+        if (
+          entry.info.sessionID !== sessionId ||
+          entry.info.role !== 'assistant' ||
+          entry.info.summary
+        )
+          continue;
+        const text = entry.parts
+          .flatMap((part) =>
+            part.type === 'text' &&
+            !part.synthetic &&
+            !part.ignored &&
+            part.sessionID === sessionId &&
+            part.messageID === entry.info.id
+              ? [part.text]
+              : []
+          )
+          .join('\n\n')
+          .trim();
+        if (text) return text;
+      }
+      return undefined;
+    },
+    eligible: () =>
+      isFocused() &&
+      connectionInitialized() &&
+      !promptComposing() &&
+      composerSelectionCollapsed() &&
+      caretPosition() === inputText().length &&
+      !activeCompletion() &&
+      !anyComposerPopupOpen() &&
+      !composerEditingMessage() &&
+      !state.queuedMessageEdit &&
+      !sendAnimationActive() &&
+      !workspaceSendPending(),
+    request: (input, signal) =>
+      client.varro.completePrompt(
+        {
+          ...input,
+          variant: getPromptCompletionVariant(state.promptCompletionModel, state.providers),
+        },
+        {
+          signal,
+          directory: selectedWorkspacePath() ?? state.editorContext?.workspacePath ?? undefined,
+        }
+      ),
   });
 
   async function navigateToOlderMessageHistory(
@@ -5241,8 +5343,17 @@ export function ChatInput(props: { newSession?: boolean; onBeforeSend?: () => vo
   });
 
   const hasPendingApproval = () => composerHasActiveQuestion() || composerHasActivePermission();
+  const transferredDirectory = () => {
+    if (props.newSession || !state.activeSessionId) return undefined;
+    const session = state.sessions.find((entry) => entry.id === state.activeSessionId);
+    return (
+      state.transferredSessions[state.activeSessionId] ??
+      (session?.transfer?.available === false ? session.directory : undefined)
+    );
+  };
   const canSend = () =>
     connectionInitialized() &&
+    !transferredDirectory() &&
     !state.messagesLoading &&
     (isAbortSlashCommand(inputText()) ||
       isPauseSlashCommand(inputText()) ||
@@ -5262,6 +5373,8 @@ export function ChatInput(props: { newSession?: boolean; onBeforeSend?: () => vo
   // A silently disabled send button is undebuggable in the field; when the user
   // tries to send actual content, name the global gate that is blocking it.
   const getSendBlockedReason = () => {
+    const directory = transferredDirectory();
+    if (directory) return `Conversation moved to ${directory}. Open its folder to continue.`;
     const hasContent =
       getSendableInputText().trim().length > 0 ||
       state.droppedFiles.length > 0 ||
@@ -5691,6 +5804,7 @@ export function ChatInput(props: { newSession?: boolean; onBeforeSend?: () => vo
       .join('|'),
     variant: effectiveVariant(),
     selectionCostWarning: selectionCostWarning(),
+    hasPromptCompletionError: !!promptCompletion.error(),
     hasContextUsage: !!contextUsage(),
     loading: isComposerBusy(),
     hasQuestion: composerHasActiveQuestion(),
@@ -6280,6 +6394,9 @@ export function ChatInput(props: { newSession?: boolean; onBeforeSend?: () => vo
                       : 'Describe what to build'
             }
             value={inputText()}
+            promptSuggestion={promptCompletion.suggestion()}
+            promptCompletionPending={promptCompletion.pending()}
+            onCompositionChange={setPromptComposing}
             pendingPaste={pendingPasteInsertion()}
             cursorOffset={caretPosition()}
             chips={inlineChips()}
@@ -6308,6 +6425,7 @@ export function ChatInput(props: { newSession?: boolean; onBeforeSend?: () => vo
                 setHistoryDraft('');
                 setInputText(text);
                 setCaretPosition(cursorOffset);
+                setComposerSelectionCollapsed(true);
                 setCompletionIndex(0);
                 setSuppressCompletion(false);
               });
@@ -6321,6 +6439,7 @@ export function ChatInput(props: { newSession?: boolean; onBeforeSend?: () => vo
             }}
             onBlur={() => setIsFocused(false)}
             onClick={(cursorOffset, selectionEnd) => {
+              setComposerSelectionCollapsed(cursorOffset === selectionEnd);
               if (cursorOffset === selectionEnd) setCaretPosition(cursorOffset);
               setShowAgentPicker(false);
               setShowModelPicker(false);
@@ -6331,9 +6450,11 @@ export function ChatInput(props: { newSession?: boolean; onBeforeSend?: () => vo
               setShowBusyMenu(false);
             }}
             onKeyUp={(cursorOffset, selectionEnd) => {
+              setComposerSelectionCollapsed(cursorOffset === selectionEnd);
               if (cursorOffset === selectionEnd) setCaretPosition(cursorOffset);
             }}
             onSelect={(cursorOffset, selectionEnd) => {
+              setComposerSelectionCollapsed(cursorOffset === selectionEnd);
               if (cursorOffset === selectionEnd) setCaretPosition(cursorOffset);
             }}
             isChipExpandable={isChipExpandable}
@@ -6553,6 +6674,11 @@ export function ChatInput(props: { newSession?: boolean; onBeforeSend?: () => vo
             showVariantPicker={showVariantPicker()}
             showReasoningControl={isToolbarControlVisible('reasoning')}
             selectionCostWarning={selectionCostWarning()}
+            promptCompletionError={
+              promptCompletion.error()
+                ? `Prompt completion failed (${state.promptCompletionModel}): ${promptCompletion.error()}`
+                : ''
+            }
             variantButtonRef={(el) => {
               variantPickerRef = el;
             }}

@@ -9,6 +9,7 @@ class SharedCoreSettingsTest {
         val source = VarroSettings().apply {
             commitMessageModel = "provider/commit"
             chatAutoApproveModel = "provider/judge"
+            chatPromptCompletionModel = "provider/completion"
             chatDefaultPermissionMode = "default"
             chatFontSize = 22
             chatShowFileDiffs = true
@@ -21,6 +22,7 @@ class SharedCoreSettingsTest {
         SharedCoreSettings.apply(shared, destination)
         assertEquals("provider/commit", destination.commitMessageModel)
         assertEquals("provider/judge", destination.chatAutoApproveModel)
+        assertEquals("provider/completion", destination.chatPromptCompletionModel)
         assertEquals("default", destination.chatDefaultPermissionMode)
         assertEquals(14, destination.chatFontSize)
         assertFalse(destination.chatShowFileDiffs)

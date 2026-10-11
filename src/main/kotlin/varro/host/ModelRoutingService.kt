@@ -15,20 +15,22 @@ internal class ModelRoutingService(
     private val readGlobalConfig: () -> JsonObject,
     private val patchGlobalConfig: (JsonObject) -> JsonObject,
     private val onChanged: () -> Unit,
+    private val assertCompletionAvailable: (String, String) -> Unit = { _, _ -> },
 ) {
     fun read(): JsonObject = routing(readGlobalConfig())
 
     fun update(body: JsonElement?): JsonObject {
         val request = requireNotNull(body.asObjectOrNull()) { "Model routing request must be an object" }
         val target = request.str("target")
-        require(target in setOf("small_model", "agent", "commit_message", "auto_approve")) {
+        require(target in setOf("small_model", "agent", "commit_message", "auto_approve", "prompt_completion")) {
             "Unsupported model routing target: $target"
         }
         val provider = request.str("providerID")?.trim().orEmpty()
         val model = request.str("modelID")?.trim().orEmpty()
-        require(provider.isNotEmpty() && '/' !in provider && model.isNotEmpty()) { "Provider and model are required" }
+        require(provider.isNotEmpty() && provider.length <= 256 && '/' !in provider && model.isNotEmpty() && model.length <= 500) { "Provider and model are required" }
         // OpenCode's config API accepts strings, not null. Empty strings restore automatic selection.
         val modelRef = if (request.bool("unset") == true) "" else "$provider/$model"
+        if (target == "prompt_completion" && modelRef.isNotEmpty()) assertCompletionAvailable(provider, model)
         val config = when (target) {
             "small_model" -> patchGlobalConfig(Json.obj("small_model" to modelRef))
             "agent" -> {
@@ -58,8 +60,11 @@ internal class ModelRoutingService(
             else -> {
                 // Read first so a failed request cannot partially save an IDE setting.
                 val current = readGlobalConfig()
-                if (target == "commit_message") settings.commitMessageModel = modelRef
-                else settings.chatAutoApproveModel = modelRef
+                when (target) {
+                    "commit_message" -> settings.commitMessageModel = modelRef
+                    "prompt_completion" -> settings.chatPromptCompletionModel = modelRef
+                    else -> settings.chatAutoApproveModel = modelRef
+                }
                 current
             }
         }
@@ -78,6 +83,7 @@ internal class ModelRoutingService(
             "globalVisionModel" to agents.get("vision"),
             "commitMessageModel" to modelRoute(settings.commitMessageModel),
             "autoApproveModel" to modelRoute(settings.chatAutoApproveModel),
+            "promptCompletionModel" to modelRoute(settings.chatPromptCompletionModel),
         )
     }
 

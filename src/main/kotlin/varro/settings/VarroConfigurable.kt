@@ -132,6 +132,12 @@ class VarroConfigurable : BoundConfigurable("Varro") {
         }
 
         group("Models") {
+            row("Prompt completion model:") {
+                textField()
+                    .bindText(settings::chatPromptCompletionModel)
+                    .comment("`providerID/modelID`. Empty disables autocomplete. Requires OpenCode V2 and an API key. Drafts and recent chat context are sent directly to the provider. Tab accepts; Escape dismisses.")
+                    .columns(40)
+            }
             row("Auto-approve judge model:") {
                 textField()
                     .bindText(settings::chatAutoApproveModel)

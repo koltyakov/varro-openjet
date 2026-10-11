@@ -55,6 +55,7 @@ class RestProxy(
         server.transport.request(method, path, body, RequestOptions(directory = directory)).data
     }),
     private val isPermissionAutomationLeaseCurrent: (Long) -> Boolean = { false },
+    private val transfers: SessionTransfers? = null,
 ) {
     private val log = logger<RestProxy>()
     private val modelPricing = ModelPricingCatalog()
@@ -76,6 +77,9 @@ class RestProxy(
      * the routing logic stays testable without a live project.
      */
     interface HostServices {
+        fun promptCompletionModels(isCancelled: () -> Boolean): JsonObject
+        fun completePrompt(body: JsonElement?, directory: String?, isCancelled: () -> Boolean): JsonObject
+        fun testPromptCompletion(body: JsonElement?, isCancelled: () -> Boolean): JsonObject
         fun openPlanDocument(content: String, title: String?): String?
         fun pickWorkspaceFile(): JsonObject?
         fun readWorkspaceFile(path: String): JsonObject?
@@ -125,14 +129,21 @@ class RestProxy(
         try {
             fun checkPermissionLease() = PermissionAutomationLease.assertCurrent(payload, isPermissionAutomationLeaseCurrent)
             checkPermissionLease()
+            val transferDirectory = transfers?.authorizeRequest(method, path, payload.get("body"))
+            val forwardedPath = if (transferDirectory == null) path else {
+                val request = ApiRoutes.parse(method, path)!!
+                val query = request.query.filterKeys { it != "directory" }.flatMap { (key, values) -> values.map { "${encode(key)}=${encode(it)}" } } +
+                    "directory=${encode(transferDirectory)}"
+                "${request.pathname}?${query.joinToString("&")}"
+            }
             if (payload.obj("queuedMessageDispatch") != null && !admitQueuedDispatch(payload)) {
                 error("Queued message dispatch lease is no longer current")
             }
             admitted = payload.obj("queuedMessageDispatch") != null && method == "POST"
             val data = if (path.startsWith(ApiRoutes.NAMESPACE)) {
-                handleVarroRequest(method, path, payload.get("body"))
+                handleVarroRequest(method, path, payload.get("body"), transferDirectory) { cancelled.get() || disposed.get() }
             } else {
-                forward(method, path, payload.get("body"), payload.obj("queuedMessageDispatch") != null) {
+                forward(method, forwardedPath, payload.get("body"), payload.obj("queuedMessageDispatch") != null, transferDirectory) {
                     checkPermissionLease()
                     cancelled.get() || disposed.get()
                 }
@@ -176,16 +187,22 @@ class RestProxy(
 
     // --- OpenCode forwarding --------------------------------------------------
 
-    private fun forward(method: String, path: String, body: JsonElement?, queuedDispatch: Boolean = false, isCancelled: () -> Boolean = { false }): JsonElement? {
+    private fun forward(method: String, path: String, body: JsonElement?, queuedDispatch: Boolean = false, transferDirectory: String? = null, isCancelled: () -> Boolean = { false }): JsonElement? {
         val request = ApiRoutes.parse(method, path)
+        val sessionId = request?.segments?.takeIf { it.size >= 2 && it[0] == "session" }?.get(1)
+        if (sessionId != null && sessionId != "status" && method != "GET") {
+            transfers?.checkWritable(sessionId)
+            if (isCancelled()) throw java.util.concurrent.CancellationException("OpenCode request cancelled")
+        }
 
         if (method == "GET" && request != null && request.segments.size == 6 &&
             request.segments[0] == "session" && request.segments[2] == "message" && request.segments[4] == "part") {
-            return readContent(request, isCancelled)
+            return readContent(request, transferDirectory, isCancelled)
         }
 
         if (method == "GET" && request != null && Regex("^/session/[^/]+/message$").matches(request.pathname)) {
-            val directory = request.query["directory"]?.firstOrNull()
+            val directory = transferDirectory ?: request.query["directory"]?.firstOrNull()
+                ?: transfers?.get(request.segments[1]).str("directory")
                 ?: body.asObjectOrNull().str("workspaceDirectory") ?: server.workspaceDirectory()
             val response = server.transport.request(method, path, options = RequestOptions(
                 directory = directory, captureNextCursor = true, isCancelled = isCancelled,
@@ -203,13 +220,23 @@ class RestProxy(
             return sessionPage(path, request)
         }
 
-        return server.transport.request(method = method, path = path, body = body, options = RequestOptions(isCancelled = isCancelled)).data
+        val result = server.transport.request(method = method, path = path, body = body, options = RequestOptions(isCancelled = isCancelled,
+            directory = sessionId?.let { transfers?.get(it).str("directory") })).data
+        if (method == "GET" && request?.pathname == "/session") return Json.array(
+            mergeTransfers(result.asArrayOrNull() ?: JsonArray(), request).filter { it.asObjectOrNull().str("id") !in store.hiddenSessionIds },
+        )
+        if (method == "GET" && sessionId != null && request?.segments?.size == 2) {
+            result.asObjectOrNull()?.let { session ->
+                transfers?.get(sessionId).obj("transfer")?.let { session.add("transfer", it) }
+            }
+        }
+        return result
     }
 
-    private fun readContent(request: ApiRoutes.Request, isCancelled: () -> Boolean): JsonElement {
+    private fun readContent(request: ApiRoutes.Request, transferDirectory: String?, isCancelled: () -> Boolean): JsonElement {
         val sessionID = request.segments[1]
         require(sessionID !in store.hiddenSessionIds) { "404 Session not found" }
-        val directory = request.query["directory"]?.firstOrNull() ?: server.workspaceDirectory()
+        val directory = transferDirectory ?: request.query["directory"]?.firstOrNull() ?: transfers?.get(sessionID).str("directory") ?: server.workspaceDirectory()
         return contentReader.read(request, directory, server.url(), isCancelled)
     }
 
@@ -225,7 +252,7 @@ class RestProxy(
     private fun sessionPage(path: String, request: ApiRoutes.Request): JsonElement {
         val limit = request.query["limit"]?.firstOrNull()?.toIntOrNull()?.coerceIn(1, 1_000) ?: 100
         val response = server.transport.request("GET", path, options = RequestOptions(captureNextCursor = true))
-        val sessions = response.data.asArrayOrNull() ?: JsonArray()
+        val sessions = mergeTransfers(response.data.asArrayOrNull() ?: JsonArray(), request)
 
         val recycled = store.recycleBin.flatMap {
             it.asObjectOrNull()?.getAsJsonArray("sessions")?.mapNotNull { session -> session.asObjectOrNull().str("id") }.orEmpty()
@@ -248,9 +275,24 @@ class RestProxy(
         return Json.obj("items" to items, "hasMore" to (ordered.size > limit || response.nextCursor != null))
     }
 
+    private fun mergeTransfers(sessions: JsonArray, request: ApiRoutes.Request): JsonArray {
+        val merged = sessions.mapNotNull { it.asObjectOrNull() }.associateByTo(linkedMapOf()) { it.str("id") }.toMutableMap()
+        val search = request.query["search"]?.firstOrNull()
+        val directory = request.query["directory"]?.firstOrNull()
+        transfers?.list()?.forEach { session ->
+            if (search != null && !session.str("title").orEmpty().contains(search, ignoreCase = true)) return@forEach
+            if (request.query["roots"]?.firstOrNull() == "true" && session.text("parentID") != null) return@forEach
+            if (directory != null && !WorkspacePaths.isSame(directory, session.obj("transfer").str("originDirectory")) && !WorkspacePaths.isSame(directory, session.str("directory"))) return@forEach
+            val id = session.str("id")!!
+            val current = merged[id]
+            if (current == null) merged[id] = session else current.add("transfer", session.get("transfer"))
+        }
+        return Json.array(merged.values)
+    }
+
     // --- Host API namespace ---------------------------------------------------
 
-    private fun handleVarroRequest(method: String, path: String, body: JsonElement?): JsonElement? {
+    private fun handleVarroRequest(method: String, path: String, body: JsonElement?, transferDirectory: String?, isCancelled: () -> Boolean): JsonElement? {
         val request = ApiRoutes.parse(method, path) ?: throw IllegalArgumentException("Bad request")
         val pathname = request.pathname
         val query = request.query
@@ -258,6 +300,9 @@ class RestProxy(
         fun q(key: String): String? = query[key]?.firstOrNull()?.takeIf { it.isNotBlank() }
 
         return when {
+            pathname == ApiRoutes.Endpoints.PROMPT_COMPLETION_MODELS -> services.promptCompletionModels(isCancelled)
+            pathname == ApiRoutes.Endpoints.PROMPT_COMPLETION -> services.completePrompt(body, q("directory"), isCancelled)
+            pathname == ApiRoutes.Endpoints.PROMPT_COMPLETION_TEST -> services.testPromptCompletion(body, isCancelled)
             pathname == ApiRoutes.Endpoints.MODEL_PRICING ->
                 modelPricing.get(q("providerID")!!, q("modelID")!!) ?: JsonNull.INSTANCE
 
@@ -321,7 +366,7 @@ class RestProxy(
                 handleTrashEntry(method, request)
 
             pathname.startsWith("${ApiRoutes.Endpoints.SESSION}/") ->
-                handleSessionEndpoint(method, request, body, q("directory"))
+                handleSessionEndpoint(method, request, body, transferDirectory ?: q("directory"))
 
             // Server process memory is distinct from persisted session/project rules.
             pathname == ApiRoutes.Endpoints.PERMISSION_SERVER_MEMORY -> Json.obj(
@@ -392,6 +437,7 @@ class RestProxy(
         val sessionId = ApiRoutes.varroSessionId(request.pathname)
             ?: throw IllegalArgumentException("Malformed session endpoint")
         val action = request.segments.last()
+        if (action in setOf("permission-mode", "rename-if-untitled", "delete")) transfers?.checkWritable(sessionId)
 
         return when (action) {
             "activate" -> {
