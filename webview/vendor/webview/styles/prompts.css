@@ -75,6 +75,10 @@
 }
 
 .question-summary-answer {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
   color: var(--color-vscode-fg);
   font-weight: 600;
   overflow-wrap: anywhere;

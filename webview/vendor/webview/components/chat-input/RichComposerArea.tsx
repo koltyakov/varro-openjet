@@ -771,6 +771,27 @@ export function RichComposerArea(props: {
     range.collapse(true);
     sel.removeAllRanges();
     sel.addRange(range);
+    stabilizeCaretBeforeExternalLink();
+  }
+
+  function stabilizeCaretBeforeExternalLink() {
+    const sel = window.getSelection();
+    const node = sel?.focusNode;
+    if (
+      sel?.isCollapsed &&
+      node instanceof Text &&
+      sel.focusOffset > 0 &&
+      sel.focusOffset === node.length &&
+      node.nextSibling instanceof HTMLElement &&
+      node.nextSibling.classList.contains('composer-external-link')
+    ) {
+      // Chromium can paint a text-end caret on the next line before a wrapped
+      // link's icon. Keep a zero-width text continuation after the caret so its
+      // painted position stays on the typed line. Logical offsets omit it.
+      const offset = sel.focusOffset;
+      node.appendData(CARET_SPACER);
+      sel.collapse(node, offset);
+    }
   }
 
   function revealCaret(controlledCursorUpdate = false) {
@@ -946,6 +967,7 @@ export function RichComposerArea(props: {
     }
     const offset = getCursorOffset();
     if (normalizeEditableExternalLinks(editorEl)) setCursorOffset(offset);
+    else stabilizeCaretBeforeExternalLink();
     const text = extractText(editorEl);
     editorEl.dataset.empty = text.length === 0 ? 'true' : 'false';
     const previousValue = props.value;
