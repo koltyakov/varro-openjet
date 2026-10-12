@@ -51,8 +51,8 @@ class OpenCodeProcess(
     private var v2Launch = false
     private var launchRegistration: OpenCodeConnection.Registration? = null
 
-    fun restoreConnection(): Boolean {
-        val connection = ownership.connection() ?: return false
+    fun restoreConnection(isCancelled: () -> Boolean = { false }): Boolean {
+        val connection = ownership.connection(isCancelled = isCancelled) ?: return false
         connection.let { (port, password, username) ->
             adoptPort(port)
             services.rememberVerified(ownership.registeredPid, port)
@@ -70,11 +70,18 @@ class OpenCodeProcess(
         return true
     }
 
-    fun restoreDiscoveredOwnership(password: String) {
+    fun restoreDiscoveredOwnership(password: String, isCancelled: () -> Boolean = { false }) {
         credentialPort = port
         serverPassword = password
         serverUsername = "opencode"
-        ownership.connection(port, password)?.let { connection ->
+        ownership.connection(port, password, recoverReplacement = true, isCancelled = isCancelled)?.let { connection ->
+            if (ownership.replacementRecovered) {
+                // The replacement never inherited this host's injected configuration or child handle.
+                handler.set(null)
+                ownershipRegistered = false
+                managed.set(false)
+                askAgentConfig.close()
+            }
             connection.password?.let {
                 serverPassword = it
                 serverUsername = connection.username
@@ -86,9 +93,9 @@ class OpenCodeProcess(
     internal val canProbeUnregisteredService: Boolean get() = !services.privateSelected
     internal fun serviceRegistrations(allowGlobal: Boolean) = services.registrations(privateOnly = services.privateSelected || !allowGlobal)
 
-    internal fun adoptService(registration: OpenCodeConnection.Registration) {
+    internal fun adoptService(registration: OpenCodeConnection.Registration, isCancelled: () -> Boolean = { false }) {
         services.rememberVerified(registration)
-        restoreDiscoveredOwnership(registration.password)
+        restoreDiscoveredOwnership(registration.password, isCancelled)
     }
 
     fun verifyConnection(reconnect: Boolean = false) = ownership.verifyConnection(port, reconnect)

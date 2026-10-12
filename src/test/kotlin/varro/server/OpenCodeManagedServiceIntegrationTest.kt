@@ -106,6 +106,58 @@ class OpenCodeManagedServiceIntegrationTest {
             assertTrue(desktopProcess.isAlive)
             assertEquals(desktopOriginal, Files.readString(OpenCodeConnection.serviceFile(environment)))
             assertTrue(transport.checkHealth())
+
+            // A CLI replacement can move ports while retaining the private service password.
+            val retiredRegistration = OpenCodeConnection.registration(privateFile)!!
+            val retiredListener = ProcessHandle.of(retiredRegistration.pid).orElseThrow()
+            retiredListener.destroy()
+            retiredListener.onExit().get(10, TimeUnit.SECONDS)
+            managed.disconnect()
+            val replacementPort = ServerSocket(0).use { it.localPort }
+            val replacementUrl = "http://127.0.0.1:$replacementPort"
+            val replacement = ProcessBuilder(binary!!, "serve", "--service", "--port", replacementPort.toString())
+                .directory(workspace.toFile()).redirectErrorStream(true).apply {
+                    environment().clear()
+                    environment().putAll(environment + ("XDG_STATE_HOME" to root.resolve("servers/opencode-service").toString()))
+                }.start()
+            val replacementReader = Thread { replacement.inputStream.use { it.transferTo(java.io.OutputStream.nullOutputStream()) } }
+                .apply { isDaemon = true; start() }
+            val recovered = OpenCodeProcess(cli, { port }, { workspace.toString() }, serverStateDirectory = root.resolve("servers"))
+            try {
+                val replacementDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30)
+                var registration: OpenCodeConnection.Registration? = null
+                while (registration == null && replacement.isAlive && System.nanoTime() < replacementDeadline) {
+                    registration = OpenCodeConnection.registration(privateFile)?.takeIf { it.url == replacementUrl }
+                    if (registration == null) Thread.sleep(50)
+                }
+                assertNotNull("Replacement did not publish private service credentials", registration)
+                assertEquals(retiredRegistration.password, registration!!.password)
+                recovered.adoptPort(replacementPort)
+                recovered.adoptService(registration)
+                assertFalse(recovered.isCredentialOnly)
+                assertEquals(registration.pid, recovered.registeredPid)
+                assertTrue(recovered.refreshOwnership())
+                val replacementLease = ServerOwnership.record(lease)!!
+                assertEquals(replacementPort, replacementLease.get("port").asInt)
+                assertFalse(replacementLease.has("configPath"))
+                assertFalse(Files.exists(root.resolve("servers/varro-opencode-server-$replacementPort.json")))
+                val follower = OpenCodeProcess(cli, { port }, { workspace.toString() }, serverStateDirectory = root.resolve("servers"))
+                assertTrue(follower.restoreConnection())
+                assertEquals(replacementPort, follower.port)
+                assertEquals(recovered.authorization(), follower.authorization())
+                assertFalse(follower.refreshOwnership())
+                follower.disconnect()
+                recovered.stop()
+                assertTrue(replacement.waitFor(10, TimeUnit.SECONDS))
+                assertTrue(desktopProcess.isAlive)
+                assertEquals(desktopOriginal, Files.readString(OpenCodeConnection.serviceFile(environment)))
+            } finally {
+                runCatching { recovered.stop() }
+                replacement.destroy()
+                if (!replacement.waitFor(5, TimeUnit.SECONDS)) { replacement.destroyForcibly(); replacement.waitFor(5, TimeUnit.SECONDS) }
+                replacementReader.join(1000)
+                OpenCodeConnection.forget(replacementUrl)
+            }
         } finally {
             try { managed.stop() } finally {
                 managed.endLaunch()

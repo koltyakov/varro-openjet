@@ -269,7 +269,7 @@ class OpenCodeV2Test {
         assertEquals("data:image/png;base64,eA==", payload.arr("files")!![0].asJsonObject.str("uri"))
     }
 
-    @Test fun `steering resume reuses the existing message id without touching queued input`() {
+    @Test fun `steering resume uses a steer scoped interrupt without admitting input`() {
         val calls = mutableListOf<Pair<String, JsonElement?>>()
         val native = adapter { method, path, body ->
             calls.add(path to body)
@@ -279,13 +279,13 @@ class OpenCodeV2Test {
                     Json.obj("data" to listOf(Json.obj("id" to "msg_queue", "type" to "user", "delivery" to "queue"),
                         Json.obj("id" to "msg_steer", "type" to "user", "delivery" to "steer")))
                 }
-                "/api/session/ses_test/prompt" -> { assertEquals("POST", method); null }
+                "/api/session/ses_test/interrupt?resume=true" -> { assertEquals("POST", method); null }
                 else -> error("Unexpected request $path")
             }
         }
         assertTrue(native.request("POST", "/session/ses_test/resume-steering", null, RequestOptions()).data!!.asBoolean)
-        assertEquals(listOf("/api/session/ses_test/inbox", "/api/session/ses_test/prompt"), calls.map { it.first })
-        assertEquals(Json.obj("id" to "msg_steer", "text" to "", "delivery" to "steer", "resume" to true), calls.last().second)
+        assertEquals(listOf("/api/session/ses_test/inbox", "/api/session/ses_test/interrupt?resume=true"), calls.map { it.first })
+        assertEquals(Json.obj(), calls.last().second)
     }
 
     @Test fun `steering resume is a no-op when only queued or non-user input remains`() {
@@ -308,7 +308,7 @@ class OpenCodeV2Test {
         assertThrows(IllegalStateException::class.java) {
             native.request("POST", "/session/ses_test/resume-steering", null, RequestOptions())
         }
-        assertEquals(listOf("/api/session/ses_test/inbox", "/api/session/ses_test/prompt"), calls)
+        assertEquals(listOf("/api/session/ses_test/inbox", "/api/session/ses_test/interrupt?resume=true"), calls)
     }
 
     @Test fun `invalid steering inboxes never admit new input`() {

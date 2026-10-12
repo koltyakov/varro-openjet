@@ -39,6 +39,57 @@ class RegisteredConnectionVerifierTest {
         }
     }
 
+    @Test fun `V2 replacement verification falls back to floor status and requires the exact HTTP pid`() {
+        for (missing in listOf("anonymous", "authenticated")) for (matches in listOf(true, false)) fixture { server, probes ->
+            server.createContext("/") { exchange ->
+                val route = exchange.requestURI.path
+                val authorization = exchange.requestHeaders.getFirst("Authorization")
+                probes.add(route to authorization)
+                val status = when {
+                    route == "/api/info" && (missing == "anonymous" || authorization == OpenCodeConnection.authorization("secret")) -> 404
+                    authorization != OpenCodeConnection.authorization("secret") -> 401
+                    route == "/api/status" -> 200
+                    else -> 404
+                }
+                val bytes = """{"version":"2.0.5","pid":${if (matches) 123 else 456}}""".toByteArray()
+                exchange.sendResponseHeaders(status, if (status == 200) bytes.size.toLong() else -1)
+                if (status == 200) exchange.responseBody.use { it.write(bytes) } else exchange.close()
+            }
+            server.start()
+            assertEquals(matches, RegisteredConnectionVerifier().verify(ServerOwnership.Connection(server.address.port, "secret"), 123))
+            assertEquals(3, probes.count { it.first == "/api/status" })
+            assertFalse(probes.any { it.first == "/global/health" })
+        }
+    }
+
+    @Test fun `cancelled replacement verification makes no probes`() = fixture { server, probes ->
+        server.start()
+        assertThrows(java.util.concurrent.CancellationException::class.java) {
+            RegisteredConnectionVerifier().verify(ServerOwnership.Connection(server.address.port, "secret"), 123) { true }
+        }
+        assertTrue(probes.isEmpty())
+    }
+
+    @Test fun `replacement verification cancels an in flight health probe`() = fixture { server, _ ->
+        val started = java.util.concurrent.CountDownLatch(1)
+        val release = java.util.concurrent.CountDownLatch(1)
+        val cancelled = java.util.concurrent.atomic.AtomicBoolean()
+        server.createContext("/") { exchange ->
+            started.countDown()
+            try { release.await(5, java.util.concurrent.TimeUnit.SECONDS) } finally { exchange.close() }
+        }
+        server.start()
+        val pending = java.util.concurrent.CompletableFuture.supplyAsync {
+            RegisteredConnectionVerifier().verify(ServerOwnership.Connection(server.address.port, "secret"), 123, cancelled::get)
+        }
+        try {
+            assertTrue(started.await(2, java.util.concurrent.TimeUnit.SECONDS))
+            cancelled.set(true)
+            val failure = assertThrows(java.util.concurrent.ExecutionException::class.java) { pending.get(1, java.util.concurrent.TimeUnit.SECONDS) }
+            assertTrue(failure.cause is java.util.concurrent.CancellationException)
+        } finally { release.countDown(); pending.cancel(true) }
+    }
+
     @Test fun `a server accepting anonymous or arbitrary credentials is not registered`() {
         for (acceptAnonymous in listOf(true, false)) fixture { server, probes ->
             server.createContext("/") { exchange ->

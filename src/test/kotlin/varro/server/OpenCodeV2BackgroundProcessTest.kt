@@ -195,7 +195,8 @@ class OpenCodeV2BackgroundProcessTest {
         assertEquals("fast", generated.obj("model").str("variant"))
         assertEquals(listOf("GET /api/session/ses_one", "GET /openapi.json", "POST /api/experimental/generate"), calls)
         for (invalid in listOf("{\"blocking\":\"false\"}", "false", "Here is JSON: {\"blocking\":false}", "{}",
-            "{'blocking':false}", "{blocking:false}", "{\"blocking\":false} trailing")) {
+            "{'blocking':false}", "{blocking:false}", "{\"blocking\":false} trailing", "", "{\"blocking\":false",
+            "```json\n{\"blocking\":false}\n```", "null", "[{\"blocking\":false}]")) {
             verdict = invalid
             assertNull(judge.classify(shell(), "/one") { false })
         }

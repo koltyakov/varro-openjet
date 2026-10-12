@@ -308,9 +308,9 @@ internal class OpenCodeV2Adapter(
                     val inbox = data("GET", "$endpoint/inbox").asArrayOrNull() ?: error("Invalid OpenCode v2 session inbox")
                     val pending = inbox.firstOrNull { it.asObjectOrNull().str("type") == "user" && it.asObjectOrNull().str("delivery") == "steer" }
                         .asObjectOrNull() ?: return result(false)
-                    val messageId = pending.text("id") ?: error("Invalid OpenCode v2 steering message id")
-                    // Re-admit the existing ID to wake it without duplicating input or changing queued items.
-                    raw("POST", "$endpoint/prompt", Json.obj("id" to messageId, "text" to "", "delivery" to "steer", "resume" to true))
+                    check(pending.text("id") != null) { "Invalid OpenCode v2 steering message id" }
+                    // Prompt wakes also drain queued input. Interrupt resumes only existing steering.
+                    raw("POST", "$endpoint/interrupt?resume=true", Json.obj())
                     return result(true)
                 }
                 "fork" -> return result(session(data("POST", "$endpoint/fork", Json.obj("before" to input.get("messageID"))).asJsonObject))

@@ -14,6 +14,7 @@ class ServerOwnershipTest {
         var fail = false
         var listening = setOf(123L)
         var dead = setOf(999L)
+        var accountValue: Account? = null
         override fun listeners(port: Int): Set<Long> {
             check(!fail) { "inspection failed" }
             return listening
@@ -21,6 +22,7 @@ class ServerOwnershipTest {
         override fun executable(pid: Long) = "/usr/bin/opencode"
         override fun birth(pid: Long) = if (pid == 123L) serverBirth else "darwin:host-start"
         override fun alive(pid: Long) = pid !in dead
+        override fun account(pid: Long) = accountValue ?: Account(true, "$pid:${birth(pid)}:fixture-user")
     }
 
     private fun fixture(action: (Path, Path, Identity) -> Unit) {
@@ -142,6 +144,114 @@ class ServerOwnershipTest {
         assertEquals(original, Files.readString(path))
         privateFile(path, Json.stringify(lease().apply { addProperty("password", "changed") }))
         assertThrows(IllegalStateException::class.java) { manager.verifyConnection(4096) }
+    }
+
+    @Test fun `discovered V2 replacements recover the original key without obsolete config`() {
+        for (mode in listOf("different-pid", "reused-pid", "unknown-account", "multiple-records")) fixture { shared, legacy, identity ->
+            val original = shared.resolve("varro-opencode-server-5000.json")
+            val oldLease = lease().apply { addProperty("configPath", "/foreign/retired.json"); addProperty("portMode", "auto") }
+            privateFile(original, Json.stringify(oldLease))
+            var selected = original
+            if (mode == "multiple-records") {
+                selected = shared.resolve("varro-opencode-server-5002.json")
+                privateFile(selected, Json.stringify(oldLease.deepCopy().apply {
+                    addProperty("owner", "newer-owner"); addProperty("createdAt", oldLease.get("createdAt").asLong + 1)
+                }))
+            }
+            identity.listening = if (mode == "reused-pid") setOf(123) else setOf(456)
+            identity.serverBirth = "darwin:replacement"
+            if (mode != "reused-pid") identity.dead += 123L
+            if (mode == "unknown-account") identity.accountValue = ProcessIdentity.Account(null)
+            var probes = 0
+            val manager = ServerOwnership(4096, shared, legacy, identity, verifyCredentials = { fail("Must recover before credential-only fallback"); false },
+                verifyReplacement = { connection, pid, _ ->
+                    probes++
+                    assertEquals(ServerOwnership.Connection(5001, "secret", "varro-user"), connection)
+                    assertEquals(identity.listening.single(), pid)
+                    true
+                })
+            assertEquals(ServerOwnership.Connection(5001, "secret", "varro-user"), manager.connection(5001, "secret", recoverReplacement = true))
+            assertEquals(1, probes)
+            assertEquals(selected, manager.path)
+            assertFalse(manager.credentialOnly)
+            assertEquals(identity.listening.single(), manager.registeredPid)
+            val recovered = ServerOwnership.record(selected)!!
+            assertEquals(5001, recovered.get("port").asInt)
+            assertEquals("active", recovered.str("state"))
+            assertEquals("auto", recovered.str("portMode"))
+            assertNotEquals(oldLease.str("owner"), recovered.str("owner"))
+            assertFalse(recovered.has("configPath"))
+            assertFalse(ServerOwnership.record(Path.of("$selected.managed"), false)!!.has("password"))
+            assertFalse(Files.exists(Path.of("$selected.claim")))
+            assertTrue(manager.refresh(5001))
+            assertFalse(Files.exists(shared.resolve("varro-opencode-server-4096.json")))
+            if (mode == "multiple-records") assertEquals(oldLease, ServerOwnership.record(original))
+            val follower = ServerOwnership(5000, shared, legacy, identity)
+            assertEquals(ServerOwnership.Connection(5001, "secret", "varro-user"), follower.connection(5001, "secret"))
+            assertFalse(follower.refresh(5001))
+            manager.relinquish()
+            assertTrue(follower.refresh(5001))
+        }
+    }
+
+    @Test fun `replacement recovery requires private retired provenance and exact listener account credentials`() {
+        for (mode in listOf("live-original", "unknown-original", "multiple-listeners", "foreign-user", "missing-account-identity",
+            "wrong-account-identity", "wrong-password", "wrong-executable", "public-record", "failed-HTTP", "missing-record")) fixture { shared, legacy, identity ->
+            val path = shared.resolve("varro-opencode-server-4096.json")
+            val oldLease = lease()
+            if (mode == "wrong-executable") oldLease.addProperty("executable", "/different/opencode")
+            if (mode != "missing-record") privateFile(path, Json.stringify(oldLease))
+            identity.listening = if (mode == "multiple-listeners") setOf(456, 789) else setOf(456)
+            if (mode != "live-original" && mode != "unknown-original") identity.dead += 123L
+            if (mode == "unknown-original") identity.fail = true
+            identity.accountValue = when (mode) {
+                "foreign-user" -> ProcessIdentity.Account(false, "456:darwin:host-start:other-user")
+                "missing-account-identity" -> ProcessIdentity.Account(true)
+                "wrong-account-identity" -> ProcessIdentity.Account(true, "789:darwin:host-start:fixture-user")
+                else -> null
+            }
+            if (mode == "public-record" && path.fileSystem.supportedFileAttributeViews().contains("posix")) {
+                Files.setPosixFilePermissions(path, PosixFilePermissions.fromString("rw-r--r--"))
+            }
+            val before = if (Files.exists(path)) Files.readString(path) else null
+            var probes = 0
+            val manager = ServerOwnership(4096, shared, legacy, identity, verifyCredentials = { false },
+                verifyReplacement = { _, _, _ -> probes++; false })
+            assertNull(mode, manager.connection(5001, if (mode == "wrong-password") "different" else "secret", recoverReplacement = true))
+            assertEquals(mode, if (mode == "failed-HTTP" || mode == "public-record" && !path.fileSystem.supportedFileAttributeViews().contains("posix")) 1 else 0, probes)
+            assertNull(manager.registeredPid)
+            assertEquals(before, if (Files.exists(path)) Files.readString(path) else null)
+            assertFalse(Files.exists(Path.of("$path.managed")))
+        }
+    }
+
+    @Test fun `replacement recovery does not publish through busy claims changed records or cancellation`() {
+        for (mode in listOf("busy-claim", "changed-record", "changed-listener", "cancelled")) fixture { shared, legacy, identity ->
+            val path = shared.resolve("varro-opencode-server-4096.json")
+            privateFile(path, Json.stringify(lease()))
+            identity.listening = setOf(456)
+            identity.dead += 123L
+            val owner = ServerOwnership(4096, shared, legacy, identity)
+            if (mode == "busy-claim") assertTrue(owner.beginLaunch())
+            var cancelled = false
+            var expected = Files.readString(path)
+            val manager = ServerOwnership(4096, shared, legacy, identity, verifyReplacement = { _, _, _ ->
+                when (mode) {
+                    "changed-record" -> { privateFile(path, Json.stringify(lease().apply { addProperty("owner", "changed-owner") })); expected = Files.readString(path) }
+                    "changed-listener" -> identity.listening = setOf(789)
+                    "cancelled" -> cancelled = true
+                }
+                true
+            })
+            try {
+                if (mode == "cancelled") assertThrows(java.util.concurrent.CancellationException::class.java) {
+                    manager.connection(5001, "secret", recoverReplacement = true, isCancelled = { cancelled })
+                } else assertThrows(IllegalStateException::class.java) { manager.connection(5001, "secret", recoverReplacement = true) }
+                assertEquals(expected, Files.readString(path))
+                assertFalse(Files.exists(Path.of("$path.managed")))
+                assertNull(manager.registeredPid)
+            } finally { if (mode == "busy-claim") owner.endLaunch() }
+        }
     }
 
     @Test fun `failed inspection can attach using a private credential companion`() = fixture { shared, legacy, identity ->

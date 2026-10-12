@@ -104,13 +104,22 @@ Unconfirmable fresh launches can retain a private companion and detach their pro
 of claiming ownership. Startup restores private credentials before consulting the IDE vault.
 
 Registered process exits trigger at most three recovery attempts. Followers wait one second before
-rerunning startup, reread the shared registration, and compete under the same launch claim if no
-owner replaces the server. External and credential-only connections are never implicitly relaunched.
+rerunning startup, acquire the original launch claim before registration or health reads, and
+compete under that claim if no owner replaces the server. External and credential-only connections
+are never implicitly relaunched.
 Background registration checks run every thirty seconds. A verified replacement triggers recovery;
 failed inspection is logged without disconnecting an established connection.
 `VARRO_TEST_STATE_ROOT`, when set to an absolute path, isolates server records in its `servers`
 directory and disables legacy server-record discovery. Unit fixtures can also supply a server-state
 directory explicitly; they do not use production records.
+
+Explicit V2 service discovery can recover lifecycle ownership after a CLI replacement changes
+PID or port. The discovered credentials must match a private retired Varro lease, the executable
+must match, and the sole listener's PID and birth identity must survive reinspection under the
+original claim. Known foreign users are rejected; unknown account evidence is not same-user proof.
+The authenticated V2 HTTP PID must match the OS listener, with `/api/status` fallback on 2.0.5.
+Recovery publishes a new owner and drops obsolete injected configuration. Generic private-credential
+attachment and PID-free companions remain read-only and do not rewrite ownership evidence.
 
 With automatic startup disabled and no managed process, the connection is attach-only. It uses the configured port and skips local service discovery, ownership recovery and CLI maintenance. Model routing reads the server's configuration, and summaries and usage reports use API history rather than local databases. Usage reports support up to 250 sessions through the API. File-based configuration, quota polling with local credentials, local CLI actions and local history import report that the action must run on the server host. Session permissions and API-backed Markdown transcript export remain available.
 
@@ -227,7 +236,7 @@ Permanent deletion and expiry retain the recycle entry until OpenCode returns `t
 
 `ModelRoutingService` writes small-model and agent-model assignments through OpenCode's global configuration API. Commit-message, auto-approve and prompt-completion model assignments update `VarroSettings`.
 
-Prompt completion uses V2 provider/config catalogs and credentials read through the selected authenticated server. Credentials never reach the webview or come from a local database. The host admits only checked provider packages with a resolved API key and HTTPS or explicit loopback HTTP endpoints. It chooses the lowest advertised reasoning effort, strips tools and competing output budgets, and makes one non-streaming inference request with an eight-second total deadline. Catalogs are cached for thirty seconds by server and directory; credentials refresh on every request. Refresh, authentication and config events invalidate the cache. Response bodies are bounded, redirects and retries are disabled, and errors never expose arbitrary provider bodies. Autocomplete never creates helper sessions. Legacy helper metadata or exact helper titles plus deny-all rules keep older Varro utility sessions out of catalogs and notifications.
+Prompt completion uses V2 provider/config catalogs and credentials read through the selected authenticated server. Credentials never reach the webview or come from a local database. The host admits only checked provider packages with a resolved API key and HTTPS or explicit loopback HTTP endpoints. It chooses the lowest advertised reasoning effort, strips tools and competing output budgets, and makes one non-streaming inference request with an eight-second total deadline. Catalogs are cached for thirty seconds by server and directory; credentials refresh on every request. Refresh, authentication and config events invalidate the cache. Response bodies are bounded, redirects and retries are disabled, and errors never expose arbitrary provider bodies. Autocomplete never creates helper sessions. The host and browser both remove duplicate completion separators when the draft already ends in whitespace, preserving intentional line breaks and partial-word continuations. Legacy helper metadata or exact helper titles plus deny-all rules keep older Varro utility sessions out of catalogs and notifications.
 
 `SessionTransfers` persists at most 512 server-bound summaries in the originating project's store. A verified move updates the local link and publishes `session/transferred`, without patching the server session. Stale durable move events are acknowledged but cannot reopen an obsolete destination. Older catalog snapshots cannot undo a confirmed move. Links authorize only history reads when the destination is outside the project's open roots; prompts, metadata changes and other session actions are rejected. Reads use the destination scope without activating that folder. Opening the destination requires an explicit `session/open-transferred` action, a fresh location check, and a locally available folder. The folder opens in a new IDE window; attach-only connections do not translate server paths into local projects.
 
@@ -301,7 +310,7 @@ These differences are separate from the V2 credential-source fix and remain unpo
 
 **Project roots.** The catalog uses the JetBrains project's primary root and content roots. The history scope can be `directory`, `descendants` or `project`.
 
-**Server ownership.** A project owns only the process it spawned. Varro connects to an existing healthy, compatible server and can send chat and configuration requests to it, but does not stop that process. Managed startup retries subsequent ports after a port-in-use failure. There is no cross-process ownership lease.
+**Server ownership.** Varro products coordinate through the shared leases and launch claims described above. Lifecycle operations require independently verified current-host ownership; external and credential-only servers cannot be stopped. Managed startup retries subsequent ports after a port-in-use failure.
 
 **CLI maintenance.** `IdleMaintenance` installs background CLI updates only for managed servers when enabled and idle. Busy sessions, queued messages and active Ralph runs prevent maintenance. The updated CLI is used on the next start.
 

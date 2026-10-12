@@ -329,7 +329,9 @@ internal class PromptCompletionService(
 
         internal fun normalizeSuffix(value: String?, draft: String): String {
             val suffix = value?.removePrefix(draft) ?: return ""
-            return if (suffix.isBlank() || suffix.length > 240 || suffix.any { it.code in 0..8 || it.code in 11..31 || it.code == 127 }) "" else suffix.trimEnd()
+            if (suffix.isBlank() || suffix.length > 240 || suffix.any { it.code in 0..8 || it.code in 11..31 || it.code == 127 }) return ""
+            // The draft supplies the separator; intentional suffix line breaks remain intact.
+            return (if (draft.lastOrNull()?.isWhitespace() == true) suffix.trimStart(' ', '\t') else suffix).trimEnd()
         }
 
         private fun completionText(protocol: String, payload: JsonObject): String = when (protocol) {

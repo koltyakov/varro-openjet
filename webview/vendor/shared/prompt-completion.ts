@@ -133,5 +133,6 @@ export function normalizePromptSuffix(value: unknown, draft: string): string {
     /[\u0000-\u0008\u000B-\u001F\u007F]/u.test(suffix)
   )
     return '';
-  return suffix.trimEnd();
+  // The draft already supplies the word separator; keep intentional suffix line breaks.
+  return (/\s$/u.test(draft) ? suffix.replace(/^[ \t]+/u, '') : suffix).trimEnd();
 }

@@ -80,6 +80,7 @@ class OpenCodeServer(
     private val maintenanceStarted = AtomicBoolean(false)
     private var recoveryAttempts = 0
     private var runningSince = 0L
+    @Volatile private var followsManagedRegistration = false
 
     private val statusListeners = ConcurrentHashMap.newKeySet<(ServerStatus) -> Unit>()
     private val eventListeners = ConcurrentHashMap.newKeySet<(JsonElement) -> Unit>()
@@ -191,8 +192,15 @@ class OpenCodeServer(
         phase.compareAndSet(Phase.IDLE, Phase.STARTING)
         setStatus(ServerStatus.Starting)
 
+        var recoveryClaimHeld = false
         try {
-            val restored = settings.serverAutoStart && process.restoreConnection()
+            // A replacement listener can open before its owner publishes the new credentials.
+            // Recovering followers must wait for that publication before registration or HTTP reads.
+            if (followsManagedRegistration && settings.serverAutoStart) {
+                if (!awaitLaunchClaim(generation)) return
+                recoveryClaimHeld = true
+            }
+            val restored = settings.serverAutoStart && process.restoreConnection { disposeGeneration.get() != generation }
             var discovered = false
             // Validate the registered service identity before adopting its port.
             if (settings.serverAutoStart && !restored) {
@@ -207,7 +215,7 @@ class OpenCodeServer(
                         process.resetPortState()
                         transport.resetProtocol()
                     } else {
-                        process.adoptService(registration)
+                        process.adoptService(registration) { disposeGeneration.get() != generation }
                         discovered = true
                         break
                     }
@@ -218,7 +226,7 @@ class OpenCodeServer(
             var existing = if (probeExisting) transport.readHealthInfo() else HealthInfo(false)
             if (probeExisting && !existing.healthy && transport.healthFailure?.contains("authentication") == true) {
                 // Another editor can publish the credential lease during handoff.
-                if (settings.serverAutoStart) process.restoreConnection()
+                if (settings.serverAutoStart) process.restoreConnection { disposeGeneration.get() != generation }
                 existing = transport.readHealthInfo()
             }
             if (probeExisting && !existing.healthy && transport.healthFailure?.contains("authentication") == true) {
@@ -278,15 +286,10 @@ class OpenCodeServer(
             }
 
             // 4. Spawn, retrying across ports while the port is taken.
-            val claimDeadline = System.currentTimeMillis() + STARTUP_TIMEOUT_MS
-            while (!process.beginLaunch()) {
-                if (disposeGeneration.get() != generation) return
-                check(System.currentTimeMillis() < claimDeadline) { "Another Varro editor is still preparing the OpenCode server; retry startup" }
-                Thread.sleep(HEALTH_POLL_INTERVAL_MS)
-            }
+            if (!recoveryClaimHeld && !awaitLaunchClaim(generation)) return
             try {
                 // The editor holding the claim may have just published its server.
-                val sharedRestored = process.restoreConnection()
+                val sharedRestored = process.restoreConnection { disposeGeneration.get() != generation }
                 val probeShared = sharedRestored || process.canProbeUnregisteredService
                 val shared = if (probeShared) transport.readHealthInfo() else HealthInfo(false)
                 if (shared.healthy) {
@@ -306,14 +309,17 @@ class OpenCodeServer(
                     return
                 }
             } finally {
-                process.endLaunch()
+                if (!recoveryClaimHeld) process.endLaunch()
             }
 
             serverVersion.set(transport.readHealthInfo().version ?: installed)
             finishStart(generation)
         } catch (failure: OpenCodeCliMissingException) {
+            if (disposeGeneration.get() != generation) return
             setStatus(missingCliStatus(failure.info))
         } catch (failure: Exception) {
+            if (failure is InterruptedException) Thread.currentThread().interrupt()
+            if (disposeGeneration.get() != generation) return
             log.warn("OpenCode server start failed", failure)
             setStatus(
                 ServerStatus.Error(
@@ -322,8 +328,23 @@ class OpenCodeServer(
                 ),
             )
         } finally {
+            if (recoveryClaimHeld) process.endLaunch()
             phase.compareAndSet(Phase.STARTING, Phase.IDLE)
         }
+    }
+
+    private fun awaitLaunchClaim(generation: Int): Boolean {
+        val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(STARTUP_TIMEOUT_MS)
+        while (disposeGeneration.get() == generation) {
+            if (process.beginLaunch()) {
+                if (disposeGeneration.get() == generation) return true
+                process.endLaunch()
+                return false
+            }
+            check(System.nanoTime() < deadline) { "Another Varro editor is still preparing the OpenCode server; retry startup" }
+            Thread.sleep(HEALTH_POLL_INTERVAL_MS)
+        }
+        return false
     }
 
     /** Spawns the process and polls health. Returns `false` when the attempt fails. */
@@ -427,6 +448,7 @@ class OpenCodeServer(
 
     private fun finishStart(generation: Int) {
         if (disposeGeneration.get() != generation) return
+        followsManagedRegistration = false
         // `degraded` until the stream actually connects; the transport promotes it
         // to healthy, so the UI never claims live updates it does not have.
         setStatus(ServerStatus.Running(url(), EventStreamState.DEGRADED, transport.apiVersion))
@@ -587,6 +609,7 @@ class OpenCodeServer(
                 return@execute
             }
             recoveryAttempts += 1
+            followsManagedRegistration = true
             disposeGeneration.incrementAndGet()
             transport.stopEventStream()
             transport.abortRequests()

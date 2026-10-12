@@ -20,6 +20,7 @@ internal class ServerOwnership(
     private val temporaryDirectory: Path = Path.of(System.getenv("TMPDIR") ?: System.getProperty("java.io.tmpdir")),
     private val inspect: ProcessIdentity = ProcessIdentity(),
     private val verifyCredentials: (Connection) -> Boolean = RegisteredConnectionVerifier()::verify,
+    private val verifyReplacement: (Connection, Long, () -> Boolean) -> Boolean = RegisteredConnectionVerifier()::verify,
 ) {
     internal data class Connection(val port: Int, val password: String?, val username: String = "opencode")
     private val host = UUID.randomUUID().toString()
@@ -38,11 +39,19 @@ internal class ServerOwnership(
     @Volatile private var attachment: Attachment? = null
     @Volatile private var admitted: JsonObject? = null
     private var verifiedAt = 0L
+    var replacementRecovered = false
+        private set
     val credentialOnly: Boolean get() = attachment != null
     val registeredPid: Long? get() = admitted?.get("pid")?.asLong
 
     /** Discovery keeps the original coordination key, even when another editor configured it. */
-    @Synchronized fun connection(port: Int? = null, password: String? = null): Connection? {
+    @Synchronized fun connection(port: Int? = null, password: String? = null, recoverReplacement: Boolean = false,
+        isCancelled: () -> Boolean = { false }): Connection? {
+        fun checkCurrent() {
+            if (isCancelled() || Thread.currentThread().isInterrupted) throw java.util.concurrent.CancellationException("OpenCode registration recovery cancelled")
+        }
+        checkCurrent()
+        replacementRecovered = false
         val candidates = linkedSetOf(path)
         if (port != null) {
             val directories = if (System.getenv("VARRO_TEST_STATE_ROOT").isNullOrBlank()) listOf(directory, temporaryDirectory) else listOf(directory)
@@ -55,11 +64,12 @@ internal class ServerOwnership(
         val records = candidates.mapNotNull { candidate ->
             val lease = record(candidate)
             val value = lease ?: if (!Files.exists(candidate)) record(Path.of("$candidate.managed"), false) else null
-            value?.takeIf { port == null || it.get("port").asInt == port }?.let { candidate to it }
+            value?.let { candidate to it }
         }
-        val matching = records.filter { (_, value) -> runCatching { matches(value) }.getOrDefault(false) }
+        val matching = records.filter { (_, value) -> (port == null || value.get("port").asInt == port) && runCatching { matches(value) }.getOrDefault(false) }
         check(matching.size <= 1) { "Conflicting Varro server registrations; ownership records were left untouched" }
         matching.singleOrNull()?.let { (candidate, value) ->
+            checkCurrent()
             check(launchClaim == null || path == candidate) { "Cannot change the Varro coordination key during a launch" }
             path = candidate
             attachment = null
@@ -68,14 +78,19 @@ internal class ServerOwnership(
                 ?.takeIf { it.str("owner") == value.str("owner") && it.get("port") == value.get("port") }
             return if (value.str("password") == null && companion != null) credentials(companion) else credentials(value)
         }
+        if (recoverReplacement && port != null && password != null) {
+            recoverDiscoveredReplacement(records, port, password, isCancelled)?.let { return it }
+        }
         // A private credential proves attachment only, never authority over a replacement PID.
         for (candidate in candidates) {
             val values = listOfNotNull(connectionRecord(Path.of("$candidate.credentials")), record(candidate))
             for (value in values) {
+                checkCurrent()
                 val connection = credentials(value)
                 if (port != null && connection.port != port && (password == null || password != connection.password)) continue
                 val target = if (port == null) connection else connection.copy(port = port)
                 if (target.password == null || !verifyCredentials(target)) continue
+                checkCurrent()
                 val source = if (value.has("pid")) candidate else Path.of("$candidate.credentials")
                 if (read(source) != value) continue
                 check(launchClaim == null || path == candidate) { "Cannot change the Varro coordination key during a launch" }
@@ -89,6 +104,78 @@ internal class ServerOwnership(
         attachment = null
         admitted = null
         return null
+    }
+
+    /** Only explicit service discovery can recover lifecycle ownership from a retired private lease. */
+    private fun recoverDiscoveredReplacement(records: List<Pair<Path, JsonObject>>, port: Int, password: String,
+        isCancelled: () -> Boolean): Connection? {
+        fun checkCurrent() {
+            if (isCancelled() || Thread.currentThread().isInterrupted) throw java.util.concurrent.CancellationException("OpenCode replacement recovery cancelled")
+        }
+        checkCurrent()
+        val candidates = records.filter { (_, value) -> value.get("version")?.asInt == 1 && value.str("password") == password }
+        if (candidates.isEmpty()) return null
+        val pid = runCatching { inspect.listeners(port).singleOrNull() }.getOrNull() ?: return null
+        val executable = runCatching { inspect.executable(pid) }.getOrNull() ?: return null
+        val birth = runCatching { inspect.birth(pid) }.getOrNull() ?: return null
+        val account = inspect.account(pid)
+        fun accountMatches(value: ProcessIdentity.Account): Boolean = value.sameUser != false &&
+            (value.sameUser != true || value.identity != null) &&
+            (value.identity == null || value.identity.startsWith("$pid:$birth:"))
+        if (!accountMatches(account)) return null
+        val compatible = candidates.filter { (_, value) -> inspect.normalizeExecutable(value.str("executable")!!) == inspect.normalizeExecutable(executable) }
+        if (compatible.isEmpty() || compatible.any { (_, value) -> !runCatching { retired(value) }.getOrDefault(false) }) return null
+        val (selectedPath, previous) = compatible.sortedWith(compareByDescending<Pair<Path, JsonObject>> { it.second.get("createdAt").asDouble }
+            .thenBy { it.first.toString() }).first()
+        val connection = Connection(port, password, previous.str("username") ?: "opencode")
+        if (!verifyReplacement(connection, pid, isCancelled)) return null
+        checkCurrent()
+        val previousPath = path
+        check(launchClaim == null || path == selectedPath) { "Cannot change the Varro coordination key during a launch" }
+        path = selectedPath
+        var recovered = false
+        try {
+            val result = coordinated {
+                val current = record(path)
+                if (current != previous) {
+                    if (current != null && current.str("password") == password && current.str("username") == previous.str("username") && matches(current)) {
+                        checkCurrent()
+                        attachment = null
+                        admitted = current.deepCopy()
+                        replacementRecovered = true
+                        return@coordinated credentials(current)
+                    }
+                    error("The Varro registration changed during shared-service recovery; retry")
+                }
+                val lease = Json.obj("version" to 1, "pid" to pid, "port" to port, "executable" to executable,
+                    "birthIdentity" to birth, "owner" to UUID.randomUUID().toString(), "createdAt" to System.currentTimeMillis(),
+                    "portMode" to "auto", "password" to password)
+                if (connection.username != "opencode") lease.addProperty("username", connection.username)
+                identifyHost(lease)
+                val verifiedAccount = inspect.account(pid)
+                check(accountMatches(verifiedAccount) && (account.identity == null || verifiedAccount.identity == account.identity) &&
+                    retired(current) && matches(lease)) { "The OpenCode listener changed during shared-service recovery; it was left untouched" }
+                checkCurrent()
+                // A replacement did not inherit the retired launch's injected config or owner token.
+                write(marker, lease.deepCopy().apply {
+                    listOf("version", "host", "hostPid", "hostBirthIdentity", "state", "password", "username").forEach(::remove)
+                })
+                write(path, lease)
+                if (isCancelled() || Thread.currentThread().isInterrupted) {
+                    write(path, lease.apply { addProperty("state", "relinquished") })
+                    checkCurrent()
+                }
+                attachment = null
+                admitted = lease.deepCopy()
+                replacementRecovered = true
+                credentials(lease)
+            }
+            check(result != null) { "Another Varro window is recovering the shared OpenCode service; retry shortly" }
+            recovered = true
+            return result
+        } finally {
+            if (!recovered) path = previousPath
+        }
     }
 
     @Synchronized fun verifyConnection(port: Int, reconnect: Boolean = false) {
@@ -389,10 +476,22 @@ internal class ServerOwnership(
 }
 
 internal open class ProcessIdentity {
+    data class Account(val sameUser: Boolean?, val identity: String? = null)
     private val os = System.getProperty("os.name").lowercase()
     private val windows = os.contains("windows")
     private val mac = os.contains("mac")
     open fun alive(pid: Long): Boolean = ProcessHandle.of(pid).map { it.isAlive }.orElse(false)
+    /** Missing OS account evidence is unknown, never same-user proof. */
+    open fun account(pid: Long): Account = runCatching {
+        check(alive(pid)) { "OpenCode listener exited during account inspection" }
+        val start = birth(pid)
+        val users = if (windows) command("powershell.exe", "-NoProfile", "-Command",
+            "\$p = Get-CimInstance Win32_Process -Filter \"ProcessId = $pid\"; if (\$p) { \$o = Invoke-CimMethod -InputObject \$p -MethodName GetOwnerSid; if (\$o.ReturnValue -eq 0) { \$o.Sid; [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value } }")
+            .lines().map(String::trim).filter(String::isNotEmpty)
+        else listOf(command("ps", "-p", "$pid", "-o", "uid="), command("id", "-u")).map(String::trim)
+        check(users.size == 2 && users.all { it.isNotEmpty() } && alive(pid) && birth(pid) == start) { "Incomplete OpenCode account identity" }
+        Account(users[0] == users[1], "$pid:$start:${users[0]}")
+    }.getOrElse { Account(null) }
     protected open fun command(vararg arguments: String): String {
         val process = ProcessBuilder(*arguments).redirectError(ProcessBuilder.Redirect.DISCARD).start()
         val output = java.util.concurrent.CompletableFuture.supplyAsync { process.inputStream.bufferedReader().use { it.readText() } }

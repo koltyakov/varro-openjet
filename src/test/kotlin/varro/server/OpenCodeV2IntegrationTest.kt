@@ -22,10 +22,12 @@ class OpenCodeV2IntegrationTest {
         val root = temporary.newFolder().toPath()
         val workspace = Files.createDirectory(root.resolve("workspace"))
         val providerRequests = java.util.concurrent.atomic.AtomicInteger()
+        val streamGate = AtomicReference<java.util.concurrent.CountDownLatch?>()
         val provider = com.sun.net.httpserver.HttpServer.create(java.net.InetSocketAddress("127.0.0.1", 0), 0)
         provider.createContext("/") { exchange ->
             providerRequests.incrementAndGet()
             val input = Json.parse(exchange.requestBody.bufferedReader().readText()).asJsonObject
+            streamGate.get()?.await(20, TimeUnit.SECONDS)
             val usage = Json.obj("prompt_tokens" to 10, "completion_tokens" to 3, "total_tokens" to 13)
             val response = if (input.bool("stream") == true) {
                 exchange.responseHeaders.add("Content-Type", "text/event-stream")
@@ -113,6 +115,47 @@ class OpenCodeV2IntegrationTest {
                 "parts" to listOf(Json.obj("type" to "text", "text" to "Reply using the fixture provider")))).data.asObjectOrNull()
             assertTrue(answer.arr("parts")!!.any { it.asObjectOrNull().str("text") == "OpenJet stream verified." })
             assertTrue(events.any { it.asObjectOrNull().str("type") == "session.next.text.delta" })
+            for (samplingDelay in listOf(0L, 75L, 250L)) {
+                val steeringSession = transport.request("POST", "/session", Json.obj("title" to "Isolated steering resume fixture")).data.asObjectOrNull().str("id")!!
+                val gate = java.util.concurrent.CountDownLatch(1)
+                streamGate.set(gate)
+                val requestCount = providerRequests.get()
+                try {
+                    transport.request("POST", "/session/$steeringSession/prompt_async", Json.obj("model" to Json.obj("providerID" to "fixture", "modelID" to "fixture"),
+                        "parts" to listOf(Json.obj("type" to "text", "text" to "Wait for cancellation."))))
+                    waitFor { providerRequests.get() > requestCount }
+                    transport.request("POST", "/session/$steeringSession/prompt_async", Json.obj("messageID" to "msg_pending_steer", "delivery" to "steer",
+                        "parts" to listOf(Json.obj("type" to "text", "text" to "Keep this steering pending."))))
+                    transport.request("POST", "/session/$steeringSession/abort")
+                    waitFor {
+                        transport.request("GET", "/session/$steeringSession/message").data!!.asJsonArray.any {
+                            it.asObjectOrNull().obj("info").obj("error").str("name") in listOf("aborted", "MessageAbortedError")
+                        }
+                    }
+                    gate.countDown()
+                    streamGate.set(null)
+                    transport.request("POST", "/api/session/$steeringSession/prompt", Json.obj("id" to "msg_still_queued", "text" to "Leave this queued prompt parked.",
+                        "delivery" to "queue", "resume" to false))
+                    assertTrue(transport.request("POST", "/session/$steeringSession/resume-steering").data!!.asBoolean)
+                    waitFor {
+                        val status = transport.request("GET", "/session/status").data.asObjectOrNull().obj(steeringSession)
+                        val history = transport.request("GET", "/session/$steeringSession/message").data!!.asJsonArray
+                        (status == null || status.str("type") == "idle") && history.any {
+                            it.asObjectOrNull().arr("parts")?.any { part -> part.asObjectOrNull().str("text") == "OpenJet stream verified." } == true
+                        }
+                    }
+                    Thread.sleep(samplingDelay)
+                    val history = transport.request("GET", "/session/$steeringSession/message").data!!.asJsonArray.map { it.asJsonObject }
+                    assertNull(history.single { it.obj("info").str("id") == "msg_pending_steer" }.obj("info").str("pendingDelivery"))
+                    assertEquals(2, history.count { it.obj("info").str("role") == "user" && it.obj("info").str("pendingDelivery") == null })
+                    assertEquals("queue", history.single { it.obj("info").str("id") == "msg_still_queued" }.obj("info").str("pendingDelivery"))
+                } finally {
+                    gate.countDown()
+                    streamGate.set(null)
+                    transport.request("POST", "/session/$steeringSession/abort")
+                    transport.request("DELETE", "/session/$steeringSession")
+                }
+            }
             val reopened = transport.request("GET", "/session/$id/message?limit=20").data!!.asJsonArray
             assertTrue(reopened.any { it.asObjectOrNull().obj("info").str("id") == answer.obj("info").str("id") })
             val helper = transport.request("POST", "/session/$id/message", Json.obj("system" to "Generate a short summary", "parts" to listOf(Json.obj("type" to "text", "text" to "Summarize")))).data.asObjectOrNull()
@@ -164,11 +207,20 @@ class OpenCodeV2IntegrationTest {
             transport.request("DELETE", "/session/$id")
             assertFalse(transport.request("GET", "/session").data!!.asJsonArray.any { it.asObjectOrNull().str("id") == id })
         } finally {
+            streamGate.getAndSet(null)?.countDown()
             transport.dispose()
             process.destroy()
             if (!process.waitFor(5, TimeUnit.SECONDS)) process.destroyForcibly()
             reader.join(1000)
             provider.stop(0)
+        }
+    }
+
+    private fun waitFor(condition: () -> Boolean) {
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10)
+        while (!condition()) {
+            assertTrue("Released-server fixture did not reach the expected state", System.nanoTime() < deadline)
+            Thread.sleep(20)
         }
     }
 }

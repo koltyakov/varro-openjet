@@ -158,7 +158,8 @@
   align-items: center;
   justify-content: center;
   min-height: 24px;
-  padding: 3px 8px;
+  /* Shift the labels up one pixel for optical centering without trimming font metrics. */
+  padding: 2px 8px 4px;
   border: 1px solid var(--color-vscode-border);
   border-radius: 4px;
   color: inherit;

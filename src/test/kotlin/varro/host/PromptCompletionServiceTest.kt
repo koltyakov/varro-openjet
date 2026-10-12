@@ -173,6 +173,17 @@ class PromptCompletionServiceTest {
         assertEquals("", fixture.complete().str("suffix"))
     }
 
+    @Test fun `completion strips duplicate separators but preserves word continuations and line breaks`() {
+        for (separator in listOf(" ", "  ", "\t", "\n")) {
+            val draft = "Add a feature$separator"
+            for (suffix in listOf(" with tests", " \t with tests  ", "$draft with tests")) {
+                assertEquals("with tests", PromptCompletionService.normalizeSuffix(suffix, draft))
+            }
+        }
+        assertEquals("ner?", PromptCompletionService.normalizeSuffix("ner?", "Show it in the cor"))
+        assertEquals("\nThen add tests.", PromptCompletionService.normalizeSuffix("\nThen add tests.", "Add a feature "))
+    }
+
     @Test fun `cancellation prevents setup and test does not swallow it`() {
         val fixture = Fixture()
         assertThrows(CancellationException::class.java) { fixture.complete(cancelled = { true }) }
