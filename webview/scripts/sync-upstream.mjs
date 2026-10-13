@@ -185,9 +185,18 @@ if (updatedDependencies > 0) {
   );
 }
 
+const metadata = {
+  ...config,
+  revision,
+  opencodeDependencies: {
+    sdk: upstreamPackage.dependencies['@opencode-ai/sdk'],
+    client: upstreamPackage.dependencies['@opencode/client'],
+  },
+  sourceHash: vendorHash(webviewRoot, config.copy),
+};
 writeFileSync(
   join(webviewRoot, 'vendor', 'UPSTREAM.json'),
-  `${JSON.stringify({ ...config, revision, sourceHash: vendorHash(webviewRoot, config.copy) }, null, 2)}\n`,
+  `${JSON.stringify(metadata, null, 2)}\n`,
   'utf8'
 );
 

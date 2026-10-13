@@ -13,7 +13,7 @@
   margin-bottom: 8px;
   font-size: var(--varro-chat-font-size, var(--vscode-font-size, 13px));
   line-height: var(--rich-composer-line-height);
-  color: var(--color-vscode-input-fg);
+  color: var(--color-vscode-fg);
   outline: none;
   font-family: inherit;
   font-weight: 400;
@@ -44,6 +44,7 @@
 .rich-composer[data-empty='true']::before {
   content: attr(data-placeholder);
   color: var(--color-vscode-input-placeholder);
+  opacity: 0.8;
   pointer-events: none;
   position: absolute;
   left: 4px;
@@ -2638,6 +2639,10 @@ kbd {
 }
 
 .chat-image-preview-context-menu {
+  z-index: var(--z-modal-raised);
+}
+
+.session-action-feedback.chat-image-preview-feedback {
   z-index: var(--z-modal-raised);
 }
 

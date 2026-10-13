@@ -16,7 +16,7 @@ import java.util.concurrent.atomic.AtomicReference
 class OpenCodeV2IntegrationTest {
     @JvmField @Rule val temporary = TemporaryFolder()
 
-    @Test fun `released server supports authenticated lifecycle history and pending input`() {
+    @Test(timeout = 180_000) fun `released server supports authenticated lifecycle history and pending input`() {
         val binary = System.getenv("VARRO_OPENCODE_TEST_BINARY")
         assumeTrue("Set VARRO_OPENCODE_TEST_BINARY to a released v2 CLI", !binary.isNullOrBlank())
         val root = temporary.newFolder().toPath()
@@ -47,16 +47,34 @@ class OpenCodeV2IntegrationTest {
         provider.start()
         Files.writeString(workspace.resolve("opencode.json"), Json.stringify(Json.obj("model" to "fixture/fixture", "provider" to Json.obj("fixture" to Json.obj(
             "npm" to "@ai-sdk/openai-compatible", "name" to "Fixture", "options" to Json.obj("baseURL" to "http://127.0.0.1:${provider.address.port}/v1", "apiKey" to "fixture-only"),
-            "models" to Json.obj("fixture" to Json.obj("name" to "Fixture", "cost" to Json.obj("input" to 2, "output" to 8), "limit" to Json.obj("context" to 32000, "output" to 1000))))))))
+             "models" to Json.obj("fixture" to Json.obj("name" to "Fixture", "cost" to Json.obj("input" to 2, "output" to 8), "limit" to Json.obj("context" to 32000, "output" to 1000))))))))
+        val environment = System.getenv().filterKeys { it.equals("PATH", true) || it.equals("SystemRoot", true) } + mapOf(
+            "HOME" to root.toString(), "USERPROFILE" to root.toString(), "LOCALAPPDATA" to root.resolve("local").toString(),
+            "APPDATA" to root.resolve("appdata").toString(), "TMPDIR" to root.toString(), "TEMP" to root.toString(),
+            "XDG_CONFIG_HOME" to root.resolve("config").toString(), "XDG_DATA_HOME" to root.resolve("data").toString(),
+            "XDG_STATE_HOME" to root.resolve("state").toString(), "XDG_CACHE_HOME" to root.resolve("cache").toString(),
+            "OPENCODE_DB" to root.resolve("test.db").toString(), "VARRO_TEST_STATE_ROOT" to root.toString(),
+        )
+        val installedVersion = OpenCodeCli({ binary!! }, { workspace.toString() }, environment).readInstalledVersion()
+            ?: error("Could not verify the released fixture CLI version")
+        System.getenv("VARRO_OPENCODE_TEST_VERSION")?.let { assertEquals(it, installedVersion) }
+        if (OpenCodeCli.compareVersions(installedVersion, "2.0.27") >= 0) {
+            // Keep the legacy project config, and exercise stateless generation with a native V2 provider.
+            val global = Files.createDirectories(root.resolve("config/opencode"))
+            Files.writeString(global.resolve("opencode.json"), Json.stringify(Json.obj(
+                "\$schema" to "https://opencode.ai/config.json", "providers" to Json.obj("fixture" to Json.obj(
+                    "package" to "@opencode/ai/providers/openai-compatible",
+                    "settings" to Json.obj("baseURL" to "http://127.0.0.1:${provider.address.port}/v1", "apiKey" to "fixture-only"),
+                    "models" to Json.obj("fixture" to Json.obj("name" to "Fixture", "limit" to Json.obj("context" to 32000, "output" to 1000))),
+                )),
+            )))
+        }
         val port = ServerSocket(0).use { it.localPort }
         val password = AtomicReference<String?>()
         val parser = OpenCodeStartupOutput { password.set(it) }
         val process = ProcessBuilder(binary!!, "serve", "--port", port.toString()).directory(workspace.toFile()).redirectErrorStream(true).apply {
-            val path = environment()["PATH"].orEmpty()
             environment().clear()
-            environment().putAll(mapOf("PATH" to path, "HOME" to root.toString(), "XDG_CONFIG_HOME" to root.resolve("config").toString(),
-                "XDG_DATA_HOME" to root.resolve("data").toString(), "XDG_STATE_HOME" to root.resolve("state").toString(),
-                "XDG_CACHE_HOME" to root.resolve("cache").toString(), "OPENCODE_DB" to root.resolve("test.db").toString()))
+            environment().putAll(environment)
         }.start()
         val output = StringBuilder()
         val reader = Thread {
@@ -78,12 +96,26 @@ class OpenCodeV2IntegrationTest {
             while (!transport.checkHealth() && process.isAlive && System.nanoTime() < deadline) Thread.sleep(100)
             assertTrue(synchronized(output) { output.toString() }, transport.checkHealth())
             assertEquals(2, transport.apiVersion)
+            val version = transport.readHealthInfo().version ?: error("Released server did not report its version")
+            assertEquals(installedVersion, version)
+            System.getenv("VARRO_OPENCODE_TEST_VERSION")?.let { assertEquals(it, version) }
             assertNotNull(password.get())
             val beforeGeneration = transport.request("GET", "/session").data
-            val oneShot = varro.host.OneShotGeneration(transport::request)
-            assertNull(oneShot.generate(2, "Return a short summary",
-                Json.obj("providerID" to "fixture", "modelID" to "fixture"), RequestOptions(directory = workspace.toString())))
-            assertEquals(0, providerRequests.get())
+            val generationCalls = mutableListOf<String>()
+            val oneShot = varro.host.OneShotGeneration { method, path, body, options ->
+                generationCalls += "$method $path"
+                try { transport.request(method, path, body, options) }
+                catch (failure: OpenCodeRequestException) { generationCalls += failure.message.orEmpty(); throw failure }
+            }
+            val generated = oneShot.generate(2, "Return a short summary",
+                Json.obj("providerID" to "fixture", "modelID" to "fixture"), RequestOptions(directory = workspace.toString()))
+            if (OpenCodeCli.compareVersions(version, "2.0.27") >= 0) {
+                assertEquals("One-shot requests: $generationCalls", "OpenJet stream verified.", generated)
+                assertEquals(1, providerRequests.get())
+            } else {
+                assertNull(generated)
+                assertEquals(0, providerRequests.get())
+            }
             assertEquals(beforeGeneration, transport.request("GET", "/session").data)
             for (name in listOf("日本語 🚀", "literal%2Fdirectory")) {
                 val directory = Files.createDirectory(workspace.resolve(name)).toString()
@@ -210,7 +242,10 @@ class OpenCodeV2IntegrationTest {
             streamGate.getAndSet(null)?.countDown()
             transport.dispose()
             process.destroy()
-            if (!process.waitFor(5, TimeUnit.SECONDS)) process.destroyForcibly()
+            if (!process.waitFor(5, TimeUnit.SECONDS)) {
+                process.destroyForcibly()
+                assertTrue("Isolated OpenCode fixture did not stop", process.waitFor(5, TimeUnit.SECONDS))
+            }
             reader.join(1000)
             provider.stop(0)
         }

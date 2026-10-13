@@ -121,18 +121,25 @@ A local sync copies the checkout's current files, including uncommitted edits. T
 
 Review the vendor diff for protocol changes and new host requests. Sync updates version specifiers for existing dependencies in `webview/package.json`; check upstream for any new dependencies the webview needs. When dependencies change, run `npm install` in `webview/` with the pinned toolchain and include the updated lockfile. Keep toolchain versions aligned with `Dockerfile`.
 
-### Required backend review
+### Required backend compatibility and alignment
 
-Sync copies the browser UI and shared sources, not upstream's `src/extension` backend. A successful build or `sync:check` does not establish parity with the Kotlin host.
+Sync copies the browser UI and shared sources, not upstream's `src/extension` backend. A sync request includes the Kotlin backend review, required alignment, and compatibility checks below unless the user explicitly requests a UI-only refresh. A successful build or `sync:check` does not establish parity with the Kotlin host.
 
 Before reporting a sync complete:
 
 1. Record the previous commit from `webview/vendor/UPSTREAM.json` before syncing. Compare it with the new revision, including upstream `src/extension`, `src/shared`, and configuration changes in `package.json`. If the previous revision or its diff is unavailable, report that limitation rather than assuming no backend changes.
-2. Trace new or changed endpoints, messages, settings, persistence, server adapters, and platform behavior to their equivalents in `src/main/kotlin/varro/`. Check backend fixes even when they have no vendor diff.
-3. List each missing, partially ported, or uncertain behavior separately. Include the exact feature or fix, upstream files and endpoints or messages, corresponding OpenJet files or the absence of an implementation, and the impact on users. Distinguish confirmed gaps from unverified behavior and platform-specific changes that do not apply to OpenJet. Do not report only a generic warning that backend work may be missing.
-4. Ask explicitly which listed gaps the user wants implemented. Do not silently leave them out or start porting them unless the user already authorized that backend work. Keep the vendor sync and backend implementation status separate in the result.
+2. Trace new or changed endpoints, messages, settings, persistence, server adapters, and platform behavior to their equivalents in `src/main/kotlin/varro/`. Check backend fixes even when they have no vendor diff. Implement required equivalents and regression coverage during the sync, without a separate request to include backend work. Preserve JetBrains-specific behavior where the VS Code change does not apply.
+3. Compare upstream's `@opencode-ai/sdk` and `@opencode/client` baselines with OpenJet's status hints and current version references. Sync records their specifiers in `webview/vendor/UPSTREAM.json`, and a Kotlin regression test rejects status-baseline drift. If a baseline changes, review the complete released OpenCode diff from the previous OpenJet-tested version, including HTTP/OpenAPI routes, SSE events, configuration, provider/model shapes, permissions/questions, session/history/inbox records, and serve/upgrade behavior. Port consumed contract changes; keep support floors unchanged unless a new API requires raising them.
+4. Run the Kotlin adapter and managed-service tests against the exact published V2 version. The helper installs a pinned CLI under ignored build output, verifies its version, runs the tests with isolated fixture state, rejects skipped/missing tests, and writes `build/opencode-compatibility/<version>/verification.json`:
 
-If no gaps are found, state that explicitly and name any review or verification limitations. Do not claim full backend parity for behavior that was not checked.
+   ```sh
+   python3 scripts/check-opencode-compatibility.py --version 2.0.28
+   ```
+
+   An existing matching executable can be supplied with `--binary /absolute/path/to/opencode2`. Never point fixture tests at production sessions, databases, credentials, or service registrations. Upstream's TypeScript compatibility results are useful review evidence, not a substitute for Kotlin tests. When the V1 SDK changes, also review its released contract and run the affected Kotlin V1 tests; do not infer V1 parity from a V2 run.
+5. Align tested-version hints and current documentation after the released checks pass. Preserve historical results and lower-bound fixtures. Add any remaining missing, partial, uncertain, or blocked behavior to the sync report, with its upstream files/endpoints, corresponding OpenJet code, and user-visible impact. Ask only for product choices, destructive migrations, or work beyond the upstream changes, not whether to include required backend alignment.
+
+If no gaps remain in the reviewed changes, state that explicitly and name any review or verification limitations. If required alignment or released compatibility checks are blocked, report the sync as incomplete. Do not claim full backend parity for behavior that was not checked.
 
 Run browser checks, then `./gradlew check buildPlugin` from the root, and verify the affected flows in the sandbox.
 

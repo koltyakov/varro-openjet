@@ -2,7 +2,7 @@ import { Show, createEffect, createSignal, onCleanup, onMount } from 'solid-js';
 import type { Accessor } from 'solid-js';
 import { Portal } from 'solid-js/web';
 import { trapModalFocus } from '../lib/modal-focus';
-import { navArrowLeftIcon, navArrowRightIcon, xmarkIcon } from '../lib/ui-icons';
+import { checkIcon, navArrowLeftIcon, navArrowRightIcon, xmarkIcon } from '../lib/ui-icons';
 import { Tooltip } from './Tooltip';
 import { UiIcon } from './UiIcon';
 import { createDeferredImage, IMAGE_PLACEHOLDER } from '../lib/deferred-content';
@@ -76,33 +76,46 @@ export function ImagePreviewOverlay(props: {
   );
   let previewElement: HTMLImageElement | undefined;
   let copyGeneration = 0;
+  let copyFeedbackTimeout: ReturnType<typeof setTimeout> | undefined;
   const [menu, setMenu] = createSignal<{ x: number; y: number } | null>(null);
   const [loadedUrl, setLoadedUrl] = createSignal('');
-  const [copyState, setCopyState] = createSignal<'idle' | 'copying' | 'copied'>('idle');
+  const [isCopying, setIsCopying] = createSignal(false);
+  const [copied, setCopied] = createSignal(false);
   const [copyError, setCopyError] = createSignal('');
   createEffect(() => {
     void props.image?.url;
     void content.url();
     copyGeneration++;
+    clearTimeout(copyFeedbackTimeout);
     setMenu(null);
     setLoadedUrl('');
-    setCopyState('idle');
+    setIsCopying(false);
+    setCopied(false);
     setCopyError('');
   });
-  onCleanup(() => copyGeneration++);
+  onCleanup(() => {
+    copyGeneration++;
+    clearTimeout(copyFeedbackTimeout);
+  });
   const copyImage = async () => {
-    if (!previewElement || copyState() === 'copying') return;
+    if (!previewElement || isCopying()) return;
     const generation = copyGeneration;
     setMenu(null);
-    setCopyState('copying');
+    setIsCopying(true);
+    clearTimeout(copyFeedbackTimeout);
+    setCopied(false);
     setCopyError('');
     try {
       await writeClipboardImage(previewElement);
-      if (generation === copyGeneration) setCopyState('copied');
+      if (generation === copyGeneration) {
+        setCopied(true);
+        copyFeedbackTimeout = setTimeout(() => setCopied(false), 1_600);
+      }
     } catch (error) {
       if (generation !== copyGeneration) return;
-      setCopyState('idle');
       setCopyError(error instanceof Error ? error.message : 'Could not copy the image');
+    } finally {
+      if (generation === copyGeneration) setIsCopying(false);
     }
   };
   return (
@@ -205,11 +218,6 @@ export function ImagePreviewOverlay(props: {
                       <span class="chat-image-preview-caption-mime">· {image().mime}</span>
                     </Show>
                   </figcaption>
-                  <Show when={copyState() !== 'idle'}>
-                    <div class="chat-image-preview-copy-status" role="status">
-                      {copyState() === 'copying' ? 'Copying image…' : 'Image copied'}
-                    </div>
-                  </Show>
                   <Show when={copyError()}>
                     <div class="chat-image-preview-copy-status" role="alert">
                       {copyError()}
@@ -218,6 +226,23 @@ export function ImagePreviewOverlay(props: {
                 </figure>
               </div>
             </div>
+            <Show when={copied()}>
+              <div
+                class="session-action-feedback chat-image-preview-feedback"
+                role="status"
+                aria-live="polite"
+              >
+                <span class="session-action-feedback-icon" aria-hidden="true">
+                  <UiIcon
+                    source={checkIcon}
+                    class="session-action-feedback-glyph"
+                    width={11}
+                    height={11}
+                  />
+                </span>
+                <span class="session-action-feedback-message">Image copied</span>
+              </div>
+            </Show>
             <Show when={menu()}>
               {(position) => (
                 <ImagePreviewContextMenu
@@ -227,7 +252,7 @@ export function ImagePreviewOverlay(props: {
                     loadedUrl() !== content.url() ||
                     content.url() === IMAGE_PLACEHOLDER ||
                     !!content.error() ||
-                    copyState() === 'copying'
+                    isCopying()
                   }
                   onClose={() => setMenu(null)}
                   onCopy={() => void copyImage()}

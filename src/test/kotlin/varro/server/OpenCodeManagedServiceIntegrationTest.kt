@@ -57,6 +57,7 @@ class OpenCodeManagedServiceIntegrationTest {
             startManaged()
             val privateFile = root.resolve("servers/opencode-service/opencode/service.json")
             val privateRegistration = OpenCodeConnection.registration(privateFile)!!
+            System.getenv("VARRO_OPENCODE_TEST_VERSION")?.let { assertEquals(it, privateRegistration.version) }
             assertEquals(url, privateRegistration.url)
             assertFalse(managed.launchHealthMatches(HealthInfo(true, privateRegistration.version, privateRegistration.pid + 1)))
             assertFalse(managed.launchHealthMatches(HealthInfo(true, "${privateRegistration.version}-mismatch", privateRegistration.pid)))

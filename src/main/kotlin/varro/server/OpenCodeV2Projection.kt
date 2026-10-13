@@ -9,6 +9,18 @@ internal fun com.google.gson.JsonArray.getOrNull(index: Int): JsonElement? = if 
 
 /** Released v2 records projected into the shared Varro transcript contract. */
 internal object OpenCodeV2Projection {
+    /** Match upstream's bounded structured-error normalization for idle records and execution events. */
+    fun normalizeError(value: JsonElement?): JsonObject? {
+        val error = value.asObjectOrNull() ?: return null
+        val message = error.str("message") ?: return null
+        val status = error.get("status")?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isNumber }
+            ?: Regex("^(?:Integration\\.Authorization:\\s*)?Request failed:\\s*(401|403)\\b", RegexOption.IGNORE_CASE)
+                .find(message)?.groupValues?.get(1)?.toInt()?.let(Json::toElement)
+        return Json.obj("type" to (error.str("type") ?: "unknown"), "message" to message.take(16384)).apply {
+            status?.let { add("status", it) }
+        }
+    }
+
     fun legacyAction(action: String?) = when (action) { "shell" -> "bash"; "subagent" -> "task"; else -> action }
     fun nativeAction(action: String?) = when (action) { "bash" -> "shell"; "task" -> "subagent"; "write", "patch" -> "edit"; else -> action }
     fun rules(value: JsonElement?): JsonElement = Json.array(value.asArrayOrNull()?.map { entry ->
@@ -135,9 +147,14 @@ internal object OpenCodeV2Projection {
             info.add("tokens", value.get("tokens") ?: Json.obj("input" to 0, "output" to 0, "reasoning" to 0, "cache" to Json.obj("read" to 0, "write" to 0)))
             info.add("finish", value.get("finish"))
             value.obj("retry")?.let { retry -> info.add("retry", Json.obj("attempt" to retry.get("attempt"), "at" to retry.get("at"))) }
-            val error = value.obj("error") ?: if (type == "idle") context.obj("error") ?: Json.obj("type" to "UnknownError",
-                "message" to "OpenCode failed before a response was recorded. Check the provider connection and the OpenCode server log.") else null
+            val error = if (type == "idle") normalizeError(value.get("error")) ?: normalizeError(context.get("error"))
+                ?: Json.obj("message" to "OpenCode failed before a response was recorded. Check the provider connection and the OpenCode server log.")
+            else value.obj("error")
             if (type == "idle" && value.str("outcome") == "interrupted") info.add("error", Json.obj("name" to "MessageAbortedError", "data" to Json.obj()))
+            else if (type == "idle") info.add("error", Json.obj(
+                "name" to if (error.num("status") in listOf(401.0, 403.0)) "ProviderAuthError" else "UnknownError",
+                "data" to Json.obj("message" to error.str("message"), "statusCode" to error?.get("status"), "providerID" to model.str("providerID")),
+            ))
             else if (error != null) info.add("error", Json.obj("name" to (error.str("type") ?: "UnknownError"),
                 "data" to Json.obj("message" to error.str("message"), "statusCode" to error.get("status"))))
             if (type == "idle") info.add("time", time.deepCopy().apply { add("completed", time.get("created")) })

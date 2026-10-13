@@ -4,9 +4,11 @@ import com.intellij.openapi.fileEditor.FileEditor
 import com.intellij.openapi.fileEditor.FileEditorPolicy
 import com.intellij.openapi.fileEditor.FileEditorProvider
 import com.intellij.openapi.fileEditor.FileEditorState
+import com.intellij.openapi.fileTypes.FileType
 import com.intellij.openapi.project.DumbAware
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.Disposer
+import com.intellij.openapi.util.IconLoader
 import com.intellij.openapi.util.UserDataHolderBase
 import com.intellij.openapi.vfs.VirtualFile
 import com.google.gson.JsonObject
@@ -24,6 +26,7 @@ class VarroChatFile(
         .getFileSystem(VarroChatFileSystem.PROTOCOL)
     override fun getPath() = "/$projectId/$viewId"
     override fun getName() = title
+    override fun getFileType(): FileType = VarroChatFileType
     override fun isWritable() = false
     override fun isDirectory() = false
     override fun isValid() = true
@@ -38,6 +41,15 @@ class VarroChatFile(
         throw java.io.IOException("Chat tabs do not contain editable file content")
     override fun refresh(asynchronous: Boolean, recursive: Boolean, postRunnable: Runnable?) { postRunnable?.run() }
     override fun rename(requestor: Any?, newName: String) { title = newName }
+}
+
+/** Synthetic chat files use the same branded icon for new and restored editor tabs. */
+internal object VarroChatFileType : FileType {
+    override fun getName() = "Varro Chat"
+    override fun getDescription() = "Varro chat"
+    override fun getDefaultExtension() = ""
+    override fun isBinary() = true
+    override fun getIcon() = IconLoader.getIcon("/icons/varro-chat.svg", VarroChatFileType::class.java)
 }
 
 class VarroChatFileSystem : com.intellij.openapi.vfs.DeprecatedVirtualFileSystem(), com.intellij.openapi.vfs.NonPhysicalFileSystem {

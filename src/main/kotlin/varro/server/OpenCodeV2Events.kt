@@ -40,13 +40,14 @@ internal object OpenCodeV2Events {
             )
             "session.execution.failed" -> {
                 val result = mutableListOf<JsonObject>()
+                val error = OpenCodeV2Projection.normalizeError(data.get("error"))
                 if (context.bool("hasAssistant") != true && event.str("id") != null) {
                     val message = OpenCodeV2Projection.message(Json.obj("id" to event.str("id")!!.replaceFirst("evt_", "msg_"), "type" to "idle", "outcome" to "failed",
                         "time" to Json.obj("created" to event.get("created"))), sessionID, context.str("directory").orEmpty(), context.str("parentID").orEmpty(), context.deepCopy().apply { add("error", data.get("error")) })
                     result.add(emit("message.updated", Json.obj("info" to message.get("info"))).apply { addProperty("id", "${event.str("id")}:message"); remove("seq") })
                 }
                 result.add(emit("session.error", Json.obj("sessionID" to sessionID, "error" to Json.obj("name" to "APIError", "data" to Json.obj(
-                    "message" to (data.obj("error").str("message") ?: "OpenCode execution failed"), "statusCode" to data.obj("error")?.get("status"))))))
+                    "message" to (error.str("message") ?: "OpenCode execution failed"), "statusCode" to error?.get("status"))))))
                 result.add(emit("session.status", Json.obj("sessionID" to sessionID, "status" to status("idle"))).apply { addProperty("id", "${event.str("id")}:idle"); remove("seq") })
                 return result
             }

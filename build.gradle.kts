@@ -191,6 +191,13 @@ tasks.withType<JavaCompile>().configureEach {
 tasks.test {
     useJUnit()
     dependsOn(testWebviewHost)
+    // Opt-in released-binary checks must not reuse a run that skipped them or tested another release.
+    for (name in listOf("VARRO_OPENCODE_TEST_BINARY", "VARRO_OPENCODE_TEST_VERSION", "VARRO_OPENCODE_DESKTOP_TEST_BINARY")) {
+        inputs.property(name, providers.environmentVariable(name).orElse(""))
+    }
+    for (name in listOf("VARRO_OPENCODE_TEST_BINARY", "VARRO_OPENCODE_DESKTOP_TEST_BINARY")) {
+        providers.environmentVariable(name).orNull?.takeIf { it.isNotBlank() }?.let { inputs.file(it) }
+    }
 }
 
 tasks.named<org.jetbrains.intellij.platform.gradle.tasks.RunIdeTask>("runIde") {

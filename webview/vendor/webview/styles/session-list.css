@@ -756,7 +756,7 @@ body:not(.vscode-light):not(.vscode-high-contrast):not(.vscode-high-contrast-lig
 .session-action-feedback.is-input-anchored {
   position: absolute;
   top: auto;
-  bottom: calc(100% + 8px);
+  bottom: calc(100% + 24px);
   max-width: min(280px, calc(100% - 16px));
 }
 

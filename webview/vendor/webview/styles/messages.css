@@ -2788,6 +2788,11 @@ body:is(.vscode-light, .vscode-high-contrast-light) .chat-empty-logo {
   container-type: inline-size;
 }
 
+/* The shell is a stacking context, so the toast's own z-index cannot clear the list fade. */
+.interactive-session .chat-input-shell:has(.session-action-feedback.is-input-anchored) {
+  z-index: var(--z-menu-raised);
+}
+
 .interactive-session .chat-input-shell.showing-floating-popover {
   z-index: var(--z-popover);
 }

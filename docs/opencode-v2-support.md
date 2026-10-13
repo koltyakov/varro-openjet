@@ -1,6 +1,6 @@
 # OpenCode V2 support
 
-OpenJet supports V1 from 1.16.0 and V2 from 2.0.5. The webview and shared sources were synced from Varro's `main` branch at `a1dd0553c46c`, version 0.33.0. The Kotlin adapter handles released-server contracts, including generated skill, shell and synthetic transcript records. Synthetic text appears as automatic-action notices. Pending and running V2 patch calls render as active edits. Assistant history preserves automatic retry metadata for recovery notices. History attachments use deferred references with Kotlin-generated thumbnails and on-demand original reads.
+OpenJet supports V1 from 1.16.0 and V2 from 2.0.5. The webview and shared sources were synced from Varro's `main` branch at `67a4003fdaaf`, version 0.33.2. The Kotlin adapter handles released-server contracts, including generated skill, shell and synthetic transcript records. Synthetic text appears as automatic-action notices. Pending and running V2 patch calls render as active edits. Assistant history preserves automatic retry metadata for recovery notices. History attachments use deferred references with Kotlin-generated thumbnails and on-demand original reads.
 
 V2 sessions support `/pause` and a Resume action in the transcript. Pausing parks queued messages and interrupts with `resume=false`. Pause markers persist in the shared Varro session annotations, and session summaries and usage reports exclude paused time. Commit-message generation uses the stateless endpoint when the server advertises it, falling back to a helper session when the endpoint or selected model is unavailable before generation starts.
 
@@ -101,20 +101,96 @@ Vendor integrity, all 89 browser host tests, TypeScript checking, browser build,
 live provider, or released OpenCode 2.0.27 verification was performed. These checks
 do not establish full backend parity.
 
+## Upstream sync review, 2026-10-13
+
+Reviewed `9715915d2b03f557f6d1ea585cf038d8b90946f1` through
+`67a4003fdaaf7f6731e7ee1b4aa540602db4b4fc`, including all extension changes,
+shared sources, and `package.json`. Shared sources, host messages, HTTP routes,
+and contributed settings did not change. The UI refresh includes image-copy
+feedback, toast stacking/spacing, and composer text/placeholder styling. Mermaid
+was updated to 12.2.0 and the lockfile regenerated with the pinned Node/npm versions.
+No new browser dependencies were required.
+
+The initial vendor-only refresh left the following differences. The same sync now
+includes their host alignment and released Kotlin checks.
+
+| Behavior | Upstream files and contract | OpenJet implementation and user impact |
+| --- | --- | --- |
+| Branded editor-tab icon | `src/extension/sidebar-provider.ts` uses `assets/icon.png` for newly created and restored editor chat panels instead of the `chat-sparkle` theme icon. | `src/main/kotlin/varro/host/VarroChatEditor.kt` now gives every `VarroChatFile` a branded synthetic file type, with 16-pixel light/dark icons. New, restored, and renamed chat files share the icon. Regression tests cover file-type identity and resources; actual IDE tab rendering was not verified. |
+| OpenCode status baseline | `package.json` updates `@opencode/client` from `^2.0.27` to `^2.0.28`; upstream status hints derive the tested V2 version from that manifest. | `src/main/kotlin/varro/toolwindow/OpenCodeStatusPresentation.kt` now uses 2.0.28. Users on 2.0.26 and 2.0.27 receive the update hint. Sync records both SDK/client specifiers in `webview/vendor/UPSTREAM.json`; a Kotlin test checks those against status hints so later syncs cannot silently leave them behind. |
+| Released OpenCode 2.0.28 compatibility | Upstream `docs/opencode-v2-support.md` records the 2.0.28 release review and TypeScript published-server matrix. | OpenJet independently passed `OpenCodeV2IntegrationTest` and `OpenCodeManagedServiceIntegrationTest` against the exact published 2.0.28 binary. Both suites ran without skips, with fixture-only HOME/XDG/database/server-state roots and a local deterministic provider. Evidence is `build/opencode-compatibility/2.0.28/verification.json`. |
+
+The OpenCode release review covered 2.0.26 through 2.0.28, `8059cdcbdf` through
+`c5aabae288`, including HTTP/OpenAPI handlers, protocol/schema, SSE, configuration,
+provider/model changes, and CLI/service behavior. No consumed HTTP path or method
+was removed. OpenAPI regeneration adds the external-auth operation already
+supported by the Kotlin adapter, and explicit 404 declarations. Project archival
+and PTY transport changes do not require OpenJet adapters. Optional provider
+compatibility, cache-format, and request-encoding settings remain server-owned
+and survive native configuration reads/edits.
+
+The release persists execution failures in idle records. Kotlin already preferred
+saved errors, but its normalization differed from Varro. `OpenCodeV2Projection.kt`
+and `OpenCodeV2Events.kt` now infer 401/403 from authorization messages, bound
+diagnostics to 16 KiB, reject malformed errors before falling back to live context,
+and classify failed idle records as `ProviderAuthError` or `UnknownError`. Regression
+tests preserve persisted-error precedence, aborted records, and failure-before-idle
+event ordering. This resolves the persisted-error gap in the historical review above.
+
+The first released run caught an obsolete fixture assumption about custom-model
+one-shot generation. The fixture now supplies a native V2 provider alongside its
+legacy project configuration, matching the released contract. On 2.0.27 and newer
+it verifies exactly one provider call and no helper session; older releases retain
+the unsupported-model fallback assertions. The existing one-shot implementation
+needed no change.
+
+VS Code-specific changes do not require JetBrains ports. `package.json` lowers the
+VS Code floor to 1.107 and registers the chat view in the primary container.
+`src/extension/extension.ts` adds Trae fork detection and one-time primary/secondary
+sidebar placement. OpenJet instead registers a right-anchored native tool window
+in `src/main/resources/META-INF/plugin.xml`; the IntelliJ Platform owns saved
+placement. Its IDE support floor remains 252. Upstream lint/type packages and the
+Docker example's OpenCode version are not browser dependencies or Kotlin adapters.
+
+After alignment, vendor integrity, all 89 browser host tests, TypeScript checking,
+and `./gradlew check buildPlugin verifyPlugin` passed. The full Kotlin run had 497
+passed tests and three optional skips; both released 2.0.28 suites passed separately
+without skips. All four compatibility-helper regression tests passed. Plugin
+Verifier reported compatibility across all five configured IDE builds, with only
+the existing deprecated/experimental API warnings.
+
+No required host or consumed-contract gap remains in this Varro revision's reviewed
+changes. No live provider, interactive OAuth, Windows/Linux native run, sandbox UI
+flow, or image clipboard verification was performed. Earlier review entries above
+are historical; their static-preload and Windows inspection warm-up differences
+remain outside this revision's changes. These limits do not establish full backend
+parity.
+
 ## Verification
 
-The opt-in integration test launches a released CLI with isolated HOME, XDG directories and database. Its provider is a local deterministic HTTP fixture. It checks authenticated health and SSE, catalogs, pending input, prompt streaming, reopened history, helper generation, permission and form acknowledgement, fork, tail deletion and session deletion. Steering checks interrupt a stalled turn, resume pending steering, and verify after completion and 0, 75 and 250 ms sampling delays that queued input stays parked. It has been run against OpenCode 2.0.6, 2.0.25 and 2.0.26; the steering regression has been run against 2.0.26.
+The opt-in integration test launches a released CLI with isolated HOME, XDG directories and database. Its provider is a local deterministic HTTP fixture. It checks authenticated health and SSE, catalogs, pending input, prompt streaming, reopened history, helper and stateless generation, permission and form acknowledgement, fork, tail deletion, session deletion, and read-only V1 import. Steering checks interrupt a stalled turn, resume pending steering, and verify after completion and 0, 75 and 250 ms sampling delays that queued input stays parked. It has been run against OpenCode 2.0.6, 2.0.25, 2.0.26 and 2.0.28; the steering regression has been run against 2.0.26 and 2.0.28.
 
 ```sh
 VARRO_OPENCODE_TEST_BINARY=/absolute/path/to/opencode2 \
   ./gradlew test --tests 'varro.server.OpenCodeV2IntegrationTest'
 ```
 
+For a sync or version bump, use the pinned-release helper instead:
+
+```sh
+python3 scripts/check-opencode-compatibility.py --version 2.0.28
+```
+
+It runs both released suites, verifies the installed and served version, rejects
+missing/skipped/failed tests, forces a fresh Gradle run, and writes a JSON result.
+Gradle also tracks binary paths, contents, and expected versions as test inputs,
+so ordinary opt-in runs cannot reuse a previously skipped result.
+
 Unit tests cover 2.0.5 health discovery, V1 fallback, HTML and authentication failures, credential redaction, pagination, transcript identity, permission retry, annotations, native config edits and read-only import with cleanup. IDE rendering and interactive OAuth sign-in still need manual verification in a sandbox IDE.
 
 `OpenCodeManagedServiceIntegrationTest` checks private registration, coexistence with an isolated
 global-service fixture, second-host restoration and managed restart. It has been run against
-OpenCode 2.0.26. Both services use fixture-only HOME, XDG roots and database. Set
+OpenCode 2.0.26 and 2.0.28. Both services use fixture-only HOME, XDG roots and database. Set
 `VARRO_OPENCODE_DESKTOP_TEST_BINARY` to another released V2 binary to check version coexistence.
 It also retires a fixture listener, launches a moved-port replacement with the same private
 service password, and checks recovered ownership, follower restoration and lifecycle stop
@@ -125,7 +201,7 @@ publication ordering and cancellation. Ownership fixtures cover retired-process 
 recovery, unknown and foreign accounts, credential and HTTP PID mismatches, conflicting claims,
 changed records and listener reinspection. These are not released V1 or V2-floor CLI runs, nor
 Windows/Linux or real-IDE verification. Status update hints track upstream's tested SDK/client
-baselines, V1 1.19.0 and V2 2.0.26; that does not claim every Kotlin flow was tested on both releases.
+baselines, V1 1.19.0 and V2 2.0.28; that does not claim every Kotlin flow was tested on both releases.
 
 ```sh
 VARRO_OPENCODE_TEST_BINARY=/absolute/path/to/opencode2 \
