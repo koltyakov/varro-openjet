@@ -77,4 +77,16 @@ class OpenCodeStatusPresentationTest {
     @Test fun `omits unavailable or invalid uptime`() {
         for (startedAt in listOf(null, 0L, -1L)) assertFalse(render(info(startedAt = startedAt)).tooltip.contains("Server uptime:"))
     }
+
+    @Test fun `shows connected server PID for managed and attach-only connections`() {
+        for (attached in listOf(false, true)) {
+            val status = render(info(attached = attached).copy(processId = 79285))
+            assertTrue(status.tooltip.contains("Server port: 4096\nServer PID: 79285"))
+            assertTrue(render(info(attached = attached).copy(processId = 5678)).tooltip.contains("Server PID: 5678"))
+        }
+    }
+
+    @Test fun `omits unknown and invalid server PIDs`() {
+        for (pid in listOf(null, 0L, -1L)) assertFalse(render(info().copy(processId = pid)).tooltip.contains("Server PID:"))
+    }
 }

@@ -22,9 +22,9 @@
     "**/*.test-support.ts"
   ],
   "revision": {
-    "commit": "a1dd0553c46c655ae8412b72dcb712fe8cb8c6c9",
+    "commit": "9715915d2b03f557f6d1ea585cf038d8b90946f1",
     "localChanges": false,
-    "describedAt": "2026-10-12T18:38:31.154Z"
+    "describedAt": "2026-10-13T02:16:58.159Z"
   },
-  "sourceHash": "7411d5108f7a0029e100a0af077ea9e94f213f8bab13203f13c80e1f44ca722c"
+  "sourceHash": "9b8123108432acdd70db9f47b89a3451367fb9e69f078b16abffb7709ae55e13"
 }

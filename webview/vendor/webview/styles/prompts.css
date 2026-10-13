@@ -426,16 +426,6 @@ body.vscode-light .question-custom-input {
   background: color-mix(in srgb, var(--color-vscode-error) 84%, black);
 }
 
-.question-btn-tertiary {
-  background: transparent;
-  color: var(--color-vscode-fg-muted);
-}
-
-.question-btn-tertiary:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--color-vscode-hover) 84%, transparent);
-  color: var(--color-vscode-fg);
-}
-
 .server-status-surface {
   display: flex;
   min-width: 0;

@@ -6578,6 +6578,12 @@ export function ChatInput(props: { newSession?: boolean; onBeforeSend?: () => vo
           <div class="chat-input-toolbar-divider" aria-hidden="true" />
 
           <ChatInputMainToolbar
+            focusComposer={() => {
+              closePopups();
+              richEditorRef?.focus();
+            }}
+            remoteExtensionHost={isRemoteExtensionHost()}
+            onDictationAvailabilityChange={() => toolbarFitter.schedule({ contentChanged: true })}
             toolbarRef={(el) => {
               toolbarRef = el;
             }}

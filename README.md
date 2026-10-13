@@ -150,6 +150,14 @@ V2 session sharing is unavailable. Varro stores V2-only metadata and archive tim
 - Assign a vision-capable model to the global `vision` agent in the Models menu. Varro creates a read-only subagent when needed and automatically delegates attached images to it when the selected model supports tools but cannot read images. Existing custom vision-agent settings are preserved.
 - Permission controls can save rules for a session or the project. Project rules update the project's `opencode.jsonc` if present, otherwise `opencode.json`.
 
+### Handy dictation
+
+Install and start [Handy](https://github.com/cjpais/Handy), then configure its model and microphone/accessibility permissions. The composer shows a microphone when Varro finds the executable. Click to start or stop dictation; right-click to cancel. Varro does not launch Handy for you. Requires Handy's CLI remote-control flags.
+
+Under **Settings > Tools > Varro > Dictation**, optionally set an absolute executable path. Leave it empty to search standard installation locations and PATH. The path stays local to this IDE and is not included in shared OpenJet settings. Dictation is unavailable on remote IDE hosts.
+
+The speaking icon tracks Varro's toggles, not Handy's global shortcut or actual recording state. Disable Handy's **Auto Submit** option to review dictated text before sending.
+
 ### Provider limits and usage
 
 Quota badges show remaining allowances and reset times when the provider exposes them. The Kotlin adapters support Anthropic/Claude Code, OpenAI Codex, GitHub Copilot, OpenRouter, Gemini, Antigravity, Ollama Cloud, OpenCode Go, Z.ai, MiniMax, Kimi, and xAI. They use existing credentials and the IDE's HTTP proxy and certificate settings. No Node.js helper is required.

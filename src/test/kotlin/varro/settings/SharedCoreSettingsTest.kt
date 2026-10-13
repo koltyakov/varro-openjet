@@ -63,4 +63,13 @@ class SharedCoreSettingsTest {
         assertFalse(snapshot.has("chatAutoCompactionReservedTokens"))
         assertEquals(before, legacy)
     }
+
+    @Test fun `Handy executable paths remain local and persist in the IDE settings state`() {
+        val source = VarroSettings().apply { dictationHandyPath = "/source/Handy" }
+        val destination = VarroSettings().apply { dictationHandyPath = "/destination/Handy" }
+        assertEquals("/source/Handy", source.state.dictationHandyPath)
+        assertFalse(SharedCoreSettings.snapshot(source).has("dictationHandyPath"))
+        SharedCoreSettings.apply(Json.obj("dictationHandyPath" to "/source/Handy"), destination)
+        assertEquals("/destination/Handy", destination.dictationHandyPath)
+    }
 }

@@ -358,7 +358,7 @@ class VarroProjectService(private val project: Project) : Disposable {
             add("terminalSelection", terminal.currentSelection())
             add("droppedFiles", JsonArray())
             addProperty("emptyStateLogoUri", WebviewAssets.EMPTY_STATE_LOGO_URL)
-            addProperty("remoteExtensionHost", false)
+            addProperty("remoteExtensionHost", IdeHostEnvironment.current.isRemoteHost())
             addProperty("supportsDetachedEditors", ChatEditorCompatibility.supportsDetachedEditors())
             add("browserStorage", store.browserStorage())
 
@@ -550,6 +550,11 @@ class VarroProjectService(private val project: Project) : Disposable {
 
         try {
             when (type) {
+                "handy/request" -> {
+                    val target = host ?: return
+                    handyIntegration.handleRequest(payload, target::post)
+                }
+
                 "ready" -> {
                     host?.markReady()
                     host?.post("permission-automation/update", permissionAutomation(host))
@@ -1099,30 +1104,35 @@ class VarroProjectService(private val project: Project) : Disposable {
 
     fun showAbout() {
         val ide = com.intellij.openapi.application.ApplicationInfo.getInstance()
-        editor.openText(
-            """
-            # Varro OpenJet ${VarroBuild.version}
+        ApplicationManager.getApplication().executeOnPooledThread {
+            val diagnostics = server.readVersionInfo(refresh = true)
+            if (project.isDisposed) return@executeOnPooledThread
+            editor.openText(
+                """
+                # Varro OpenJet ${VarroBuild.version}
 
-            OpenCode workbench for JetBrains IDEs. Port of [Varro for VS Code](https://github.com/koltyakov/varro).
+                OpenCode workbench for JetBrains IDEs. Port of [Varro for VS Code](https://github.com/koltyakov/varro).
 
-            - IDE: ${ide.fullApplicationName}, build ${ide.build}
-            - Runtime: ${System.getProperty("java.runtime.version")}
-            - JCEF available: ${JcefSupport.isAvailable()}
-            - Server: ${Json.stringify(lastStatus.get().toJson())}
-            - Webview revision: ${WebviewAssets.assetVersion}
+                - IDE: ${ide.fullApplicationName}, build ${ide.build}
+                - Runtime: ${System.getProperty("java.runtime.version")}
+                - JCEF available: ${JcefSupport.isAvailable()}
+                - Server: ${Json.stringify(lastStatus.get().toJson())}
+                - Server PID: ${diagnostics?.processId ?: "Unknown"}
+                - Webview revision: ${WebviewAssets.assetVersion}
 
-            ## Links
+                ## Links
 
-            - [Varro OpenJet and issue tracker](https://github.com/koltyakov/varro-openjet)
-            - [Upstream Varro](https://github.com/koltyakov/varro)
-            - [OpenCode documentation](https://opencode.ai/docs)
+                - [Varro OpenJet and issue tracker](https://github.com/koltyakov/varro-openjet)
+                - [Upstream Varro](https://github.com/koltyakov/varro)
+                - [OpenCode documentation](https://opencode.ai/docs)
 
-            Licensed under MIT. Settings are under Settings | Tools | Varro.
-            IDE diagnostics are available under Help | Show Log in Finder/Explorer.
-            """.trimIndent(),
-            "About Varro OpenJet.md", "markdown",
-            previewOnly = true,
-        )
+                Licensed under MIT. Settings are under Settings | Tools | Varro.
+                IDE diagnostics are available under Help | Show Log in Finder/Explorer.
+                """.trimIndent(),
+                "About Varro OpenJet.md", "markdown",
+                previewOnly = true,
+            )
+        }
     }
 
     private fun explainAttachOnly(action: String): Boolean {
@@ -1271,6 +1281,8 @@ class VarroProjectService(private val project: Project) : Disposable {
     companion object {
         const val TOOL_WINDOW_ID = "Varro"
         const val NOTIFICATION_GROUP = "Varro Notifications"
+
+        private val handyIntegration = HandyIntegration()
 
         /** OpenCode session id alphabet, matching upstream's own validation. */
         private val SESSION_ID = Regex("""^[A-Za-z0-9_-]+$""")

@@ -106,28 +106,39 @@ class OpenCodeServer(
 
     fun version(): String? = serverVersion.get()
 
-    /** Called off the EDT. Inspect at most once a minute, without probing or starting the server. */
-    @Synchronized fun readVersionInfo(): OpenCodeVersionInfo? {
-        if (status.get() !is ServerStatus.Running) {
+    /** Called off the EDT. Refresh read-only health and process diagnostics at most once a minute. */
+    @Synchronized fun readVersionInfo(refresh: Boolean = false): OpenCodeVersionInfo? {
+        if (status.get() !is ServerStatus.Running || phase.get() == Phase.DISPOSING) {
             versionInfo = null
             return null
         }
         val generation = versionInfoEpoch.get()
+        val connectionGeneration = disposeGeneration.get()
         val endpoint = url()
         val attached = isAttachOnly()
         val now = System.currentTimeMillis()
         val cached = versionInfo
-        if (cached != null && versionInfoGeneration == generation && cached.url == endpoint &&
+        if (!refresh && cached != null && versionInfoGeneration == generation && cached.url == endpoint &&
             cached.attachOnly == attached && cached.serverVersion == version() && now - versionInfoCheckedAt < 60_000
         ) return cached
 
+        val registeredPid = process.registeredPid
+        fun changed() = versionInfoEpoch.get() != generation || disposeGeneration.get() != connectionGeneration ||
+            phase.get() == Phase.DISPOSING || status.get() !is ServerStatus.Running ||
+            url() != endpoint || isAttachOnly() != attached || process.registeredPid != registeredPid
+        val health = runCatching { transport.readHealthInfo(2_000, ::changed) }
+            .onFailure { log.debug("Could not read OpenCode server diagnostics", it) }.getOrNull()
+        if (changed()) return null
+        // HTTP identifies the server behind a CLI wrapper or port forward. A PID is diagnostic only.
+        val processId = if (health?.healthy == true) (health.pid ?: registeredPid)?.takeIf { it > 0 } else null
         val installed = if (attached) null else cli.readInstalledVersion(refresh = true)
-        val startedAt = runCatching {
-            val pid = ProcessIdentity().listeners(java.net.URI(endpoint).port).singleOrNull() ?: return@runCatching null
-            ProcessHandle.of(pid).orElse(null)?.info()?.startInstant()?.orElse(null)?.toEpochMilli()
-        }.onFailure { log.debug("Could not inspect OpenCode server uptime", it) }.getOrNull()
-        if (versionInfoEpoch.get() != generation || status.get() !is ServerStatus.Running || url() != endpoint || isAttachOnly() != attached) return null
-        return OpenCodeVersionInfo(endpoint, installed, version(), startedAt, attached).also {
+        val startedAt = if (health?.healthy == true) runCatching {
+            val listener = ProcessIdentity().listeners(java.net.URI(endpoint).port).singleOrNull() ?: return@runCatching null
+            if (processId != null && processId != listener) return@runCatching null
+            ProcessHandle.of(listener).orElse(null)?.info()?.startInstant()?.orElse(null)?.toEpochMilli()
+        }.onFailure { log.debug("Could not inspect OpenCode server uptime", it) }.getOrNull() else null
+        if (changed()) return null
+        return OpenCodeVersionInfo(endpoint, installed, health?.version ?: version(), startedAt, attached, processId).also {
             versionInfo = it
             versionInfoGeneration = generation
             versionInfoCheckedAt = System.currentTimeMillis()

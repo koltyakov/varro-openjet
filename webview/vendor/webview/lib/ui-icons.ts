@@ -48,6 +48,7 @@ import mediaImageIcon from 'iconoir/icons/media-image.svg';
 import mediaVideoIcon from 'iconoir/icons/media-video.svg';
 import menuIcon from 'iconoir/icons/menu.svg';
 import microphoneIcon from 'iconoir/icons/microphone.svg';
+import microphoneSpeakingSolidIcon from 'iconoir/icons/microphone-speaking-solid.svg';
 import navArrowDownIcon from 'iconoir/icons/nav-arrow-down.svg';
 import navArrowLeftIcon from 'iconoir/icons/nav-arrow-left.svg';
 import navArrowRightIcon from 'iconoir/icons/nav-arrow-right.svg';
@@ -136,6 +137,7 @@ export {
   mediaVideoIcon,
   menuIcon,
   microphoneIcon,
+  microphoneSpeakingSolidIcon,
   navArrowDownIcon,
   navArrowLeftIcon,
   navArrowRightIcon,

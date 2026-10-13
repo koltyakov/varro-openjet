@@ -25,6 +25,7 @@ internal data class OpenCodeStatusPresentation(val text: String, val tooltip: St
             } else lines += "OpenCode CLI: ${cli ?: "unknown"}"
             lines += "OpenCode Server: ${server ?: "unknown"}"
             lines += "Server port: ${endpoint.port.takeIf { it > 0 } ?: if (endpoint.scheme == "https") 443 else 80}"
+            info.processId?.takeIf { it > 0 }?.let { lines += "Server PID: $it" }
             info.startedAt?.takeIf { it > 0 }?.let { lines += "Server uptime: ${formatUptime(it, now)}" }
             if (updateAvailable) {
                 lines += ""

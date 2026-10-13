@@ -374,14 +374,17 @@ class OpenCodeTransport(
                 }
                 val record = Json.parseOrNull(text).asObjectOrNull() ?: return@runCatching null
                 val version = record.str("version") ?: return@runCatching null
+                val processId = record.get("pid")?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isNumber }?.let {
+                    runCatching { it.asBigDecimal.longValueExact() }.getOrNull()?.takeIf { pid -> pid in 1..9_007_199_254_740_991L }
+                }
                 if (path == HEALTH_PATH) {
                     if (record.bool("healthy") != true || !version.startsWith("1.")) return@runCatching null
                     apiVersion = 1
                 } else {
-                    if (!version.startsWith("2.") || record.get("pid")?.let { it.isJsonPrimitive && it.asJsonPrimitive.isNumber && it.asLong > 0 } != true) return@runCatching null
+                    if (!version.startsWith("2.") || processId == null) return@runCatching null
                     apiVersion = 2
                 }
-                HealthInfo(true, version, record.get("pid")?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isNumber }?.asLong)
+                HealthInfo(true, version, processId)
             }.getOrElse {
                 if (it is java.util.concurrent.CancellationException) throw it
                 if (it is InterruptedException) {

@@ -919,6 +919,10 @@ export type RalphStatePayload = {
 };
 
 export type ExtensionMessage =
+  | {
+      type: 'handy/result';
+      payload: { requestId: string; available: boolean; running: boolean; error?: string };
+    }
   | { type: 'server/status'; payload: ServerStatus }
   | { type: 'server/restart-blocked'; payload: RestartBlockedState }
   | { type: 'server/event'; payload: ServerEvent }
@@ -1048,6 +1052,10 @@ export type ExtensionMessage =
   | { type: 'ralph/state'; payload: RalphStatePayload };
 
 export type WebviewMessage =
+  | {
+      type: 'handy/request';
+      payload: { requestId: string; action: 'status' | 'toggle' | 'cancel' };
+    }
   | { type: 'context/request' }
   | { type: 'workspace/select'; payload: { path: string; requestId: number } }
   | {

@@ -7,4 +7,5 @@ data class OpenCodeVersionInfo(
     val serverVersion: String?,
     val startedAt: Long?,
     val attachOnly: Boolean,
+    val processId: Long? = null,
 )

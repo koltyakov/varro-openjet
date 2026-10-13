@@ -41,6 +41,7 @@ export const STORAGE_KEYS = {
   manualWorkspaceSelection: 'varro.manualWorkspaceSelection',
   showThinking: 'varro.showThinking',
   todoListCollapsed: 'varro.todoListCollapsed',
+  starterHintsDismissed: 'varro.starterHintsDismissed',
 } as const;
 
 const browserPersistence = new BrowserPersistence();

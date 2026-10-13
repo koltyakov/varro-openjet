@@ -16,6 +16,7 @@ import { formatTurnCost } from '../../lib/message-metrics';
 import { Tooltip } from '../Tooltip';
 import { UiIcon } from '../UiIcon';
 import { AttachButton } from './AttachButton';
+import { DictationButton } from './DictationButton';
 import { BusySendMenu } from './BusySendMenu';
 import { ContextPopup, ContextUsageButton, formatContextUsageTitle } from './ContextPopup';
 import { ProviderLimitPopup } from './ProviderLimitPopup';
@@ -140,6 +141,9 @@ type ToolbarSharedProps = {
 };
 
 type ChatInputMainToolbarProps = ToolbarSharedProps & {
+  focusComposer: () => void;
+  remoteExtensionHost: boolean;
+  onDictationAvailabilityChange: () => void;
   toolbarRef: (el: HTMLDivElement) => void;
   toolbarLeftRef: (el: HTMLDivElement) => void;
   toolbarRightRef: (el: HTMLDivElement) => void;
@@ -317,6 +321,11 @@ export function ChatInputMainToolbar(props: ChatInputMainToolbarProps) {
       </div>
 
       <div ref={props.toolbarRightRef} class="toolbar-right">
+        <DictationButton
+          focusComposer={props.focusComposer}
+          remote={props.remoteExtensionHost}
+          onAvailabilityChange={props.onDictationAvailabilityChange}
+        />
         <Show when={props.showAttachmentsControl}>
           <AttachButton onAttach={props.onAttach} />
         </Show>
@@ -326,7 +335,7 @@ export function ChatInputMainToolbar(props: ChatInputMainToolbarProps) {
         </Show>
 
         <Show when={props.showSendControl}>
-          <div style={{ position: 'relative' }}>
+          <div class="toolbar-send-controls" style={{ position: 'relative' }}>
             <SendControls
               showBusyControls={props.showBusySendControls}
               showBusyOptions={props.showBusySendOptions}

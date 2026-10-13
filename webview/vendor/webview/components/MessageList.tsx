@@ -11,7 +11,6 @@ import {
   untrack,
   type Accessor,
 } from 'solid-js';
-import chatLogoUri from '../../../assets/icon.png?inline';
 import {
   isAbortedAssistantError,
   isPermissionRejectedToolError,
@@ -107,7 +106,8 @@ import {
 } from '../lib/message-window';
 import { loadOlderSessionHistoryPage, loadOlderSessionPrompts } from '../hooks/useOpenCode';
 import { modelSupportsReasoning } from '../lib/model-capabilities';
-import { navArrowDownIcon } from '../lib/ui-icons';
+import { navArrowDownIcon, xmarkIcon } from '../lib/ui-icons';
+import { STORAGE_KEYS, readStored, writeStored } from '../lib/state-storage';
 import { formatLabelWithProvider, formatModelName, formatVariantLabel } from '../lib/format';
 import {
   collapseLeadingDuplicateFileEvents,
@@ -134,6 +134,7 @@ import {
 } from './message-list/MessageListChrome';
 import { Tooltip } from './Tooltip';
 import { UiIcon } from './UiIcon';
+import { StarterLogo } from './message-list/StarterLogo';
 import {
   getSubagentSessionIds,
   getStickyUserMessagePreview,
@@ -432,6 +433,10 @@ export function getActiveTurnNavigationMessageId(
 }
 
 export function MessageList() {
+  const pasteModifier = /Macintosh|Mac OS X/.test(navigator.userAgent) ? 'Cmd' : 'Ctrl';
+  const [hintsDismissed, setHintsDismissed] = createSignal(
+    readStored<unknown>(STORAGE_KEYS.starterHintsDismissed) === true
+  );
   type HistoryLoadingOwner = { windowVersion: number };
   type PendingOlderHistoryAnchor = {
     anchor: VisibleScrollAnchor | null;
@@ -10137,18 +10142,22 @@ export function MessageList() {
               <Show when={!state.messagesLoading && shouldShowStarterLogo()}>
                 <div class="chat-empty-state">
                   <Show when={state.emptyStateLogoUri}>
-                    <img
-                      class="chat-empty-logo"
-                      src={chatLogoUri}
-                      decoding="sync"
-                      width="256"
-                      height="256"
-                      alt=""
-                      aria-hidden="true"
-                      draggable="false"
-                    />
+                    <StarterLogo />
                   </Show>
-                  <div class="chat-empty-hints">
+                  <div class="chat-empty-hints" hidden={hintsDismissed()}>
+                    <button
+                      type="button"
+                      class="chat-empty-hints-dismiss"
+                      aria-label="Hide hints"
+                      title="Hide hints"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        setHintsDismissed(true);
+                        writeStored(STORAGE_KEYS.starterHintsDismissed, true);
+                      }}
+                    >
+                      <UiIcon source={xmarkIcon} width={12} height={12} />
+                    </button>
                     <div class="chat-empty-hint-grid">
                       <span class="chat-empty-hint">
                         <kbd>@</kbd> add files / agents
@@ -10162,11 +10171,15 @@ export function MessageList() {
                       <span class="chat-empty-hint">
                         <kbd>&amp;</kbd> link sessions
                       </span>
+                      <span class="chat-empty-hint">
+                        <kbd>Shift</kbd>
+                        <kbd>Enter</kbd> new line
+                      </span>
+                      <span class="chat-empty-hint">
+                        <kbd>{pasteModifier}</kbd>
+                        <kbd>V</kbd> paste images
+                      </span>
                     </div>
-                    <span class="chat-empty-hint">
-                      <kbd>Shift</kbd>
-                      <kbd>Enter</kbd> new line
-                    </span>
                   </div>
                 </div>
               </Show>

@@ -1867,9 +1867,8 @@ body:is(.vscode-high-contrast, .vscode-high-contrast-light) .assistant-activity-
   flex: 1;
   display: flex;
   flex-direction: column;
-  gap: 40px;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-end;
   padding: 0 2px;
   container-name: chat-empty-state;
   container-type: inline-size;
@@ -1894,13 +1893,69 @@ body:is(.vscode-high-contrast, .vscode-high-contrast-light) .assistant-activity-
 }
 
 .chat-empty-hints {
+  position: relative;
+  isolation: isolate;
   display: flex;
   flex-direction: column;
-  gap: 28px;
   align-items: flex-start;
   width: min(100%, 280px);
+  opacity: 0.5;
+  pointer-events: auto;
   user-select: none;
   -webkit-user-select: none;
+}
+
+/* Include the close button and the empty space around the hint row in its hover area. */
+.chat-empty-hints::before {
+  content: '';
+  position: absolute;
+  z-index: -1;
+  top: -24px;
+  bottom: -12px;
+  left: 50%;
+  width: 100cqw;
+  transform: translateX(-50%);
+}
+
+.chat-empty-hints:hover,
+.chat-empty-hints:focus-within {
+  opacity: 1;
+}
+
+.chat-empty-hints[hidden] {
+  display: none;
+}
+
+.chat-empty-hints.is-logo-overlapping {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.chat-empty-hints-dismiss {
+  position: absolute;
+  top: -18px;
+  right: -8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border-radius: var(--radius-control);
+  color: var(--color-vscode-muted);
+  opacity: 0;
+  pointer-events: none;
+}
+
+.chat-empty-hints:hover .chat-empty-hints-dismiss,
+.chat-empty-hints:focus-within .chat-empty-hints-dismiss {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.chat-empty-hints-dismiss:hover {
+  color: var(--color-vscode-fg);
+  background: var(--color-vscode-toolbar-hover);
 }
 
 .chat-empty-hint-grid {
@@ -1919,10 +1974,6 @@ body:is(.vscode-high-contrast, .vscode-high-contrast-light) .assistant-activity-
   color: color-mix(in srgb, var(--color-vscode-muted) 90%, var(--color-vscode-fg));
 }
 
-.chat-empty-hints > .chat-empty-hint {
-  align-self: center;
-}
-
 /* Match the grid's single-column breakpoint: two 130px columns plus a 12px gap. */
 @container chat-empty-state (width < 272px) {
   .chat-empty-hints {
@@ -1932,10 +1983,6 @@ body:is(.vscode-high-contrast, .vscode-high-contrast-light) .assistant-activity-
 
   .chat-empty-hint-grid {
     grid-template-columns: 1fr;
-  }
-
-  .chat-empty-hints > .chat-empty-hint {
-    align-self: flex-start;
   }
 }
 
@@ -1965,19 +2012,50 @@ body:is(.vscode-high-contrast, .vscode-high-contrast-light) .assistant-activity-
   line-height: 14px;
 }
 
+.chat-empty-logo-shell {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 64px;
+  pointer-events: auto;
+}
+
+.chat-empty-logo-waves {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  color: rgb(232 137 54);
+  mask-size: 100% 100%;
+  mask-repeat: no-repeat;
+  pointer-events: none;
+}
+
 .chat-empty-logo {
-  width: clamp(64px, 12vw, 88px);
+  display: block;
+  width: 64px;
   height: auto;
-  opacity: 0.8;
+  opacity: 0.5;
   filter: grayscale(1) brightness(1.1)
     drop-shadow(0 1px 1px var(--vscode-keybindingLabel-shadow, rgb(0 0 0 / 28%)));
   user-select: none;
   -webkit-user-drag: none;
+  pointer-events: auto;
+}
+
+body:is(.vscode-light, .vscode-high-contrast-light) .chat-empty-logo-waves {
+  color: rgb(255 255 255);
 }
 
 body:is(.vscode-light, .vscode-high-contrast-light) .chat-empty-logo {
-  opacity: 0.8;
   filter: drop-shadow(0 1px 1px var(--vscode-keybindingLabel-shadow, rgb(0 0 0 / 28%)));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-empty-logo-waves {
+    display: none;
+  }
 }
 
 .rendered-markdown {
@@ -2993,7 +3071,7 @@ body.vscode-dark .interactive-session .chat-input-container.focused {
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 4px;
+  gap: 6px;
   margin-left: auto;
   flex-shrink: 0;
   min-width: 0;

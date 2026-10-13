@@ -337,7 +337,7 @@ export function QuestionPrompt(props: { request: QuestionRequest }) {
           </Show>
           <button
             type="button"
-            class="question-btn question-btn-tertiary"
+            class="question-btn question-btn-secondary"
             disabled={isSubmitting()}
             onClick={() => void skip()}
           >

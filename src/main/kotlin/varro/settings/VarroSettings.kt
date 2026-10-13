@@ -81,6 +81,9 @@ class VarroSettings : PersistentStateComponent<VarroSettings> {
     /** Font size for code blocks. `0` follows the IDE editor font size. */
     var chatEditorFontSize: Int = 0
 
+    /** Optional absolute Handy executable path. Empty searches standard locations and PATH. */
+    var dictationHandyPath: String = ""
+
     /** Font family override; `default` follows the IDE. */
     var chatFontFamily: String = "default"
 

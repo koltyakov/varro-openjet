@@ -149,6 +149,7 @@ With automatic startup disabled and no managed process, the connection is attach
 | Shared model preferences | `store/VarroModelStore.kt` |
 | Model assignments | `host/ModelRoutingService.kt` |
 | `prompt-completion-service.ts` | `host/PromptCompletionService.kt` |
+| `handy-integration.ts` | `host/HandyIntegration.kt` |
 | `session-transfer-catalog.ts` and move handling | `host/SessionTransfers.kt` |
 | Permission rules and review | `host/PermissionService.kt`, `host/ProjectPermissionConfig.kt`, `host/PermissionJudge.kt` |
 | Queued sends and Ralph orchestration | `host/QueuedDispatches.kt`, `host/RalphRunner.kt` |
@@ -188,6 +189,14 @@ are checked again before delivery. macOS also checks Cocoa window occlusion, inc
 windows. Desktop alerts use JetBrains `SystemNotifications`; a log-only notification group holds
 an **Open chat** action. JVM audio plays the bundled CC0 recording independently of banners.
 Notification preferences use the IDE-local settings component and are excluded from shared settings.
+
+## Local dictation and server diagnostics
+
+`HandyIntegration` validates `handy/request` and replies with correlated `handy/result` messages. One guard shared across projects and views covers executable discovery and commands. Concurrent status requests share the pending result; overlapping toggle/cancel requests are rejected rather than queued. Discovery accepts only absolute configured paths or absolute PATH entries. Commands use fixed arguments without a shell, a two-second timeout, and a 64 KiB output limit. Handy must already be running. Remote IDE hosts neither discover nor activate it. `dictationHandyPath` persists in IDE settings but is excluded from shared OpenJet settings.
+
+`IdeHostEnvironment` reads the public `IdeProductMode.isBackend` API reflectively on IDE 253 and newer. IDE 252 lacks that API, so it checks the current process's launcher arguments for that branch's remote and split-mode commands. Unavailable launcher evidence or a failed product-mode read disables dictation. Both the UI's remote-host flag and the native Handy guard use this same check.
+
+`OpenCodeServer.readVersionInfo` refreshes read-only health and process diagnostics off the EDT, with a one-minute cache and a two-second health bound. The connected server's HTTP PID takes precedence over the registered process PID, so CLI wrappers and forwarded connections do not report the forwarding process. Local uptime is omitted when that PID differs from the local listener. Status tooltips and About display the PID when known. Changed connection generations discard late results; unhealthy refreshes clear the PID. Diagnostic PIDs grant no lifecycle authority.
 
 ## Persistence and recovery
 

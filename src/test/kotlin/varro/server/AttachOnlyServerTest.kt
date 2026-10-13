@@ -8,6 +8,9 @@ import varro.settings.VarroSettings
 import java.net.InetSocketAddress
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.atomic.AtomicReference
+import java.util.concurrent.atomic.AtomicBoolean
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.attribute.PosixFilePermissions
@@ -26,6 +29,7 @@ class AttachOnlyServerTest {
             assertNull(diagnostics.cliVersion)
             assertTrue(diagnostics.attachOnly)
             assertEquals(server.url(), diagnostics.url)
+            assertEquals(12345L, diagnostics.processId)
             assertSame(diagnostics, server.readVersionInfo())
             assertEquals(version.substringBefore('.').toInt(), (server.currentStatus() as ServerStatus.Running).apiVersion)
             assertEquals(version.substringBefore('.').toInt(), server.currentStatus().toJson().get("apiVersion").asInt)
@@ -108,7 +112,71 @@ class AttachOnlyServerTest {
         }
     }
 
-    private fun withServer(version: String, authentication: OpenCodeServerAuthentication? = null, check: (OpenCodeServer) -> Unit) {
+    @Test fun `PID diagnostics follow the HTTP server rather than the local forwarding listener`() {
+        val payload = AtomicReference("""{"healthy":true,"version":"2.0.26","pid":79285}""")
+        withServer("2.0.26", healthPayload = payload::get) { server ->
+            val first = server.readVersionInfo()!!
+            assertEquals(79285L, first.processId)
+            assertNull(first.startedAt)
+            assertTrue(first.attachOnly)
+            assertFalse(server.isManaged())
+            payload.set("""{"healthy":true,"version":"2.0.26","pid":5678}""")
+            assertEquals(5678L, server.readVersionInfo(refresh = true)!!.processId)
+            payload.set("{}")
+            assertNull(server.readVersionInfo(refresh = true)!!.processId)
+            assertFalse(server.isManaged())
+            assertEquals(OpenCodeServer.RestartOutcome.NOT_MANAGED, server.restart(force = true))
+        }
+    }
+
+    @Test fun `unknown and invalid V1 server PIDs stay unknown`() {
+        val payload = AtomicReference("""{"healthy":true,"version":"1.19.0","pid":12345}""")
+        withServer("1.19.0", healthPayload = payload::get) { server ->
+            for (pid in listOf("null", "0", "-1", "1.5", "9007199254740992", "\"12345\"", "{}")) {
+                payload.set("""{"healthy":true,"version":"1.19.0","pid":$pid}""")
+                assertNull(pid, server.readVersionInfo(refresh = true)!!.processId)
+            }
+            payload.set("""{"healthy":true,"version":"1.19.0"}""")
+            assertNull(server.readVersionInfo(refresh = true)!!.processId)
+        }
+    }
+
+    @Test fun `a stopped connection discards in-flight PID diagnostics`() {
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val pause = AtomicBoolean(false)
+        withServer("2.0.26", healthPayload = {
+            if (pause.get()) {
+                entered.countDown()
+                release.await(5, TimeUnit.SECONDS)
+            }
+            """{"healthy":true,"version":"2.0.26","pid":12345}"""
+        }) { server ->
+            pause.set(true)
+            val diagnostics = CompletableFuture.supplyAsync { server.readVersionInfo(refresh = true) }
+            try {
+                assertTrue(entered.await(2, TimeUnit.SECONDS))
+                server.dispose()
+                release.countDown()
+                assertNull(diagnostics.get(3, TimeUnit.SECONDS))
+            } finally { release.countDown() }
+        }
+    }
+
+    @Test fun `invalid V2 health PIDs cannot become connected process diagnostics`() {
+        val payload = AtomicReference("""{"version":"2.0.26","pid":12345}""")
+        withServer("2.0.26", healthPayload = payload::get) { server ->
+            for (pid in listOf("null", "0", "-1", "1.5", "9007199254740992", "\"12345\"")) {
+                payload.set("""{"version":"2.0.26","pid":$pid}""")
+                assertNull(pid, server.readVersionInfo(refresh = true)!!.processId)
+            }
+        }
+    }
+
+    private fun withServer(version: String, authentication: OpenCodeServerAuthentication? = null,
+        healthPayload: () -> String = { """{"healthy":true,"version":"$version","pid":12345}""" },
+        check: (OpenCodeServer) -> Unit,
+    ) {
         val endpoint = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
         endpoint.createContext("/") { exchange ->
             if (authentication != null && exchange.requestHeaders.getFirst("Authorization") != OpenCodeConnection.authorization("password", "user")) {
@@ -116,7 +184,7 @@ class AttachOnlyServerTest {
                 exchange.close()
                 return@createContext
             }
-            val bytes = """{"healthy":true,"version":"$version","pid":12345}""".toByteArray()
+            val bytes = healthPayload().toByteArray()
             exchange.responseHeaders.add("Content-Type", "application/json")
             exchange.sendResponseHeaders(200, bytes.size.toLong())
             exchange.responseBody.use { it.write(bytes) }

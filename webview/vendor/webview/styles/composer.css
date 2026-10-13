@@ -1676,7 +1676,8 @@
   opacity: 0.75;
 }
 
-.toolbar-attach-button {
+.toolbar-attach-button,
+.toolbar-dictation-button {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1696,12 +1697,33 @@
   -webkit-user-select: none;
 }
 
-.toolbar-attach-button:hover {
+.toolbar-attach-button:hover,
+.toolbar-dictation-button:hover:not(:disabled) {
   background: var(--color-vscode-toolbar-hover);
   color: var(--color-vscode-fg);
 }
 
-.chat-input-toolbars.compact-tight .toolbar-attach-button {
+.toolbar-dictation-button + .toolbar-attach-button {
+  /* Keep the mic and attachment closer together without crowding their icons. */
+  margin-left: -2px;
+}
+
+.toolbar-attach-button + .toolbar-send-controls {
+  margin-left: 2px;
+}
+
+.toolbar-dictation-button.activation-requested {
+  background: var(--color-vscode-toolbar-hover);
+  color: var(--color-vscode-fg);
+}
+
+.toolbar-dictation-button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.chat-input-toolbars.compact-tight .toolbar-attach-button,
+.chat-input-toolbars.compact-tight .toolbar-dictation-button {
   width: 22px;
   height: 22px;
 }
