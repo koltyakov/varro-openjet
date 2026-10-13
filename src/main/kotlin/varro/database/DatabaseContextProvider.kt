@@ -6,7 +6,6 @@ import com.intellij.database.DatabaseDataKeys
 import com.intellij.database.datagrid.DataGridListener
 import com.intellij.database.datagrid.GridRequestSource
 import com.intellij.database.datagrid.GridUtil
-import com.intellij.database.datagrid.DataGridUtil
 import com.intellij.database.console.JdbcConsoleProvider
 import com.intellij.database.psi.DbPsiFacade
 import com.intellij.database.util.VirtualFileDataSourceProvider
@@ -147,8 +146,8 @@ class DatabaseContextProvider(private val project: Project) : DatabaseContextSou
                 val editor = activeEditor?.get()?.takeUnless { it.isDisposed }
                 val file = editor?.let { FileDocumentManager.getInstance().getFile(it.document) }
                 val console = file?.let { JdbcConsoleProvider.getValidConsole(project, it) }
-                    ?: active?.get()?.let { DataGridUtil.findGridRelatedConsole(project, it) }
-                val gridHookUp = active?.get()?.let { DataGridUtil.getDatabaseHookUp(it) }
+                    ?: active?.get()?.let { GridCompatibility.relatedConsole(project, it) }
+                val gridHookUp = active?.get()?.let { GridCompatibility.databaseHookUp(it) }
                 val session = gridHookUp?.session ?: console?.session
                 val source = session?.connectionPoint?.dataSource
                 val state = session?.let {
@@ -362,19 +361,20 @@ class DatabaseContextProvider(private val project: Project) : DatabaseContextSou
                 val selected = grid.selectionModel.selectedRows.asList()
                 val rows = selected.asSequence().filter { model.isValidRowIdx(it) }
                     .sortedBy { it.toView(grid).asInteger() }
-                val console = DataGridUtil.findGridRelatedConsole(project, grid)
-                val hookUp = DataGridUtil.getDatabaseHookUp(grid)
+                val console = GridCompatibility.relatedConsole(project, grid)
+                val hookUp = GridCompatibility.databaseHookUp(grid)
                 val element = (helper.getVirtualFile(grid) as? PsiAwareObject)?.findElement(project) as? DbElement
-                    ?: DataGridUtil.getDatabaseTable(grid)?.let { hookUp?.dataSource?.findElement(it) }
+                    ?: (hookUp?.databaseTable as? DasTable)?.let { hookUp?.dataSource?.findElement(it) }
                 val source = element?.dataSource
                     ?: hookUp?.dataSource
                     ?: console?.dataSource?.uniqueId?.let { DbPsiFacade.getInstance(project).findDataSource(it) }
                 val session = hookUp?.session ?: console?.session
-                val searchPath = DataGridUtil.getDataGridClient(grid)?.searchPath
+                val searchPath = GridCompatibility.searchPath(hookUp)
                     ?: console?.takeIf { it.session === session }?.searchPath
                 val related = if (element != null) listOf(element) else columns.asSequence()
                     .take(DatabaseSnapshot.MAX_COLUMNS).mapNotNull { index ->
-                        DataGridUtil.getDatabaseColumn(grid, index)?.let { column ->
+                        val gridColumn = grid.getDataModel(DataAccessType.DATABASE_DATA).getColumn(index)
+                        gridColumn?.let { hookUp?.getDatabaseColumn(it) }?.let { column ->
                             DasUtil.getParentOfClass(column, DasTable::class.java, true)?.let { source?.findElement(it) }
                         }
                     }.distinctBy(DatabaseDetails::qualifiedName).take(9).toList()

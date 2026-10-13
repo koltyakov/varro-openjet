@@ -67,8 +67,8 @@ intellijPlatform {
             create("IU", "2025.2.6.3")
             create("IU", "2025.3.6.1")
             create("IU", "2026.1.5")
-            create("IU", "2026.2.2")
-            create("IU", "263.4732.28")
+            create("IU", "2026.2.3")
+            create("IU", "263.6800.24")
             // Gradle 2.18.1 currently fails to resolve DataGrip's DG release feed
             // through its DB product code. A local installation still verifies it.
             providers.gradleProperty("datagripVerificationPath").orNull?.let { local(it) }

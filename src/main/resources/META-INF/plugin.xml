@@ -111,14 +111,18 @@
 
     <!-- Git backs commit-message generation. Bundled in every IDE that supports Git. -->
     <depends optional="true" config-file="varro-git.xml">Git4Idea</depends>
+    <!-- Commit-message controls moved into a separate VCS plugin in 263.
+         Older IDEs provide them in the platform, so this remains optional. -->
+    <depends optional="true" config-file="varro-vcs.xml">com.intellij.platform.vcs</depends>
 
     <!-- The terminal backs `terminal/run` and terminal-selection context. -->
     <depends optional="true" config-file="varro-terminal.xml">org.jetbrains.plugins.terminal</depends>
     <depends optional="true" config-file="varro-database.xml">com.intellij.database</depends>
-    <!-- Grid classes moved out of the platform into this plugin in 262.
-         The database dependency does not expose them to Varro's classloader.
-         Keep this explicit dependency; older IDEs report it as unresolved but optional. -->
+    <!-- Grid classes require an explicit classloader dependency. 262 and early
+         263 use Grid Core; 263.6800+ merges it into Data Editor and Viewer.
+         Both are optional because older IDEs provide these classes directly. -->
     <depends optional="true" config-file="varro-grid.xml">intellij.grid.core.plugin</depends>
+    <depends optional="true" config-file="varro-grid-modern.xml">com.intellij.grid</depends>
 
     <!-- JCEF is a separate platform module on 2026.2+; older IDEs provide it from
          the platform without exposing the module, so this stays optional and the
