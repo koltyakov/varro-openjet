@@ -2608,6 +2608,10 @@ kbd {
   max-height: calc(100vh - 128px);
   margin: 0 auto;
   object-fit: contain;
+  border: 1px solid color-mix(in srgb, var(--color-vscode-fg) 28%, var(--color-vscode-border));
+  box-shadow:
+    0 6px 24px rgb(0 0 0 / 20%),
+    0 1px 4px rgb(0 0 0 / 12%);
   user-select: none;
   -webkit-user-select: none;
   -webkit-user-drag: none;

@@ -9,5 +9,10 @@
                 description="Describe the staged changes, or the working tree when nothing is staged">
             <add-to-group group-id="Vcs.MessageActionGroup" anchor="last"/>
         </action>
+        <action id="Varro.CommitMessageRules" class="varro.actions.CommitMessageRulesAction"
+                text="Varro Commit Message Rules" description="Override commit-message style for this repository">
+            <add-to-group group-id="Vcs.MessageActionGroup" anchor="last"/>
+            <add-to-group group-id="Varro.ActionGroup" anchor="last"/>
+        </action>
     </actions>
 </idea-plugin>

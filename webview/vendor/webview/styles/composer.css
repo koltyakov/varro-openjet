@@ -1731,7 +1731,20 @@
 .toolbar-popover.busy-menu {
   left: auto;
   right: 0;
-  min-width: 190px;
+  width: max-content;
+}
+
+.busy-menu .toolbar-popover-item {
+  padding-right: 12px;
+}
+
+.busy-menu .toolbar-popover-item:not(:disabled):is(:hover, :focus-visible) {
+  background: var(--color-vscode-hover);
+}
+
+.busy-menu .toolbar-popover-item:disabled {
+  background: none;
+  cursor: default;
 }
 
 .busy-menu-icon {

@@ -353,6 +353,12 @@ export function parseExtensionMessage<T>(value: T): ExtensionMessage | null {
       if (isBoolean(payload.expandThinking)) config.expandThinking = payload.expandThinking;
       if (isBoolean(payload.showChangedFiles)) config.showChangedFiles = payload.showChangedFiles;
       if (isBoolean(payload.showTurnTimer)) config.showTurnTimer = payload.showTurnTimer;
+      if (
+        payload.remoteImages === 'off' ||
+        payload.remoteImages === 'ask' ||
+        payload.remoteImages === 'on'
+      )
+        config.remoteImages = payload.remoteImages;
       if (isString(payload.promptCompletionModel))
         config.promptCompletionModel = payload.promptCompletionModel;
       if (isBoolean(payload.debugShowQuotaWarning))

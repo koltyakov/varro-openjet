@@ -4,6 +4,7 @@ import type { ContextBreakdownSegment } from './context-breakdown';
 import type { NativePdfAttachment } from './native-pdf';
 import type { ServerEventPropertiesByName, WorkspaceStatusEntry } from './opencode-types';
 import type { ExtensionConfigSnapshot, WebviewConfigUpdatePayload } from './provider-limit-config';
+import type { RemoteImageMode } from './remote-images';
 import type { RalphConfig, RalphRun, RalphSelectedModel } from './ralph';
 import { asRecord, isNumber, isString } from './type-utils';
 import type { UnknownRecord } from './type-utils';
@@ -445,6 +446,7 @@ export type WorkspaceStatusEventSummary = {
 export const VARRO_API_NAMESPACE = '/varro' as const;
 
 export const VARRO_API_ENDPOINTS = {
+  remoteImage: `${VARRO_API_NAMESPACE}/remote-image`,
   promptCompletion: `${VARRO_API_NAMESPACE}/prompt-completion`,
   promptCompletionModels: `${VARRO_API_NAMESPACE}/prompt-completion/models`,
   promptCompletionTest: `${VARRO_API_NAMESPACE}/prompt-completion/test`,
@@ -869,6 +871,7 @@ export type InitialWebviewState = {
   expandThinking?: boolean;
   showChangedFiles?: boolean;
   showTurnTimer?: boolean;
+  remoteImages?: RemoteImageMode;
   promptCompletionModel?: string;
   debugShowQuotaWarning?: boolean;
   debugResetWarningDays?: number;

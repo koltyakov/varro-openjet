@@ -46,6 +46,8 @@ class VarroSettings : PersistentStateComponent<VarroSettings> {
     var chatExpandThinking: Boolean = false
     var chatShowChangedFiles: Boolean = false
     var chatShowTurnTimer: Boolean = true
+    /** Application-only consent. Repository configuration must never enable network requests. */
+    var chatRemoteImages: String = "ask"
     /** Restored by new editor/window chats; each open chat keeps its own toggle. */
     var windowChatThemeReversed: Boolean = false
     /** Mirrors `varro.chat.enableProblemsContext`; applies to automatic and explicit problem context. */
@@ -98,6 +100,7 @@ class VarroSettings : PersistentStateComponent<VarroSettings> {
 
     /** `providerID/modelID` used to generate commit messages; empty auto-selects. */
     var commitMessageModel: String = ""
+    var commitMessageRules: String = ""
 
     // --- JetBrains-specific ---------------------------------------------------
 
@@ -115,6 +118,8 @@ class VarroSettings : PersistentStateComponent<VarroSettings> {
     }
 
     fun normalizedPort(): Int = serverPort.takeIf { it in 1..65_535 } ?: DEFAULT_SERVER_PORT
+
+    fun remoteImageMode(): String = chatRemoteImages.takeIf { it == "off" || it == "on" } ?: "ask"
 
     fun permissionMode(): String =
         chatDefaultPermissionMode.takeIf { it in PERMISSION_MODES } ?: "default"

@@ -4,7 +4,7 @@
 # without going through the Plugins dialog.
 #
 #   ./scripts/install.sh                  # build, then install into every detected IDE
-#   ./scripts/install.sh --no-build       # install the existing dist/ artifact
+#   ./scripts/install.sh --no-build       # install the current version's dist/ artifact
 #   ./scripts/install.sh --ide IntelliJIdea2026.2
 #   ./scripts/install.sh --list           # show detected IDE config directories
 #   ./scripts/install.sh --all            # include IDEs outside the supported range
@@ -158,9 +158,16 @@ if [ "$BUILD" -eq 1 ]; then
   ./scripts/build.sh
 fi
 
-ARTIFACT="$(ls -t dist/*.zip 2>/dev/null | head -1 || true)"
-if [ -z "$ARTIFACT" ]; then
-  echo "error: no artifact in dist/. Run ./scripts/build.sh first, or drop --no-build." >&2
+# Incremental builds can leave older ZIPs behind and recopy them into dist/.
+# Modification time therefore says nothing about which plugin version to install.
+PLUGIN_VERSION="$(sed -n 's/^pluginVersion=//p' gradle.properties | tr -d '\r')"
+if [ -z "$PLUGIN_VERSION" ]; then
+  echo "error: pluginVersion is missing from gradle.properties." >&2
+  exit 1
+fi
+ARTIFACT="dist/varro-openjet-${PLUGIN_VERSION}.zip"
+if [ ! -f "$ARTIFACT" ]; then
+  echo "error: missing $ARTIFACT. Run ./scripts/build.sh first, or drop --no-build." >&2
   exit 1
 fi
 echo "==> Artifact: $ARTIFACT"

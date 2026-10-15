@@ -85,6 +85,14 @@ Settings are under **Settings > Tools > Varro**. You can configure server startu
 
 The Agents settings control the runtime-only read-only `Ask` agent and fallback titles for untitled sessions. Ask is enabled by default; fallback titles are disabled. Configure automatic compaction in OpenCode. On-demand compaction remains available in chat.
 
+### Remote images and commit messages
+
+HTTPS Markdown images show a placeholder by default. Click **Load image**, or **Load all** for the current response. **Remote Markdown images** under **Settings > Tools > Varro** accepts `ask`, `on` for automatic loading near the viewport, or `off` for alt text only. This consent stays local to the IDE; repository settings cannot enable downloads.
+
+Downloads expose the IDE host's IP address and requested URL to the image server. They send no cookies, authorization or referrer, bypass proxies, and require public-network HTTPS on port 443. The host checks DNS again for every redirect, pins the checked address, and limits downloads to two at once, 15 seconds and 8 MiB per image. Existing JVM image decoders generate bounded PNG previews; unsupported formats show an error rather than loading directly in the browser.
+
+Set **Commit message rules** for an application-wide style preference. **Varro Commit Message Rules** in the commit toolbar or **Tools > Varro** overrides it for the chosen repository; clear the override to use the default. During generation, the generate button becomes a cancel button for that repository. Cancellation leaves the input untouched and allows an immediate retry. Generated text is not applied if the repository diff changed, and changed input requires another confirmation. No files are staged or committed.
+
 ### Background notifications
 
 Under **Settings > Tools > Varro > Notifications**, enable desktop alerts and choose which events play the water-bubble sound: permission requests, questions, completed replies, and plans ready for review. All options default to off and stay local to each IDE. Sound works independently of desktop alerts.

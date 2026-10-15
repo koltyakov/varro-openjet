@@ -1,6 +1,6 @@
 # OpenCode V2 support
 
-OpenJet supports V1 from 1.16.0 and V2 from 2.0.5. The webview and shared sources were synced from Varro's `main` branch at `67a4003fdaaf`, version 0.33.2. The Kotlin adapter handles released-server contracts, including generated skill, shell and synthetic transcript records. Synthetic text appears as automatic-action notices. Pending and running V2 patch calls render as active edits. Assistant history preserves automatic retry metadata for recovery notices. History attachments use deferred references with Kotlin-generated thumbnails and on-demand original reads.
+OpenJet supports V1 from 1.16.0 and V2 from 2.0.5. The webview and shared sources were synced from Varro's `main` branch at `23d8197ff4f7`, version 0.33.4. The Kotlin adapter handles released-server contracts, including generated skill, shell and synthetic transcript records. Synthetic text appears as automatic-action notices. Pending and running V2 patch calls render as active edits. Assistant history preserves automatic retry metadata for recovery notices. History attachments use deferred references with Kotlin-generated thumbnails and on-demand original reads.
 
 V2 sessions support `/pause` and a Resume action in the transcript. Pausing parks queued messages and interrupts with `resume=false`. Pause markers persist in the shared Varro session annotations, and session summaries and usage reports exclude paused time. Commit-message generation uses the stateless endpoint when the server advertises it, falling back to a helper session when the endpoint or selected model is unavailable before generation starts.
 
@@ -166,9 +166,133 @@ are historical; their static-preload and Windows inspection warm-up differences
 remain outside this revision's changes. These limits do not establish full backend
 parity.
 
+## Upstream sync review, 2026-10-14
+
+Reviewed `67a4003fdaaf7f6731e7ee1b4aa540602db4b4fc` through
+`d42fc672073f7498245ad17d8b815b094cbdc414`, Varro 0.33.4. The review covers
+all changed extension sources, shared protocol, contributed configuration and
+dependencies. Browser dependency versions and the pinned Node/npm toolchain
+did not change; no new browser package was required.
+
+| Upstream change | Kotlin alignment and regression coverage |
+| --- | --- |
+| `src/extension/remote-images.ts`, `rest-proxy.ts`, `extension-config.ts`, `webview-session.ts`; `POST /varro/remote-image` and `remoteImages` config | `RemoteImages.kt`, `RestProxy.kt`, `ApiRoutes.kt`, `VarroSettings.kt` and `VarroProjectService.kt` implement IDE-local off/ask/on consent, host-side DNS-pinned HTTPS, public-address checks on every redirect, no ambient auth/cookies/referrer/proxy, two distinct concurrent downloads, shared-request cancellation, a 15-second deadline including DNS waits, an 8 MiB download cap and existing bounded thumbnail conversion. Configuration changes and disposal cancel pending work. `RemoteImagesTest` covers these policies, mixed DNS answers, cache hits, response validation, bounds, cancellation and unresolved DNS. |
+| `src/extension/commit-message-service.ts`, `commands.ts`, `sidebar-provider.ts`; `commitMessage.rules` and repository-scoped cancellation | `CommitMessageService.kt`, `CommitMessageGenerations.kt`, `GenerateCommitMessageAction.kt` and `CommitMessageRules.kt` add application defaults and IDE workspace repository overrides. The native toolbar action switches to cancellation, with an explicit repository choice for aggregate commit panels. Cancellation covers Git preparation, HTTP generation, polling and final application; cancelled helper sessions are aborted and deleted. Stale attempts cannot release retries. Rules enter both stateless and helper prompts without replacing grounding or no-tools constraints. Focused service/state tests cover both paths and cancellation. |
+| `src/extension/rest-proxy.ts`; missing-location session list and status reads | `WorkspaceDirectoryErrors.kt` and `RestProxy.kt` distinguish directory-specific 404s from missing sessions. Paginated missing-folder reads return `incomplete: true` with the unavailable directory, preserving loaded history and decisions; full reads and session activation give restore/reopen instructions. Unit coverage checks both result shapes and unrelated errors. |
+| `src/extension/opencode-v2-adapter.ts`, `opencode-config-service.ts`; native provider policies | `OpenCodeV2Adapter.kt` reads legacy policies before top-level policies and removes denied configured-provider integration placeholders rather than restoring their custom models. `ProjectProviderConfig.kt` edits the native array when present and otherwise keeps the floor-compatible legacy key. `JsoncEdit.kt` preserves unrelated JSONC comments; concurrent edits reject the write. Unit tests cover both formats, mixed precedence and write rejection. The released 2.0.29 fixture independently verifies denied-provider catalog filtering. |
+
+The complete released OpenCode comparison covers 2.0.28 through 2.0.29,
+`c5aabae288` through `34d8ded0c5`, 48 commits and 209 changed files. The
+HTTP/OpenAPI comparison removes no routes or methods. Generated config types add
+top-level policies and catch up with existing optional provider request encoding.
+Session/message/history/inbox, permission/form and SSE envelopes remain unchanged.
+Output-limit continuation and incomplete tool-input diagnostics use existing
+synthetic/tool/error events, which the Kotlin projection already consumes.
+Managed configuration precedence, plugin permission assertions and per-call hook
+errors remain server-owned. CLI serve/upgrade arguments did not change. The PTY
+and pairing authorization fix selects route identities server-side; OpenJet does
+not consume those browser WebSocket/pairing flows. Desktop, Console, Figma and TUI
+changes do not require JetBrains host ports. Review evidence is retained under
+`build/opencode-compatibility/review-2.0.29/`.
+
+The exact published 2.0.29 binary passed `OpenCodeV2IntegrationTest` and
+`OpenCodeManagedServiceIntegrationTest` without skips, including the new native
+policy case, in isolated HOME/XDG/database/server-state roots with a deterministic
+local provider. Evidence is `build/opencode-compatibility/2.0.29/verification.json`.
+The tested status baseline is now 2.0.29; V1 remains 1.19.0. Support floors remain
+V2 2.0.5 and V1 1.16.0. The V1 SDK did not change.
+
+Final checks passed: vendor integrity, TypeScript checking, browser build, all 89
+browser host tests, all four compatibility-helper tests, and
+`./gradlew check buildPlugin verifyPlugin` with the released 2.0.29 fixture binary
+enabled. The full Kotlin run passed 521 tests; only the opt-in existing-database
+usage benchmark was skipped. Both released suites passed again without skips.
+The commit-generation tests include cancellation while an HTTP response body is
+stalled. Plugin Verifier reported compatibility with all five configured IDE
+builds, with only the existing deprecated/experimental API warnings. The final
+build log is `build/upstream-sync-d42fc672-final.log`; the packaged plugin is
+`build/distributions/varro-openjet-0.7.12.zip`. No sandbox UI interaction was run.
+
+Remaining differences and verification limits:
+
+| Status | Upstream and OpenJet code | User-visible impact |
+| --- | --- | --- |
+| Accepted image-format difference | Upstream `src/extension/remote-images.ts` uses the WASM `image-thumbnails` worker. OpenJet `RemoteImages.kt` reuses `ImageThumbnails.kt` and JVM decoders for PNG, JPEG, GIF and bundled WebP. The user chose to keep these codecs for this sync rather than add an AVIF decoder and its packaging/licensing work. | Valid AVIF remote images can show the explicit unsupported-image error instead of a preview. The existing host decoder limitation also applies to history thumbnails; there is no direct-network browser fallback. |
+| Native UI not verified interactively | Upstream commit toolbar/configuration and `RemoteMarkdownImage.tsx` map to `GenerateCommitMessageAction.kt`, `CommitMessageRulesAction.kt`, `VarroConfigurable.kt` and the vendored renderer. | Toolbar switching, repository dialogs, image loading/layout and settings propagation still need sandbox interaction. Unit/build checks do not establish real-IDE rendering or TLS/public-server interoperability. |
+
+No other missing or blocked consumed-contract change was found in the reviewed
+revision. Older static-preload, Windows process-inspection warm-up and quota
+differences remain outside this revision's changes. No live provider, interactive
+OAuth, native Windows/Linux run or production session was used for verification.
+
+## Upstream sync follow-up, 2026-10-14
+
+Reviewed `d42fc672073f7498245ad17d8b815b094cbdc414` through
+`23d8197ff4f7000a395c3d4c4817371804c301e2`, including the intermediate
+`d7d86e4b1c4a6025f18db0de4c2056ec80b2270c` snapshot. The vendored changes are
+`src/webview/components/chat-input/BusySendMenu.tsx` and
+`src/webview/styles/composer.css`: labels are now **Queue** and **Steer**, menu
+width follows its content, enabled items use the normal menu hover/focus
+background, and disabled items keep a plain background and default cursor.
+Upstream adds a four-theme browser regression for these highlights. Callbacks,
+keyboard hints, queue-only restrictions and request bodies did not change.
+Shared protocol, contributed configuration and `package.json` are unchanged.
+The SDK/client baselines remain V1 1.19.0 and V2 2.0.29, with unchanged support
+floors and browser dependencies.
+
+The runtime host change in `src/extension/varro-state-paths.ts` shares only
+in-flight preparation for each native/legacy directory pair. On Windows this
+prevents a second caller from treating a junction's intermediate directory as a
+conflicting state root. Settled results are not cached: failures permit a fresh
+attempt, and later calls still check for directory conflicts.
+
+OpenJet does not create native/legacy compatibility junctions.
+`src/main/kotlin/varro/server/OpenCodeV2SessionState.kt` uses ordinary directory
+creation, per-session JVM monitors and the shared owner-directory file lock for
+writes. It has no asynchronous preparation or successful-preparation cache, so
+the new junction race has no Kotlin equivalent to port. New fixture-only
+`OpenCodeV2SessionStateTest` cases cover concurrent first writes without lost
+patches, fresh detection of a later file/directory conflict, and a successful
+retry after the conflict is removed.
+
+Other extension changes affect tests only. `isolated-process.test.ts` prepares
+and disposes the upstream persistent Windows inspector around the suite;
+`vitest.config.mts` runs it serially with native inspection tests. OpenJet's
+`ProcessIdentity` in `ServerOwnership.kt` uses on-demand inspection, and Gradle
+runs its Kotlin fixtures independently of Vitest. The upstream test-runner
+change does not add a JetBrains runtime operation or relax process ownership
+checks.
+
+Remaining differences and verification limits:
+
+| Status | Upstream and OpenJet code | User-visible impact |
+| --- | --- | --- |
+| Pre-existing state-root discovery difference | Upstream `src/extension/varro-state-paths.ts` selects platform-native state roots and checks legacy compatibility links. `OpenCodeV2SessionState.kt` still selects the legacy `$XDG_STATE_HOME/varro/opencode-v2` root, defaulting to `~/.local/state/varro/opencode-v2`. | Existing compatibility links keep annotation writers on the same files. If upstream has initialized a distinct native root without a legacy link, OpenJet can use a separate annotation directory; pause markers, metadata and background-service choices may not be shared. This selection difference predates the reviewed change. No user state was moved, linked or reconciled during this sync. |
+| Accepted AVIF limitation | Upstream remote-image loading uses its WASM thumbnail worker; OpenJet uses `RemoteImages.kt` and `ImageThumbnails.kt` with the previously selected JVM codecs. | AVIF can show an unsupported-image error. The user's decision to keep the current codecs remains unchanged. |
+| Unverified native behavior | Upstream Windows junction and inspector tests have no directly exercised Windows/JCEF counterpart in this macOS run. | Native Windows startup and sandbox rendering of the renamed/styled menu were not verified. The new upstream four-theme browser test was reviewed but not run in OpenJet. Older Windows inspector warm-up, preload and quota differences remain outside this revision's changes. |
+
+No new required backend or consumed-contract gap remains in this reviewed delta.
+The pre-existing state-root discovery difference above is not resolved by copying
+the new in-flight junction guard. No production sessions or service registrations
+were used for verification.
+
+Vendor integrity, TypeScript checking, all 89 browser host tests and the browser
+build passed. Missing platform-native npm optional packages interrupted one
+repeat check; `npm ci --include=optional --no-audit --no-fund` restored them without
+changing the lockfile, and all browser checks then passed.
+
+The pinned compatibility helper passed both released 2.0.29 suites without skips.
+The final `./gradlew check buildPlugin verifyPlugin` run also passed with that
+binary enabled: 523 Kotlin tests passed, including the two new state regressions;
+only the opt-in existing-database usage benchmark was skipped. All five configured
+IDE builds were compatible, with the existing deprecated/experimental API warnings.
+Evidence is `build/opencode-compatibility/2.0.29/verification.json` and
+`build/upstream-sync-23d8197f-final.log`. The updated package is
+`build/distributions/varro-openjet-0.7.12.zip`.
+
 ## Verification
 
-The opt-in integration test launches a released CLI with isolated HOME, XDG directories and database. Its provider is a local deterministic HTTP fixture. It checks authenticated health and SSE, catalogs, pending input, prompt streaming, reopened history, helper and stateless generation, permission and form acknowledgement, fork, tail deletion, session deletion, and read-only V1 import. Steering checks interrupt a stalled turn, resume pending steering, and verify after completion and 0, 75 and 250 ms sampling delays that queued input stays parked. It has been run against OpenCode 2.0.6, 2.0.25, 2.0.26 and 2.0.28; the steering regression has been run against 2.0.26 and 2.0.28.
+The opt-in integration test launches a released CLI with isolated HOME, XDG directories and database. Its provider is a local deterministic HTTP fixture. It checks authenticated health and SSE, catalogs, pending input, prompt streaming, reopened history, helper and stateless generation, permission and form acknowledgement, fork, tail deletion, session deletion, and read-only V1 import. Steering checks interrupt a stalled turn, resume pending steering, and verify after completion and 0, 75 and 250 ms sampling delays that queued input stays parked. It has been run against OpenCode 2.0.6, 2.0.25, 2.0.26, 2.0.28 and 2.0.29; the steering regression has been run against 2.0.26, 2.0.28 and 2.0.29.
 
 ```sh
 VARRO_OPENCODE_TEST_BINARY=/absolute/path/to/opencode2 \
@@ -178,7 +302,7 @@ VARRO_OPENCODE_TEST_BINARY=/absolute/path/to/opencode2 \
 For a sync or version bump, use the pinned-release helper instead:
 
 ```sh
-python3 scripts/check-opencode-compatibility.py --version 2.0.28
+python3 scripts/check-opencode-compatibility.py --version 2.0.29
 ```
 
 It runs both released suites, verifies the installed and served version, rejects
@@ -190,7 +314,7 @@ Unit tests cover 2.0.5 health discovery, V1 fallback, HTML and authentication fa
 
 `OpenCodeManagedServiceIntegrationTest` checks private registration, coexistence with an isolated
 global-service fixture, second-host restoration and managed restart. It has been run against
-OpenCode 2.0.26 and 2.0.28. Both services use fixture-only HOME, XDG roots and database. Set
+OpenCode 2.0.26, 2.0.28 and 2.0.29. Both services use fixture-only HOME, XDG roots and database. Set
 `VARRO_OPENCODE_DESKTOP_TEST_BINARY` to another released V2 binary to check version coexistence.
 It also retires a fixture listener, launches a moved-port replacement with the same private
 service password, and checks recovered ownership, follower restoration and lifecycle stop
@@ -201,7 +325,7 @@ publication ordering and cancellation. Ownership fixtures cover retired-process 
 recovery, unknown and foreign accounts, credential and HTTP PID mismatches, conflicting claims,
 changed records and listener reinspection. These are not released V1 or V2-floor CLI runs, nor
 Windows/Linux or real-IDE verification. Status update hints track upstream's tested SDK/client
-baselines, V1 1.19.0 and V2 2.0.28; that does not claim every Kotlin flow was tested on both releases.
+baselines, V1 1.19.0 and V2 2.0.29; that does not claim every Kotlin flow was tested on both releases.
 
 ```sh
 VARRO_OPENCODE_TEST_BINARY=/absolute/path/to/opencode2 \

@@ -37,6 +37,11 @@ class ImageThumbnails(
     }.apply { scheduleWithFixedDelay({ synchronized(cache) { expire() } }, 1, 1, TimeUnit.MINUTES) }
 
     /** Acquire the decoder before fetching an original, so waiting views retain no image bodies. */
+    fun peek(reference: String): String? = synchronized(cache) {
+        expire()
+        references[reference]?.let { cache[it]?.url }
+    }
+
     fun get(reference: String, source: () -> String?, isCancelled: () -> Boolean = { false }): String? {
         val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10)
         fun checkCancelled() {

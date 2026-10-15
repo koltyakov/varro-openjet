@@ -1,4 +1,5 @@
 import { reconcile } from 'solid-js/store';
+import { clearRemoteImagePreviews } from '../lib/remote-image-previews';
 import { syncWindowChatTheme } from '../lib/window-chat-theme';
 import type {
   ExtensionMessage,
@@ -129,6 +130,10 @@ export function createMountBridgeOperations(deps: {
           }
           if (payload.showTurnTimer !== undefined) {
             uiStore.setShowTurnTimer(payload.showTurnTimer);
+          }
+          if (payload.remoteImages !== undefined) {
+            if (payload.remoteImages === 'off') clearRemoteImagePreviews();
+            appStore.setState('remoteImages', payload.remoteImages);
           }
           if (payload.promptCompletionModel !== undefined) {
             appStore.setState('promptCompletionModel', payload.promptCompletionModel);

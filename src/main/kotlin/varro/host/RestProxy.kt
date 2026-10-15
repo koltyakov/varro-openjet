@@ -59,6 +59,13 @@ class RestProxy(
 ) {
     private val log = logger<RestProxy>()
     private val modelPricing = ModelPricingCatalog()
+    private val remoteImages = RemoteImages()
+    private val settings get() = varro.settings.VarroSettings.getInstance()
+    private val settingsSubscription = com.intellij.openapi.application.ApplicationManager.getApplication().messageBus.connect().apply {
+        subscribe(varro.settings.VarroSettings.TOPIC, varro.settings.VarroSettings.Listener {
+            if (settings.remoteImageMode() != "on") remoteImages.cancel()
+        })
+    }
     private val contentReader by lazy { MessageContentReader(service<ImageThumbnails>()) { path, options ->
         server.transport.request("GET", path, options = options).data
     } }
@@ -175,6 +182,8 @@ class RestProxy(
         disposed.set(true)
         activeRequests.values.forEach { it.set(true) }
         activeRequests.clear()
+        remoteImages.close()
+        settingsSubscription.disconnect()
     }
 
     private fun respond(id: Int, data: JsonElement? = null, error: String? = null) {
@@ -188,6 +197,14 @@ class RestProxy(
     // --- OpenCode forwarding --------------------------------------------------
 
     private fun forward(method: String, path: String, body: JsonElement?, queuedDispatch: Boolean = false, transferDirectory: String? = null, isCancelled: () -> Boolean = { false }): JsonElement? {
+        return try { forwardRequest(method, path, body, queuedDispatch, transferDirectory, isCancelled) }
+        catch (failure: Exception) {
+            val directory = transferDirectory ?: ApiRoutes.parse(method, path)?.query?.get("directory")?.firstOrNull() ?: server.workspaceDirectory().orEmpty()
+            WorkspaceDirectoryErrors.recover(method, path, directory, failure)
+        }
+    }
+
+    private fun forwardRequest(method: String, path: String, body: JsonElement?, queuedDispatch: Boolean, transferDirectory: String?, isCancelled: () -> Boolean): JsonElement? {
         val request = ApiRoutes.parse(method, path)
         val sessionId = request?.segments?.takeIf { it.size >= 2 && it[0] == "session" }?.get(1)
         if (sessionId != null && sessionId != "status" && method != "GET") {
@@ -300,6 +317,14 @@ class RestProxy(
         fun q(key: String): String? = query[key]?.firstOrNull()?.takeIf { it.isNotBlank() }
 
         return when {
+            pathname == ApiRoutes.Endpoints.REMOTE_IMAGE -> {
+                val record = body.asObjectOrNull()
+                val automatic = record.bool("automatic") == true
+                RemoteImages.checkMode(settings.remoteImageMode(), automatic)
+                remoteImages.load(record.str("url") ?: error("Missing remote image URL")) {
+                    isCancelled() || settings.remoteImageMode() == "off" || (automatic && settings.remoteImageMode() != "on")
+                }.also { RemoteImages.checkMode(settings.remoteImageMode(), automatic) }
+            }
             pathname == ApiRoutes.Endpoints.PROMPT_COMPLETION_MODELS -> services.promptCompletionModels(isCancelled)
             pathname == ApiRoutes.Endpoints.PROMPT_COMPLETION -> services.completePrompt(body, q("directory"), isCancelled)
             pathname == ApiRoutes.Endpoints.PROMPT_COMPLETION_TEST -> services.testPromptCompletion(body, isCancelled)
@@ -555,7 +580,10 @@ class RestProxy(
             "/session/${encode(sessionId)}",
             options = RequestOptions(directory = directory),
         ).data
-    }.getOrNull()
+    }.getOrElse { failure ->
+        if (WorkspaceDirectoryErrors.isMissing(failure.message)) throw IllegalStateException(WorkspaceDirectoryErrors.message(directory ?: server.workspaceDirectory().orEmpty()), failure)
+        null
+    }
 
     private fun encode(value: String): String =
         java.net.URLEncoder.encode(value, Charsets.UTF_8).replace("+", "%20")

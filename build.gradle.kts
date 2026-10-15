@@ -36,6 +36,8 @@ dependencies {
     implementation("org.xerial:sqlite-jdbc:3.53.4.0")
     implementation("com.twelvemonkeys.imageio:imageio-webp:3.12.0")
     implementation("com.drewnoakes:metadata-extractor:2.19.0")
+    // Remote Markdown images need a DNS-pinned HTTPS client, separate from OpenCode auth.
+    implementation("com.squareup.okhttp3:okhttp-jvm:5.5.0")
 
     intellijPlatform {
         create(

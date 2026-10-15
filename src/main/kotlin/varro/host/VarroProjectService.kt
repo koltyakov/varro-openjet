@@ -377,6 +377,7 @@ class VarroProjectService(private val project: Project) : Disposable {
             addProperty("expandThinking", settings.chatExpandThinking)
             addProperty("showChangedFiles", settings.chatShowChangedFiles)
             addProperty("showTurnTimer", settings.chatShowTurnTimer)
+            addProperty("remoteImages", settings.remoteImageMode())
             addProperty("promptCompletionModel", settings.chatPromptCompletionModel)
             addProperty("desktopSessionPaneSide", settings.sessionPaneSide())
             addProperty("defaultPermissionMode", settings.permissionMode())
@@ -416,6 +417,7 @@ class VarroProjectService(private val project: Project) : Disposable {
                 "expandThinking" to settings.chatExpandThinking,
                 "showChangedFiles" to settings.chatShowChangedFiles,
                 "showTurnTimer" to settings.chatShowTurnTimer,
+                "remoteImages" to settings.remoteImageMode(),
                 "promptCompletionModel" to settings.chatPromptCompletionModel,
                 "desktopSessionPaneSide" to settings.sessionPaneSide(),
                 "defaultPermissionMode" to settings.permissionMode(),

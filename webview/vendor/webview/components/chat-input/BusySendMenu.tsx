@@ -15,7 +15,7 @@ export function BusySendMenu(props: {
         <span class="busy-menu-icon">
           <UiIcon source={transitionUpIcon} width={14} height={14} />
         </span>
-        <span class="busy-menu-label">Add to Queue</span>
+        <span class="busy-menu-label">Queue</span>
         <span class="busy-menu-hint">Enter</span>
       </button>
       <button
@@ -27,7 +27,7 @@ export function BusySendMenu(props: {
         <span class="busy-menu-icon">
           <UiIcon source={transitionUpSolidIcon} width={14} height={14} />
         </span>
-        <span class="busy-menu-label">Steer with Message</span>
+        <span class="busy-menu-label">Steer</span>
         <span class="busy-menu-hint">{'\u2303'}Enter</span>
       </button>
       <button

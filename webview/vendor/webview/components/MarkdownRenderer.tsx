@@ -1,4 +1,4 @@
-import { Show, createSignal, createEffect, onMount, onCleanup } from 'solid-js';
+import { Show, createSignal, createEffect, createMemo, onMount, onCleanup } from 'solid-js';
 import type { JSX } from 'solid-js';
 import { Portal, render } from 'solid-js/web';
 import DOMPurify from 'dompurify';
@@ -26,6 +26,7 @@ import { selectSession } from '../hooks/useOpenCode';
 import { trapModalFocus } from '../lib/modal-focus';
 import { mixRgb, parseThemeColor } from '../lib/theme';
 import { getExternalLinkContext, isSafeExternalHref } from '../lib/external-link';
+import { parseRemoteImageUrl } from '../../shared/remote-images';
 import { getLinkContext } from '../lib/link-context';
 import { asRecord, getString } from '../lib/runtime-values';
 import { checkIcon, copyIcon, expandIcon, xmarkIcon } from '../lib/ui-icons';
@@ -34,6 +35,7 @@ import { createFileTypeIconElement, hasRecognizedFileType } from './FileTypeIcon
 import { createMaterialChipIconElement } from './MaterialChipIcon';
 import { createUiIconElement, UiIcon } from './UiIcon';
 import { Tooltip } from './Tooltip';
+import { RemoteMarkdownImage } from './RemoteMarkdownImage';
 import { showSessionActionFeedback } from './chat/SessionActionFeedback';
 
 interface MarkdownProps {
@@ -95,6 +97,7 @@ type IncompleteStreamingMarkdown = {
 type MarkdownHydrationFlags = {
   copyButtons: boolean;
   mermaid: boolean;
+  remoteImages: boolean;
 };
 
 type RenderMarkdownContext = {
@@ -163,6 +166,7 @@ const ALLOWED_HTML_ATTRIBUTES = [
   'data-lang',
   'data-highlight-lang',
   'data-mermaid-source',
+  'data-remote-image',
   'data-varro-generated',
   'd',
   'fill',
@@ -189,6 +193,7 @@ const MAX_MERMAID_SOURCE_LENGTH = 100_000;
 const MERMAID_SVG_CACHE_LIMIT = 20;
 const TRUSTED_RENDERER_ATTRIBUTE = 'data-varro-generated';
 const PRIVATE_RENDERER_ATTRIBUTES = [
+  'data-remote-image',
   'data-copy',
   'data-copy-text',
   'data-external',
@@ -546,8 +551,10 @@ renderer.link = function ({ href, text: rawText, title, tokens }) {
   return `<a href="${escapeHtml(href)}"${titleAttr}>${text}</a>`;
 };
 
-renderer.image = function ({ text }: { href: string; text: string; title?: string | null }) {
-  return escapeHtml(text);
+renderer.image = function ({ href, text }: { href: string; text: string; title?: string | null }) {
+  const url = parseRemoteImageUrl(href);
+  if (!url) return escapeHtml(text);
+  return `<span ${TRUSTED_RENDERER_ATTRIBUTE} data-remote-image="${escapeHtml(encodeURIComponent(url.href))}" alt="${escapeHtml(text)}">${escapeHtml(text)}</span>`;
 };
 
 marked.setOptions({
@@ -1599,6 +1606,7 @@ function getMarkdownHydrationFlags(html: string): MarkdownHydrationFlags {
   return {
     copyButtons: html.includes('data-copy'),
     mermaid: html.includes('data-mermaid-source'),
+    remoteImages: html.includes('data-remote-image'),
   };
 }
 
@@ -1975,6 +1983,7 @@ export function MarkdownRenderer(props: MarkdownProps) {
     initialSegments.stableContent
   );
   const inlineSlotDisposers = new Map<HTMLElement, () => void>();
+  const remoteImageDisposers = new Map<HTMLElement, () => void>();
   const linkTooltips = new Map<
     HTMLAnchorElement,
     { dispose: () => void; setContent: (content: string) => void }
@@ -2024,6 +2033,41 @@ export function MarkdownRenderer(props: MarkdownProps) {
     }
   }
 
+  function disposeRemoteImages(root?: HTMLElement) {
+    for (const [element, dispose] of remoteImageDisposers) {
+      if (root && !root.contains(element)) continue;
+      dispose();
+      remoteImageDisposers.delete(element);
+    }
+  }
+
+  function hydrateRemoteImages(root?: HTMLElement) {
+    if (!root || disposed) return;
+    for (const element of root.querySelectorAll<HTMLElement>('[data-remote-image]')) {
+      if (remoteImageDisposers.has(element)) continue;
+      const source = decodeCopyPayload(element.dataset.remoteImage ?? '');
+      if (!parseRemoteImageUrl(source)) continue;
+      const alt = element.getAttribute('alt') ?? '';
+      element.replaceChildren();
+      remoteImageDisposers.set(
+        element,
+        render(
+          () => <RemoteMarkdownImage source={source} alt={alt} onLoadAll={loadAllRemoteImages} />,
+          element
+        )
+      );
+    }
+  }
+
+  function loadAllRemoteImages() {
+    const response = ref?.closest('[data-msg-id]') ?? ref;
+    for (const button of response?.querySelectorAll<HTMLButtonElement>(
+      'button[data-remote-image-load]'
+    ) ?? []) {
+      button.click();
+    }
+  }
+
   function hydrateInlineSlots(root?: HTMLElement) {
     if (disposed || !root) return;
     disposeInlineSlots(root);
@@ -2047,7 +2091,11 @@ export function MarkdownRenderer(props: MarkdownProps) {
       if (!(node instanceof Text)) continue;
       const textNode = node;
       const parent = textNode.parentElement;
-      if (!parent || parent.closest('a, button, code, [data-markdown-inline-slot]')) continue;
+      if (
+        !parent ||
+        parent.closest('a, button, code, [data-markdown-inline-slot], [data-remote-image]')
+      )
+        continue;
       if (markers.some((marker) => textNode.data.includes(marker))) textNodes.push(textNode);
     }
 
@@ -2084,6 +2132,7 @@ export function MarkdownRenderer(props: MarkdownProps) {
   function hydrateMarkdownRoot(root: HTMLDivElement | undefined, flags: MarkdownHydrationFlags) {
     if (disposed) return;
     hydrateRenderedMarkdown(root, flags);
+    if (flags.remoteImages) hydrateRemoteImages(root);
     hydrateInlineSlots(root);
     hydrateLinkTooltips(root);
   }
@@ -2199,6 +2248,7 @@ export function MarkdownRenderer(props: MarkdownProps) {
           stableRef.append(...appendedRoot.childNodes);
         } else {
           disposeInlineSlots(stableRef);
+          disposeRemoteImages(stableRef);
           disposeLinkTooltips(stableRef);
           if (stableRef) stableRef.innerHTML = nextStableHtml;
         }
@@ -2218,6 +2268,7 @@ export function MarkdownRenderer(props: MarkdownProps) {
       }
       if (tailChanged) {
         disposeInlineSlots(tailRef);
+        disposeRemoteImages(tailRef);
         disposeLinkTooltips(tailRef);
         lastAppliedTailContent = segments.tailContent;
         lastAppliedTailHtml = nextTailHtml;
@@ -2309,6 +2360,7 @@ export function MarkdownRenderer(props: MarkdownProps) {
     stableHighlights.dispose();
     tailHighlights.dispose();
     disposeInlineSlots();
+    disposeRemoteImages();
     disposeLinkTooltips();
     for (const id of copyTimeouts) clearTimeout(id);
     copyTimeouts.clear();
@@ -2439,9 +2491,14 @@ export function MarkdownRenderer(props: MarkdownProps) {
     ref?.removeEventListener('click', handleClick);
   });
 
+  const remoteImagesEnabled = createMemo(() => state.remoteImages !== 'off');
+
   return (
     <>
-      <div ref={ref} class={`rendered-markdown${props.class ? ` ${props.class}` : ''}`}>
+      <div
+        ref={ref}
+        class={`rendered-markdown${remoteImagesEnabled() ? ' remote-images-enabled' : ''}${props.class ? ` ${props.class}` : ''}`}
+      >
         <div
           ref={stableRef}
           data-markdown-segment="stable"

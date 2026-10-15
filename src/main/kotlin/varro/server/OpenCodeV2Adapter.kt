@@ -502,11 +502,15 @@ internal class OpenCodeV2Adapter(
                 "id" to integration.get("id"), "integrationID" to integration.get("id"), "name" to integration.get("name"), "options" to Json.obj(), "models" to Json.obj()).apply { connectionInfo(this, integration) })
         }
         val config = request("GET", "/config", null, options.copy(directory = directory)).data.asObjectOrNull()
+        val policies = config.obj("experimental").arr("policies").orEmpty() + config.arr("policies").orEmpty()
         config.obj("providers")?.entrySet()?.forEach { (id, entry) -> entry.asObjectOrNull()?.let { provider ->
-            val policy = config.obj("experimental").arr("policies")?.lastOrNull {
+            val policy = policies.lastOrNull {
                 it.asObjectOrNull().str("action") == "provider.use" && it.asObjectOrNull().str("resource") == id
             }
-            if (policy.asObjectOrNull().str("effect") == "deny") return@forEach
+            if (policy.asObjectOrNull().str("effect") == "deny") {
+                all.removeAll { it.str("id") == id }
+                return@forEach
+            }
             val target = all.firstOrNull { it.str("id") == id } ?: Json.obj("id" to id, "name" to (provider.str("name") ?: id), "env" to JsonArray(),
                 "source" to "config", "options" to Json.obj(), "models" to Json.obj()).also {
                     if (id in setOf("ollama", "lmstudio", "vllm")) it.addProperty("disconnectMode", "disable")

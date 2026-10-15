@@ -133,7 +133,7 @@ Before reporting a sync complete:
 4. Run the Kotlin adapter and managed-service tests against the exact published V2 version. The helper installs a pinned CLI under ignored build output, verifies its version, runs the tests with isolated fixture state, rejects skipped/missing tests, and writes `build/opencode-compatibility/<version>/verification.json`:
 
    ```sh
-   python3 scripts/check-opencode-compatibility.py --version 2.0.28
+    python3 scripts/check-opencode-compatibility.py --version 2.0.29
    ```
 
    An existing matching executable can be supplied with `--binary /absolute/path/to/opencode2`. Never point fixture tests at production sessions, databases, credentials, or service registrations. Upstream's TypeScript compatibility results are useful review evidence, not a substitute for Kotlin tests. When the V1 SDK changes, also review its released contract and run the affected Kotlin V1 tests; do not infer V1 parity from a V2 run.

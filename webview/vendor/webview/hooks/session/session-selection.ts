@@ -1,5 +1,9 @@
 import { batch } from 'solid-js';
 import {
+  isMissingWorkspaceDirectoryMessage,
+  workspaceDirectoryRecoveryMessage,
+} from '../../../shared/workspace-directory-error';
+import {
   readSessionAgentMetadata,
   readSessionModelMetadata,
 } from '../../../shared/session-selection-metadata';
@@ -149,6 +153,11 @@ export async function selectSessionWithDependencies(
       return { state: 'superseded' };
     }
     clearMessagesLoadingIfOwned();
+    if (error instanceof Error && isMissingWorkspaceDirectoryMessage(error.message)) {
+      const directory = options?.directory ?? deps.getSession(id)?.directory ?? 'unknown location';
+      deps.setError(workspaceDirectoryRecoveryMessage(directory));
+      return { state: 'failed' };
+    }
     if (error instanceof Error && /^404\b.*session not found/i.test(error.message)) {
       const legacySession = deps.getSession(id);
       const directory = options?.directory ?? legacySession?.directory;

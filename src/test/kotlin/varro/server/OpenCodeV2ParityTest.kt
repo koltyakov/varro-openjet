@@ -148,6 +148,29 @@ class OpenCodeV2ParityTest {
         assertEquals(2000, model.obj("limit").int("output"))
     }
 
+    @Test fun `native and legacy provider policies do not resurrect denied configured integrations`() {
+        fun policy(effect: String) = Json.obj("action" to "provider.use", "resource" to "cloud", "effect" to effect)
+        for ((legacy, native, denied) in listOf(Triple("deny", null, true), Triple(null, "deny", true),
+            Triple("allow", "deny", true), Triple("deny", "allow", false))) {
+            val config = Json.obj("providers" to Json.obj("cloud" to Json.obj("models" to Json.obj("custom" to Json.obj())))).apply {
+                legacy?.let { add("experimental", Json.obj("policies" to listOf(policy(it)))) }
+                native?.let { add("policies", Json.array(listOf(policy(it)))) }
+            }
+            val adapter = OpenCodeV2Adapter({ _, path, _, _ -> OpenCodeResponse(when (path) {
+                "/api/model", "/api/provider" -> Json.obj("data" to emptyList<Any>())
+                "/api/integration" -> Json.obj("data" to listOf(Json.obj("id" to "cloud", "name" to "Cloud")))
+                "/api/config" -> Json.obj("data" to listOf(Json.obj("info" to config)))
+                else -> error("Unexpected $path")
+            }) }, OpenCodeV2SessionState(temporary.newFolder().toPath()))
+            val result = adapter.request("GET", "/provider", null, RequestOptions()).data.asObjectOrNull()
+            assertEquals(!denied, result.arr("all")!!.any { it.asObjectOrNull().str("id") == "cloud" })
+            assertEquals(!denied, result.arr("connected")!!.strings().contains("cloud"))
+            assertEquals(!denied, result.obj("default")!!.has("cloud"))
+            val providers = adapter.request("GET", "/config/providers", null, RequestOptions()).data.asObjectOrNull().arr("providers")!!
+            assertEquals(!denied, providers.any { it.asObjectOrNull().str("id") == "cloud" })
+        }
+    }
+
     @Test fun `directory encoding preserves Unicode and literal percent escapes across server families`() {
         val directory = "/workspace/日本語/%20 project"
         val header = OpenCodeRequestScope.directoryHeaders(directory).getValue(OpenCodeRequestScope.DIRECTORY_HEADER)

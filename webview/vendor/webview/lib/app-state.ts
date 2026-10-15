@@ -43,6 +43,8 @@ import type {
   WorkspaceStatusEventSummary,
 } from '../../shared/protocol';
 import { isPermissionMode } from '../../shared/protocol';
+import { parseRemoteImageMode } from '../../shared/remote-images';
+import type { RemoteImageMode } from '../../shared/remote-images';
 import { isInlineProblem } from './editor-problems';
 import { mergeContextFile } from '../../shared/context-files';
 import { isSameWorkspacePath } from '../../shared/workspace-path';
@@ -123,6 +125,7 @@ export interface AppState {
   issuesEnabled: boolean;
   enableProblemsContext: boolean;
   promptCompletionModel: string;
+  remoteImages: RemoteImageMode;
   debugShowQuotaWarning: boolean;
   debugResetWarningDays?: number;
   draftCurrentDocumentEnabled: boolean | null;
@@ -389,6 +392,7 @@ export function createAppState(): AppStateInstance {
         : [],
     enableProblemsContext: initialWebviewState.enableProblemsContext ?? true,
     promptCompletionModel: initialWebviewState.promptCompletionModel ?? '',
+    remoteImages: parseRemoteImageMode(initialWebviewState.remoteImages),
     debugShowQuotaWarning: initialWebviewState.debugShowQuotaWarning ?? false,
     debugResetWarningDays: initialWebviewState.debugResetWarningDays,
     emptyStateLogoUri: initialWebviewState.emptyStateLogoUri ?? '',

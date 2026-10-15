@@ -8319,6 +8319,38 @@ export function MessageList() {
       getThinkingLayoutSignatures(tailMessages(), showThinking(), expandedThinkingMessageIds())
     )
   );
+  createComputed(
+    on(
+      () => (state.remoteImages === 'off' ? 'off' : 'enabled'),
+      (mode, previous) => {
+        if (previous === undefined || mode === previous) return;
+        // Capture before fixed image frames disappear. Invalidate offscreen rows too,
+        // but scan Markdown candidates only on an explicit setting change, never on a delta.
+        const anchor =
+          containerRef?.isConnected && !autoScroll()
+            ? captureDetachedVisibleScrollAnchor(containerRef.scrollTop)
+            : null;
+        const ids = untrack(messages)
+          .filter((message) =>
+            message.parts.some(
+              (part) =>
+                ((part.type === 'text' || part.type === 'reasoning') && part.text.includes('![')) ||
+                (part.type === 'tool' &&
+                  part.state.status === 'completed' &&
+                  part.state.output.includes('!['))
+            )
+          )
+          .map((message) => message.info.id);
+        queueMicrotask(() =>
+          scheduleChangedLayoutRowMeasurements(
+            new Map(ids.map((id) => [id, previous])),
+            new Map(ids.map((id) => [id, mode])),
+            anchor
+          )
+        );
+      }
+    )
+  );
   let previousThinkingLayoutSignatures = new Map<string, string>();
   createEffect(() => {
     const current = thinkingLayoutSignatures();

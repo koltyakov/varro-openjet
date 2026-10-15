@@ -69,6 +69,13 @@ class OpenCodeV2IntegrationTest {
                 )),
             )))
         }
+        if (OpenCodeCli.compareVersions(installedVersion, "2.0.29") >= 0) {
+            // Native policies must not be undone by the older-server custom-model fallback.
+            val config = Json.parse(Files.readString(workspace.resolve("opencode.json"))).asJsonObject
+            config.add("providers", Json.obj("openai" to Json.obj("models" to Json.obj("policy-fixture" to Json.obj("name" to "Denied fixture")))))
+            config.add("policies", Json.array(listOf(Json.obj("action" to "provider.use", "resource" to "openai", "effect" to "deny"))))
+            Files.writeString(workspace.resolve("opencode.json"), Json.stringify(config))
+        }
         val port = ServerSocket(0).use { it.localPort }
         val password = AtomicReference<String?>()
         val parser = OpenCodeStartupOutput { password.set(it) }
@@ -100,6 +107,14 @@ class OpenCodeV2IntegrationTest {
             assertEquals(installedVersion, version)
             System.getenv("VARRO_OPENCODE_TEST_VERSION")?.let { assertEquals(it, version) }
             assertNotNull(password.get())
+            if (OpenCodeCli.compareVersions(version, "2.0.29") >= 0) {
+                val config = transport.request("GET", "/config").data.asObjectOrNull()
+                assertTrue(config.arr("policies")!!.any { it.asObjectOrNull().str("resource") == "openai" })
+                val providers = transport.request("GET", "/provider").data.asObjectOrNull()
+                assertFalse(providers.arr("all")!!.any { it.asObjectOrNull().str("id") == "openai" })
+                assertFalse(providers.arr("connected")!!.strings().contains("openai"))
+                assertFalse(transport.request("GET", "/config/providers").data.asObjectOrNull().arr("providers")!!.any { it.asObjectOrNull().str("id") == "openai" })
+            }
             val beforeGeneration = transport.request("GET", "/session").data
             val generationCalls = mutableListOf<String>()
             val oneShot = varro.host.OneShotGeneration { method, path, body, options ->

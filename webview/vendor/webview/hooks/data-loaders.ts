@@ -8,7 +8,7 @@ import type { SessionStatusSnapshotOptions } from '../lib/stores/session-store';
 import { clearQueuedMessagesForSession } from '../lib/state-queued-messages';
 import { getEffectiveComposerSessionId } from '../lib/state-view-persistence';
 import type { McpStatus, ProviderLimitStatus, RecycleBinEntry } from '../../shared/protocol';
-import { isSameWorkspacePath } from '../../shared/workspace-path';
+import { getRelativePathWithinWorkspace } from '../../shared/workspace-path';
 import type {
   Agent,
   Command,
@@ -464,9 +464,11 @@ export function createDataLoaderOperations(deps: {
           const retainedIds = new Set(reconciled.map((session) => session.id));
           const shouldRetainPreviousSession = (session: Session) =>
             hasMore ||
+            (incomplete && reconciled.length === 0) ||
             (unavailableDirectories.length > 0
-              ? unavailableDirectories.some((directory) =>
-                  isSameWorkspacePath(session.directory, directory)
+              ? unavailableDirectories.some(
+                  (directory) =>
+                    getRelativePathWithinWorkspace(session.directory, directory) !== null
                 )
               : incomplete);
           const nextSessions =

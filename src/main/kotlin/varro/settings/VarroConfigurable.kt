@@ -108,6 +108,11 @@ class VarroConfigurable : BoundConfigurable("Varro") {
                     .bindIntText(settings::chatFontSize)
                     .comment("0 follows the IDE UI font size.")
             }
+            row("Remote Markdown images:") {
+                comboBox(listOf("off", "ask", "on"))
+                    .bindItem(settings::chatRemoteImages.toNullableProperty())
+                    .comment("Ask loads images only after a click; on loads nearby images automatically. Downloads expose this host's IP and the requested URL. No cookies or credentials are sent.")
+            }
             row("Chat font family:") {
                 textField().bindText(settings::chatFontFamily).comment("default follows the IDE font family.")
             }
@@ -165,6 +170,10 @@ class VarroConfigurable : BoundConfigurable("Varro") {
                     .bindText(settings::commitMessageModel)
                     .comment("`providerID/modelID`. Leave empty to let Varro choose.")
                     .columns(40)
+            }
+            row("Commit message rules:") {
+                textArea().bindText(settings::commitMessageRules)
+                    .comment("Style and format preferences, for example Conventional Commits with a scope. Cannot enable tools or commits.")
             }
         }
 

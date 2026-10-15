@@ -48,6 +48,9 @@
             <li>Provider-limit polling contacts provider quota endpoints directly.</li>
             <li>Provider-limit polling uses existing provider credentials in the IDE host, including
                 supported OAuth refresh. The webview receives quota counters and statuses, not credentials.</li>
+            <li>Remote Markdown images load only after a click by default. Optional automatic loading
+                is an IDE-level setting. Downloads expose the host IP and requested URL, send no
+                cookies or credentials, and accept only bounded public-network HTTPS raster images.</li>
             <li>Terminal commands the chat can request are restricted to a fixed allowlist of
                 OpenCode authentication, install and upgrade commands.</li>
         </ul>
