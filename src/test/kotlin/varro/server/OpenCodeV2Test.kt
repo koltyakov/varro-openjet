@@ -28,6 +28,55 @@ class OpenCodeV2Test {
         OpenCodeV2SessionState(temporary.newFolder().toPath()),
     )
 
+    @Test fun `command discovery uses native precedence and retains noncolliding skills without config templates`() {
+        val native = adapter { _, path, _ -> when (path) {
+            "/api/command?location%5Bdirectory%5D=%2Frepo" -> Json.obj("data" to listOf(Json.obj("name" to "audit", "description" to "Native audit", "subagent" to true, "private" to "omitted")))
+            "/api/skill?location%5Bdirectory%5D=%2Frepo" -> Json.obj("data" to listOf(
+                Json.obj("id" to "audit", "content" to "Must not override"), Json.obj("id" to "docs", "content" to "Skill instructions")))
+            else -> error("Discovery must not read configuration: $path")
+        } }
+        assertEquals(Json.array(listOf(
+            Json.obj("name" to "audit", "description" to "Native audit", "source" to "command", "template" to "", "hints" to emptyList<Any>()),
+            Json.obj("name" to "docs", "description" to "", "source" to "skill", "template" to "Skill instructions", "hints" to emptyList<Any>()))),
+            native.request("GET", "/command", null, RequestOptions(directory = "/repo")).data)
+    }
+
+    @Test fun `command and skill updates refresh the workspace catalog`() {
+        for (type in listOf("command.updated", "skill.updated")) {
+            val event = OpenCodeV2Events.project(Json.obj("id" to "evt_catalog", "created" to 10, "type" to type,
+                "location" to Json.obj("directory" to "/repo"), "data" to Json.obj()), Json.obj()).single()
+            assertEquals("catalog.updated", event.str("type"))
+            assertEquals("/repo", event.str("workspaceDirectory"))
+        }
+    }
+
+    @Test fun `native synthetic child results use canonical metadata on history and direct reads`() {
+        for (state in listOf("completed", "error", "cancelled")) {
+            val record = Json.obj("id" to "msg_result", "type" to "synthetic", "text" to "<subagent sessionID=\"wrong\">Result</subagent>",
+                "description" to "Audit auth", "metadata" to Json.obj("source" to "subagent", "childID" to "ses_child", "state" to state,
+                    "agent" to "general", "private" to "omitted"))
+            val native = adapter { _, path, _ -> when {
+                path.endsWith("/inbox") -> Json.obj("data" to emptyList<Any>())
+                path.contains("/message/") -> Json.obj("data" to record)
+                else -> Json.obj("data" to listOf(record), "cursor" to Json.obj())
+            } }
+            val direct = native.request("GET", "/session/ses_parent/message/msg_result", null, RequestOptions()).data
+            assertEquals(Json.array(listOf(direct)), native.request("GET", "/session/ses_parent/message", null, RequestOptions()).data)
+            val part = direct.asObjectOrNull().arr("parts")!!.single().asJsonObject
+            assertEquals(true, part.bool("synthetic"))
+            assertEquals(Json.obj("sessionID" to "ses_child", "state" to state, "description" to "Audit auth", "agent" to "general"), part.obj("subagentResult"))
+            assertFalse(direct.toString().contains("omitted"))
+        }
+        for (metadata in listOf(null, Json.obj("source" to "other", "childID" to "ses_child", "state" to "completed"),
+            Json.obj("source" to "subagent", "childID" to "", "state" to "completed"),
+            Json.obj("source" to "subagent", "childID" to "ses_child", "state" to "running"))) {
+            val part = OpenCodeV2Projection.message(Json.obj("id" to "msg_result", "type" to "synthetic",
+                "text" to "<subagent sessionID=\"ses_child\" state=\"completed\">Result</subagent>", "metadata" to metadata), "ses_parent")
+                .arr("parts")!!.single().asJsonObject
+            assertFalse(part.has("subagentResult"))
+        }
+    }
+
     @Test fun `provider catalog uses integration connections and respects workspace deny policies`() {
         for (effect in listOf("deny", "allow")) {
             val native = adapter { _, path, _ -> when (path) {

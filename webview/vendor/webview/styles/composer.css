@@ -457,6 +457,14 @@
   overflow-wrap: anywhere;
 }
 
+.composer-completion-help {
+  padding: 7px 8px;
+  border-top: 1px solid color-mix(in srgb, var(--color-vscode-border) 20%, transparent);
+  color: var(--color-vscode-fg-muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
 .composer-completion-item:hover {
   background: var(--color-vscode-hover);
   box-shadow: var(--color-vscode-hover) var(--composer-completion-scrollbar-inset) 0 0;

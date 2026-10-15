@@ -56,6 +56,7 @@ export type SlashCommand = {
   name: string;
   aliases: string[];
   description: string;
+  help?: string;
   acceptsArguments?: boolean;
   source?: 'command' | 'mcp' | 'skill';
   action: (args: string) => void | Promise<void>;
@@ -84,6 +85,10 @@ export function CompletionMenu(props: {
   // oxlint-disable-next-line no-unassigned-vars
   let menuRef: HTMLDivElement | undefined;
   const itemRefs = new Map<string, HTMLButtonElement>();
+  const selectedHelp = () => {
+    const item = props.items[props.selectedIndex];
+    return item && 'help' in item ? item.help : undefined;
+  };
 
   function updateScrollbarInset() {
     if (!menuRef) return;
@@ -231,6 +236,13 @@ export function CompletionMenu(props: {
           );
         }}
       </For>
+      <Show when={selectedHelp()}>
+        {(help) => (
+          <div class="composer-completion-help" role="note">
+            {help()}
+          </div>
+        )}
+      </Show>
     </div>
   );
 }

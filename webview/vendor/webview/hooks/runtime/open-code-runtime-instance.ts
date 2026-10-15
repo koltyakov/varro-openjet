@@ -2754,7 +2754,9 @@ export function createOpenCodeRuntime(): OpenCodeRuntime {
     upsertPart: sessionStore.upsertPart,
     syncTodosFromMessages,
     requestMessageListScrollToBottom: uiStore.requestMessageListScrollToBottom,
-    syncSession,
+    syncSession: async (sessionId) => {
+      await Promise.all([syncSession(sessionId), syncSessionMessages(sessionId)]);
+    },
     recheckSessionStatus,
     stopLoading: uiStore.stopLoading,
   });

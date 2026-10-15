@@ -162,6 +162,7 @@ import {
   setMessageEditDraftBackup,
   startEditingMessage,
   type MessageEditContext,
+  type MessageEditRequest,
 } from '../lib/message-edit-state';
 import { ralphStore } from '../lib/stores/ralph-store';
 import { ralphRunner } from './ralph/ralph-runner';
@@ -318,6 +319,8 @@ import {
   shouldRequestMentionFileSearch,
 } from './chat-input/completion';
 import { forkActiveSession, getSlashCommands } from './chat-input/slash-commands';
+import { openSideQuestion, sideQuestionUnavailableReason } from '../lib/side-question';
+import { getSideQuestionText } from '../../shared/side-question';
 import { formatSkillReference, getSkillReferences } from '../lib/skill-reference';
 import type { SessionCommandOptions } from '../hooks/session/session-actions';
 import {
@@ -898,6 +901,11 @@ export function ChatInput(props: { newSession?: boolean; onBeforeSend?: () => vo
     invalidatePendingPdfAttachments();
   });
   const composerEditingMessage = () => (props.newSession ? null : editingMessage());
+  const [submittingEdit, setSubmittingEdit] = createSignal<MessageEditRequest | null>(null);
+  const editReconciliationPending = () => {
+    const editing = composerEditingMessage();
+    return !!editing && editing === submittingEdit() && editing.sessionId === composerSessionId();
+  };
   const composerHasActiveQuestion = () => !props.newSession && hasActiveQuestion();
   const composerHasActivePermission = () => !props.newSession && hasActivePermission();
   const canSelectWorkspace = createMemo(
@@ -2325,6 +2333,7 @@ export function ChatInput(props: { newSession?: boolean; onBeforeSend?: () => vo
       hasCurrentSession: !!composerSessionId(),
       canInit: !composerSessionId() || state.messages.length === 0,
       onPauseSession: requestPauseSession,
+      onSideQuestion: requestSideQuestion,
       onConnectProvider: () => requestProviderConnection(),
       onOpenSettings: () =>
         postMessage({ type: 'vscode/open-settings', payload: { query: 'Varro >' } }),
@@ -2863,6 +2872,7 @@ export function ChatInput(props: { newSession?: boolean; onBeforeSend?: () => vo
       if (
         (e.ctrlKey || e.metaKey) &&
         isComposerBusy() &&
+        !isSideQuestionDraft() &&
         !hasPendingApproval() &&
         !composerEditingMessage()
       ) {
@@ -3116,7 +3126,43 @@ export function ChatInput(props: { newSession?: boolean; onBeforeSend?: () => vo
     }
   }
 
+  function sideQuestionSendUnavailableReason() {
+    if (pendingTableCount() > 0 || pendingProblems() || pendingPasteTransactions.length > 0) {
+      return 'Wait for attachments to finish';
+    }
+    return sideQuestionUnavailableReason();
+  }
+
+  function requestSideQuestion(question: string) {
+    if (!composerSessionId() || props.newSession) {
+      showSessionActionFeedback('Open a conversation', 'warning');
+      return;
+    }
+    if (composerEditingMessage() || queuedMessageEdit()) {
+      showSessionActionFeedback('Finish editing first', 'warning');
+      return;
+    }
+    const reason = sideQuestionSendUnavailableReason();
+    if (reason) {
+      showSessionActionFeedback(reason, 'warning');
+      return;
+    }
+    if (!openSideQuestion(question)) return;
+    setInputText('');
+    setCompletionIndex(0);
+  }
+
+  function askSideQuestionFromDraft() {
+    setShowBusyMenu(false);
+    requestSideQuestion(getSideQuestionText(inputText()) ?? inputText().trim());
+  }
+
   async function runSlashCommand(raw: string, options?: SessionCommandOptions) {
+    const sideQuestion = getSideQuestionText(raw);
+    if (sideQuestion !== null) {
+      requestSideQuestion(sideQuestion);
+      return true;
+    }
     const parsed = getLeadingSlashCommand(raw);
     if (!parsed) return false;
     const commandSessionId = composerSessionId();
@@ -3245,7 +3291,13 @@ export function ChatInput(props: { newSession?: boolean; onBeforeSend?: () => vo
   }
 
   async function handleSend(mode?: 'queue' | 'steer' | 'after-stop') {
+    if (editReconciliationPending()) return;
     const text = inputText();
+    const sideQuestion = getSideQuestionText(text);
+    if (sideQuestion !== null) {
+      requestSideQuestion(sideQuestion);
+      return;
+    }
     if (isPauseSlashCommand(text)) {
       await requestPauseSession();
       return;
@@ -3356,41 +3408,46 @@ export function ChatInput(props: { newSession?: boolean; onBeforeSend?: () => vo
       setHistoryDraft('');
       setCompletionIndex(0);
       invalidatePendingPdfAttachments();
-      animateSubmittedContent();
+      setSubmittingEdit(editing);
       hideSubmittedAttachments(sendSessionId);
       setInputText('');
       const clearedInputVersion = inputTextMutationVersion();
       resetPastedImageIndex();
       let sent = false;
       let optimisticPublished = false;
-      if (editTargetExists) {
-        clearUsageLimitsForSessionTree(composerSessionId());
-        sent = await editMessage(editing.messageId, sendableText, {
-          allowEmptyText: hasEditableAttachments,
-          queuedAttachments: {
-            ...queuedAttachments,
-            issuesAttachment: editing.context.issues ?? null,
-            extensionContexts: activeContextEnabled(sendSessionId)
-              ? (editing.context.extensionContexts ?? [])
-              : [],
-          },
-          selectedModel,
-          onOptimisticPublish: () => {
-            optimisticPublished = true;
-            resetMessageEditState();
-          },
-        });
-      } else {
-        clearUsageLimitsForSessionTree(composerSessionId());
-        sent = await sendMessage(text, {
-          queuedAttachments: {
-            ...queuedAttachments,
-            issuesAttachment: editing.context.issues ?? null,
-            extensionContexts: activeContextEnabled(sendSessionId)
-              ? (editing.context.extensionContexts ?? [])
-              : [],
-          },
-        });
+      try {
+        if (editTargetExists) {
+          clearUsageLimitsForSessionTree(composerSessionId());
+          sent = await editMessage(editing.messageId, sendableText, {
+            allowEmptyText: hasEditableAttachments,
+            queuedAttachments: {
+              ...queuedAttachments,
+              issuesAttachment: editing.context.issues ?? null,
+              extensionContexts: activeContextEnabled(sendSessionId)
+                ? (editing.context.extensionContexts ?? [])
+                : [],
+            },
+            selectedModel,
+            onOptimisticPublish: () => {
+              optimisticPublished = true;
+              setSubmittingEdit(null);
+              resetMessageEditState();
+            },
+          });
+        } else {
+          clearUsageLimitsForSessionTree(composerSessionId());
+          sent = await sendMessage(text, {
+            queuedAttachments: {
+              ...queuedAttachments,
+              issuesAttachment: editing.context.issues ?? null,
+              extensionContexts: activeContextEnabled(sendSessionId)
+                ? (editing.context.extensionContexts ?? [])
+                : [],
+            },
+          });
+        }
+      } finally {
+        if (submittingEdit() === editing) setSubmittingEdit(null);
       }
       if (sent) {
         if (selectedModel) {
@@ -3621,6 +3678,11 @@ export function ChatInput(props: { newSession?: boolean; onBeforeSend?: () => vo
   }
 
   async function handleStopAndSend() {
+    if (getSideQuestionText(inputText()) !== null) {
+      await handleSend();
+      setShowBusyMenu(false);
+      return;
+    }
     if (hasPendingApproval() || queueOnlySelection()) return;
     try {
       await abortSession();
@@ -5352,25 +5414,38 @@ export function ChatInput(props: { newSession?: boolean; onBeforeSend?: () => vo
       (session?.transfer?.available === false ? session.directory : undefined)
     );
   };
+  const isSideQuestionDraft = createMemo(() => getSideQuestionText(inputText()) !== null);
+  const canAskSideQuestion = () =>
+    !props.newSession &&
+    !!composerSessionId() &&
+    !composerEditingMessage() &&
+    !queuedMessageEdit() &&
+    state.serverStatus.state === 'running' &&
+    state.serverStatus.apiVersion === 2;
+  createEffect(() => {
+    if (isSideQuestionDraft()) setShowBusyMenu(false);
+  });
   const canSend = () =>
     connectionInitialized() &&
     !transferredDirectory() &&
     !state.messagesLoading &&
-    (isAbortSlashCommand(inputText()) ||
-      isPauseSlashCommand(inputText()) ||
-      (!state.workspaceCatalogReloadPending &&
-        !pendingWorkspacePath() &&
-        !hasPendingPdfFallback() &&
-        pendingTableCount() === 0 &&
-        !pendingProblems() &&
-        !hasPendingDelegatedImages() &&
-        (!hasPendingApproval() || !composerEditingMessage()) &&
-        (getSendableInputText().trim().length > 0 ||
-          state.droppedFiles.length > 0 ||
-          hasSendableClipboardImages() ||
-          state.nativePdfs.length > 0 ||
-          !!state.terminalSelection ||
-          !!state.attachedDiagnostics)));
+    (isSideQuestionDraft()
+      ? !sideQuestionSendUnavailableReason()
+      : isAbortSlashCommand(inputText()) ||
+        isPauseSlashCommand(inputText()) ||
+        (!state.workspaceCatalogReloadPending &&
+          !pendingWorkspacePath() &&
+          !hasPendingPdfFallback() &&
+          pendingTableCount() === 0 &&
+          !pendingProblems() &&
+          !hasPendingDelegatedImages() &&
+          (!hasPendingApproval() || !composerEditingMessage()) &&
+          (getSendableInputText().trim().length > 0 ||
+            state.droppedFiles.length > 0 ||
+            hasSendableClipboardImages() ||
+            state.nativePdfs.length > 0 ||
+            !!state.terminalSelection ||
+            !!state.attachedDiagnostics)));
   // A silently disabled send button is undebuggable in the field; when the user
   // tries to send actual content, name the global gate that is blocking it.
   const getSendBlockedReason = () => {
@@ -5438,9 +5513,12 @@ export function ChatInput(props: { newSession?: boolean; onBeforeSend?: () => vo
     () =>
       (isBusyWithoutInterruption() || hasPendingApproval()) &&
       canSend() &&
+      !isSideQuestionDraft() &&
       !composerEditingMessage()
   );
-  const showBusySendOptions = createMemo(() => isBusyWithoutInterruption());
+  const showBusySendOptions = createMemo(
+    () => isBusyWithoutInterruption() && !isSideQuestionDraft()
+  );
 
   const clipboardImagesNeedVision = () =>
     composerClipboardImages().length > 0 && !currentPromptCanHandleImages();
@@ -6081,10 +6159,16 @@ export function ChatInput(props: { newSession?: boolean; onBeforeSend?: () => vo
   const isToolbarControlVisible = (control: ToolbarControl) =>
     !isToolbarControlHidden(toolbarCompactMode(), control);
   const showStopButton = createMemo(
-    () => isDisplayBusyWithoutInterruption() && isToolbarControlVisible('stop') && !canSend()
+    () =>
+      isDisplayBusyWithoutInterruption() &&
+      isToolbarControlVisible('stop') &&
+      !canSend() &&
+      !isSideQuestionDraft()
   );
   const showSendControl = createMemo(
-    () => isToolbarControlVisible('send') && (!isDisplayBusyWithoutInterruption() || canSend())
+    () =>
+      isToolbarControlVisible('send') &&
+      (!isDisplayBusyWithoutInterruption() || canSend() || isSideQuestionDraft())
   );
 
   createEffect(() => {
@@ -6105,8 +6189,21 @@ export function ChatInput(props: { newSession?: boolean; onBeforeSend?: () => vo
 
   return (
     <div
-      class={`interactive-input-part ${composerEditingMessage() ? ' editing-message' : ''} ${showModelPicker() ? 'model-picker-open' : ''} ${showMcpPicker() || showLspPicker() ? 'mcp-picker-open' : ''} ${showMentionCompletionMenu() ? 'mention-completion-open' : ''}`}
+      class={`interactive-input-part ${composerEditingMessage() ? ' editing-message' : ''}${editReconciliationPending() ? ' is-edit-reconciling' : ''} ${showModelPicker() ? 'model-picker-open' : ''} ${showMcpPicker() || showLspPicker() ? 'mcp-picker-open' : ''} ${showMentionCompletionMenu() ? 'mention-completion-open' : ''}`}
+      aria-busy={editReconciliationPending()}
     >
+      <Show when={editReconciliationPending()}>
+        <div
+          class="composer-edit-loading chat-messages-loading"
+          role="status"
+          aria-label="Updating conversation"
+        >
+          <span class="composer-edit-loading-title">Updating conversation</span>
+          <span class="chat-messages-loading-dot" />
+          <span class="chat-messages-loading-dot" style={{ 'animation-delay': '0.3s' }} />
+          <span class="chat-messages-loading-dot" style={{ 'animation-delay': '0.6s' }} />
+        </div>
+      </Show>
       <Show when={isDraggingOver()}>
         <DropOverlay />
       </Show>
@@ -6166,7 +6263,7 @@ export function ChatInput(props: { newSession?: boolean; onBeforeSend?: () => vo
       </Show>
 
       <Show when={!hasExpandedDiffOverlay() && composerEditingMessage()}>
-        <div class="composer-edit-banner">
+        <div class="composer-edit-banner" inert={editReconciliationPending()}>
           <UiIcon
             source={editPencilIcon}
             class="composer-edit-banner-icon"
@@ -6235,6 +6332,7 @@ export function ChatInput(props: { newSession?: boolean; onBeforeSend?: () => vo
           containerRef = el;
         }}
         class={`chat-input-shell ${showFloatingInputPopover() ? 'showing-floating-popover' : ''}`}
+        inert={editReconciliationPending()}
       >
         <Show when={showModelPicker()}>
           <Suspense>
@@ -6761,6 +6859,8 @@ export function ChatInput(props: { newSession?: boolean; onBeforeSend?: () => vo
               setShowBusyMenu(false);
             }}
             onStopAndSend={() => void handleStopAndSend()}
+            onSideQuestion={canAskSideQuestion() ? askSideQuestionFromDraft : undefined}
+            sideQuestionDisabledReason={sideQuestionSendUnavailableReason() ?? undefined}
           />
         </div>
 
@@ -6978,6 +7078,8 @@ export function ChatInput(props: { newSession?: boolean; onBeforeSend?: () => vo
             setShowBusyMenu(false);
           }}
           onStopAndSend={() => void handleStopAndSend()}
+          onSideQuestion={canAskSideQuestion() ? askSideQuestionFromDraft : undefined}
+          sideQuestionDisabledReason={sideQuestionSendUnavailableReason() ?? undefined}
         />
       </div>
 

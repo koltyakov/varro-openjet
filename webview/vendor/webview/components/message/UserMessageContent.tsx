@@ -357,6 +357,20 @@ function parseUserMessageParts(parts: Part[]): ParsedUserMessageContent {
       continue;
     }
 
+    if (part.synthetic && part.subagentResult) {
+      const result = part.subagentResult;
+      const outcome =
+        result.state === 'completed'
+          ? 'completed'
+          : result.state === 'error'
+            ? 'failed'
+            : 'cancelled';
+      const title = `Subagent ${outcome}${result.description ? `: ${result.description}` : ''}`;
+      automaticActions.add(title);
+      automaticParts.push(automaticActionPart(part, title));
+      continue;
+    }
+
     const parsedText = parseUserMessageText(text);
     attachments.push(...parsedText.attachments);
     if (part.synthetic) {
@@ -404,6 +418,32 @@ const SHELL_HEADER_RE = /^<shell\s+((?:"[^"]*"|'[^']*'|[^'">])*)>/;
 
 function automaticActionPart(part: TextPart, title: string): ToolPart {
   const text = part.text.trim();
+  const result = part.subagentResult;
+  if (result) {
+    // Native metadata owns attribution. The wrapper is stripped only for display.
+    const output = text.replace(/^<subagent\s[^\n]*>\r?\n/, '').replace(/\r?\n<\/subagent>$/, '');
+    const input = { description: title, subagent_type: result.agent };
+    const metadata = { sessionID: result.sessionID };
+    const time = { start: part.time?.start ?? 0, end: part.time?.end ?? part.time?.start ?? 0 };
+    return {
+      id: part.id,
+      messageID: part.messageID,
+      sessionID: part.sessionID,
+      type: 'tool',
+      tool: 'task',
+      callID: `automatic:${part.id}`,
+      state:
+        result.state === 'completed'
+          ? { status: 'completed', input, output, title, metadata, time }
+          : {
+              status: 'error',
+              input,
+              error: result.state === 'cancelled' ? `Aborted: ${output || title}` : output || title,
+              metadata,
+              time,
+            },
+    };
+  }
   const shell = text.startsWith('<shell ') ? SHELL_HEADER_RE.exec(text) : null;
   const input: Record<string, string> = {};
   if (shell) {

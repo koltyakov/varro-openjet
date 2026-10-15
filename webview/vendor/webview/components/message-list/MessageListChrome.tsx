@@ -19,6 +19,7 @@ import { PermissionPrompt } from '../PermissionPrompt';
 import { QuestionPrompt } from '../QuestionPrompt';
 import { UiIcon } from '../UiIcon';
 import { Tooltip } from '../Tooltip';
+import { ThinkingIndicator } from '../ThinkingIndicator';
 import {
   UserMessagePreviewContent,
   formatUserMessageMarkupSize,
@@ -620,12 +621,7 @@ export function LoadingRow(props: {
           >
             <Show
               when={!props.compacting && isStale()}
-              fallback={
-                <span class="shimmer-progress loading-verb">
-                  {props.compacting ? 'Compacting' : verb()}
-                  <span class="chat-animated-ellipsis" />
-                </span>
-              }
+              fallback={<ThinkingIndicator label={props.compacting ? 'Compacting' : verb()} />}
             >
               <span>Session may be stale</span>
             </Show>

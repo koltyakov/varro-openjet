@@ -1,6 +1,6 @@
 # OpenCode V2 support
 
-OpenJet supports V1 from 1.16.0 and V2 from 2.0.5. The webview and shared sources were synced from Varro's `main` branch at `23d8197ff4f7`, version 0.33.4. The Kotlin adapter handles released-server contracts, including generated skill, shell and synthetic transcript records. Synthetic text appears as automatic-action notices. Pending and running V2 patch calls render as active edits. Assistant history preserves automatic retry metadata for recovery notices. History attachments use deferred references with Kotlin-generated thumbnails and on-demand original reads.
+OpenJet supports V1 from 1.16.0 and V2 from 2.0.5. The webview and shared sources were synced from Varro's `main` branch at `786781dcdb7e`, version 0.33.5. The Kotlin adapter handles released-server contracts, including generated skill, shell and synthetic transcript records. Synthetic text appears as automatic-action notices; canonical subagent completion metadata produces linked subagent activities. Pending and running V2 patch calls render as active edits. Assistant history preserves automatic retry metadata for recovery notices. History attachments use deferred references with Kotlin-generated thumbnails and on-demand original reads.
 
 V2 sessions support `/pause` and a Resume action in the transcript. Pausing parks queued messages and interrupts with `resume=false`. Pause markers persist in the shared Varro session annotations, and session summaries and usage reports exclude paused time. Commit-message generation uses the stateless endpoint when the server advertises it, falling back to a helper session when the endpoint or selected model is unavailable before generation starts.
 
@@ -57,6 +57,28 @@ Ordinary sends in Default mode preserve session-scoped Always approvals; explici
 Permission and form replies retain the owning session. The adapter removes pending requests only after the server acknowledges the reply. Native permission configuration keeps its ordered `permissions` array. Model routing edits preserve native `agents` keys when the target file uses V2 configuration.
 
 V2 has no session-sharing or LSP service. Sharing controls are hidden for V2 sessions. Tail deletion uses file-preserving staged revert and commit; arbitrary single-message deletion returns an error. Unsupported operations report an explicit error.
+
+### Side questions and native commands
+
+`POST /session/:id/side-question` is a narrow V2-only host action. `SideQuestions.kt`
+checks the open project directory and running connection, bounds responses to
+512 KiB, and enforces a 35-second cancellation-aware deadline through response-body
+reads. Restarted connections reject late answers. `OpenCodeV2SideQuestions.kt`
+validates an 8,000-character question, answers up to 64,000 characters, fewer than
+12 previous exchanges and 128,000 total context characters. The adapter rechecks
+the canonical session ID and location before `/api/session/:id/generate`.
+It sends only a prompt, with no model/agent changes, inbox admission, helper session
+or fallback. Dialog cancellation never calls session interrupt. Follow-up history
+stays in the dialog and enters subsequent generation prompts as context only.
+
+Command discovery reads `/api/command` and `/api/skill`, without reconstructing
+commands from configuration templates. Native commands win name collisions and
+carry `source: command`; skills retain their content. `command.updated` and
+`skill.updated` events refresh the workspace catalog. Execution still uses
+OpenCode's native command route, so the server owns delegation and precedence.
+Synthetic completion records expose only verified child IDs, terminal states,
+descriptions and agent names from native metadata. Prompt text never establishes
+child attribution.
 
 ## V1 history import
 
@@ -289,6 +311,67 @@ IDE builds were compatible, with the existing deprecated/experimental API warnin
 Evidence is `build/opencode-compatibility/2.0.29/verification.json` and
 `build/upstream-sync-23d8197f-final.log`. The updated package is
 `build/distributions/varro-openjet-0.7.12.zip`.
+
+## Upstream sync review, 2026-10-15
+
+Reviewed `23d8197ff4f7000a395c3d4c4817371804c301e2` through
+`786781dcdb7e7929c315a46ead035041ae03515e`, Varro 0.33.5. The comparison
+includes every changed extension source and test, shared protocol, configuration
+and dependency declaration. Contributed settings and host message envelopes did
+not change. The SDK/client baselines remain V1 1.19.0 and V2 2.0.29; support floors
+remain 1.16.0 and 2.0.5. No new released OpenCode range needed review. Vitest and
+its lockfile entries were updated to 5.0.5 with Node 24.21.0 and npm 10.9.9;
+no new browser dependency was required.
+
+| Upstream change | OpenJet alignment and coverage |
+| --- | --- |
+| `src/extension/rest-proxy.ts`, `util/webview-message.ts`, `opencode-v2-adapter.ts`; `POST /session/:id/side-question` over `/api/session/:id/generate`; `src/shared/side-question.ts` | `ApiRoutes.kt`, `RestProxy.kt`, `SideQuestions.kt`, `OpenCodeV2SideQuestions.kt` and `OpenCodeV2Adapter.kt` implement the scoped V2-only route, canonical location check, bounded prompt/history/answer, request-only cancellation, total deadline and late-connection rejection. Focused tests reject extra fields, malformed or oversized history, foreign/moved/missing sessions, empty/oversized answers, V1 and stopped connections. They verify no helper, prompt, interrupt, model or inbox fallback. A local stalled-body fixture checks cancellation and timeout. Constants are checked against the vendored contract. |
+| `src/extension/opencode-v2-adapter.ts`; `/command` over native `/api/command` and `/api/skill` | `OpenCodeV2Adapter.kt` now uses registry names/descriptions, marks native commands with their source, drops config-template reconstruction, and retains noncolliding skills. `OpenCodeV2Test` verifies precedence, scope and the absence of private native fields or config reads. The vendored UI accepts command arguments, explains delegation and reconciles uncertain sends without replay. |
+| `src/extension/opencode-v2-events.ts`; `command.updated` and `skill.updated` | `OpenCodeV2Events.kt` emits scoped `catalog.updated` events. Kotlin regressions verify both events; the vendored data loader refreshes commands with routing state and preserves superseded-load ordering. |
+| `src/extension/opencode-v2-projection.ts`; synthetic subagent completion metadata on history and direct-message reads | `OpenCodeV2Projection.kt` projects only native `source: subagent`, a nonempty child ID and completed/error/cancelled state, with optional description and agent. `OpenCodeV2Test` checks identical history/direct results, metadata filtering and rejection of text-only attribution. The vendored renderer adds linked child activities and uses the child's model for details. |
+
+The published OpenCode 2.0.29 binary passed both Kotlin adapter and managed-service
+suites without skips through `scripts/check-opencode-compatibility.py`. Fixture
+HOME/XDG/database/server-state roots and a deterministic local provider remained
+isolated from production. The expanded adapter integration test verifies side
+questions and follow-ups without history/inbox writes, generation while a task is
+stalled, native command discovery, exactly one delegated child with arguments and
+an attachment, parent model/agent preservation, and correct launch/child failure
+attribution. Evidence is `build/opencode-compatibility/2.0.29/verification.json` and
+`build/upstream-sync-786781dc-compatibility.log`.
+
+The UI refresh also includes edit-reconciliation loading feedback, synchronous
+native-view draft checkpoints, composer/menu polish and side-question dialog
+controls. These are browser changes reused unchanged in JetBrains. The draft
+checkpoint addresses VS Code snapshot timing through the shared native-view
+contract; OpenJet retains its own view-state bridge. No new VS Code-only host
+operation, configuration migration or Windows process change requires a port.
+
+Vendor integrity, all 89 browser host tests, TypeScript checking and the browser
+build passed. The full Kotlin run passed 538 tests, including 15 new regressions;
+only the opt-in existing-database usage benchmark was skipped. Both released
+suites passed again without skips in that run. All four compatibility-helper
+tests and the vendor-integrity script test passed. `check` and `buildPlugin`
+completed and produced `build/distributions/varro-openjet-0.8.0.zip`. The first
+combined command reached Plugin Verifier before its two-minute shell deadline;
+the rerun passed `check buildPlugin verifyPlugin`. All five configured IDE builds
+were compatible, with deprecated/experimental API warnings only. Logs are
+`build/upstream-sync-786781dc-final.log` and
+`build/upstream-sync-786781dc-final-retry.log`.
+
+Remaining differences and verification limits:
+
+| Status | Upstream and OpenJet code | User-visible impact |
+| --- | --- | --- |
+| Pre-existing state-root selection difference | Upstream `src/extension/varro-state-paths.ts` selects native roots with legacy links; `OpenCodeV2SessionState.kt` selects the legacy XDG/default root. | An upstream native root without a legacy link can separate pause markers, annotations and background-service choices across editors. This sync does not move or reconcile user state. |
+| Accepted AVIF limitation | Upstream `src/extension/remote-images.ts` uses its WASM thumbnail worker; `RemoteImages.kt` and `ImageThumbnails.kt` retain the previously selected JVM codecs. | AVIF can show an unsupported-image error instead of a preview. |
+| Pre-existing preload and Windows inspection warm-up differences | Upstream `vite.config.mts`, `sidebar-provider-bridge.ts`, `webview-html.ts`, `extension.ts` and `process-inspection.ts`; OpenJet `webview/vite.config.mts`, `WebviewHtml.kt` and `ProcessIdentity` in `ServerOwnership.kt`. | No static module-preload hints or persistent Windows inspector warm-up. Startup performance can differ; neither optimization changed in this delta. |
+| Pre-existing quota differences | Upstream provider-limit adapters/service versus `QuotaAdapters.kt` and `ProviderQuotaBackend.kt`, detailed in [architecture](architecture.md#remaining-quota-parity-differences). | Malformed local Claude windows can reach browser validation; custom header-probe base URLs are ignored; an xAI monthly failure can hide earlier windows; separate hosts can duplicate quota polling and see different snapshots. These adapters did not change in this delta. |
+| Native UI and external integrations not verified | Vendored `SideQuestionDialog.tsx`, `UserMessageContent.tsx`, `ToolCall.tsx` and composer/draft code, hosted through `WebviewHost.kt` and `webview/src/host-bridge.ts`. | JCEF dialog focus, cancellation controls, linked child navigation, edit loading and draft restoration still need sandbox interaction. No live provider, interactive OAuth, native Windows/Linux run or upstream Playwright visual test was performed. |
+
+No new required backend or consumed-contract gap remains in the reviewed delta.
+These checks do not establish parity for the historical differences above.
+No production session, credential or service registration was used.
 
 ## Verification
 

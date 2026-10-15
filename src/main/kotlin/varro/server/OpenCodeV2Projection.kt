@@ -212,7 +212,19 @@ internal object OpenCodeV2Projection {
                     val reference = "$[${java.net.URLEncoder.encode(name, Charsets.UTF_8).replace("+", "%20").replace("%21", "!").replace("%27", "'").replace("%28", "(").replace("%29", ")").replace("%7E", "~")}]"
                     parts.add(part(parts.size, "text", Json.obj("text" to "[Attached skill: $reference]\nUse the skill tool to load ${Json.stringify(name)} before responding. $reference in the prompt refers to this skill.", "synthetic" to true)))
                 }
-            } else if (type == "synthetic") parts.add(part(0, "text", Json.obj("text" to value.str("text").orEmpty(), "synthetic" to true)))
+            } else if (type == "synthetic") {
+                val metadata = value.obj("metadata")
+                val childID = metadata.str("childID")
+                val state = metadata.str("state")
+                parts.add(part(0, "text", Json.obj("text" to value.str("text").orEmpty(), "synthetic" to true).apply {
+                    if (metadata.str("source") == "subagent" && !childID.isNullOrEmpty() && state in setOf("completed", "error", "cancelled")) {
+                        add("subagentResult", Json.obj("sessionID" to childID, "state" to state).apply {
+                            value.str("description")?.let { addProperty("description", it) }
+                            metadata.str("agent")?.let { addProperty("agent", it) }
+                        })
+                    }
+                }))
+            }
             else if (type == "compaction") parts.add(part(0, "compaction", Json.obj("auto" to (value.str("reason") == "auto"),
                 "status" to value.get("status"), "error" to value.obj("error").str("message"))))
         }

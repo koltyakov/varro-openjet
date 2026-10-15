@@ -635,6 +635,7 @@ export function ActiveChatHeader(props: {
               titleRef = element;
             }}
             class="chat-header-session-title"
+            tabIndex={-1}
             onContextMenu={openActions}
           >
             <span class="chat-header-title-text">{props.title}</span>

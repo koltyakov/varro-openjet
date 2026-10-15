@@ -180,6 +180,13 @@ export type TextPart = {
   type: 'text';
   text: string;
   synthetic?: boolean;
+  /** Verified native completion metadata, never inferred from prompt text or session titles. */
+  subagentResult?: {
+    sessionID: string;
+    state: 'completed' | 'error' | 'cancelled';
+    description?: string;
+    agent?: string;
+  };
   ignored?: boolean;
   time?: { start: number; end?: number };
   metadata?: UnknownRecord;

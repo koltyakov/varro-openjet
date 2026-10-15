@@ -2021,6 +2021,10 @@ body:is(.vscode-high-contrast, .vscode-high-contrast-light) .assistant-activity-
   pointer-events: auto;
 }
 
+.chat-empty-logo-shell.is-contained {
+  position: absolute;
+}
+
 .chat-empty-logo-waves {
   position: absolute;
   inset: 0;
@@ -3239,6 +3243,38 @@ body.vscode-dark .interactive-session .chat-input-container.focused {
 .interactive-session .interactive-input-part > * {
   position: relative;
   z-index: var(--z-raised);
+}
+
+/* Keep the empty editor and edit banner in flow so the loading block has their exact size. */
+.interactive-input-part.is-edit-reconciling > :not(.composer-edit-loading) {
+  visibility: hidden;
+}
+
+.interactive-session .interactive-input-part > .composer-edit-loading {
+  position: absolute;
+  inset: 8px var(--chat-horizontal-padding) 0;
+  min-height: 0;
+  border: 1px solid var(--color-vscode-border-default);
+  border-radius: var(--radius-control);
+  background: color-mix(in srgb, var(--color-vscode-list-bg) 92%, var(--color-vscode-input-bg));
+  cursor: progress;
+}
+
+.composer-edit-loading-title {
+  position: absolute;
+  top: 8px;
+  left: 12px;
+  right: 12px;
+  color: var(--color-vscode-muted);
+  font-size: 11px;
+  line-height: 16px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.interactive-session .inline-edit-composer-slot .composer-edit-loading {
+  inset: 2px 0 0;
 }
 
 .interactive-session .model-selection-row {

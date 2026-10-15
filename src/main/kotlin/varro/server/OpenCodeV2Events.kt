@@ -64,7 +64,7 @@ internal object OpenCodeV2Events {
             "session.step.streamed" -> return listOf(emit("session.next.context.updated", Json.obj("sessionID" to sessionID)))
             "session.compaction.failed" -> return listOf(emit("session.next.compaction.ended"), emit("session.error", Json.obj("sessionID" to sessionID,
                 "error" to Json.obj("name" to "APIError", "data" to Json.obj("message" to (data.obj("error").str("message") ?: "Compaction failed"))))).apply { addProperty("id", "${event.str("id")}:error"); remove("seq") })
-            "provider.updated", "model.updated", "agent.updated", "integration.updated", "credential.updated" -> return listOf(emit("catalog.updated"))
+            "provider.updated", "model.updated", "agent.updated", "integration.updated", "credential.updated", "command.updated", "skill.updated" -> return listOf(emit("catalog.updated"))
             "config.updated" -> return listOf(emit("global.disposed"))
         }
         if (Regex("^session\\.(text|reasoning)\\.").containsMatchIn(type)) {

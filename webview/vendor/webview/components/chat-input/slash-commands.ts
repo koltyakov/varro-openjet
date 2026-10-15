@@ -28,6 +28,7 @@ export function getSlashCommands(props: {
   onExportSession: () => void;
   onPauseSession: () => Promise<void>;
   onGenerateStats: (includeAllTime: boolean) => void;
+  onSideQuestion?: (question: string) => void;
   customCommands: Command[];
 }): SlashCommand[] {
   const reservedBuiltInNames = new Set([
@@ -62,6 +63,7 @@ export function getSlashCommands(props: {
     'stop',
     'pause',
     'ralph',
+    'btw',
   ]);
 
   const commands: SlashCommand[] = [
@@ -181,6 +183,13 @@ export function getSlashCommands(props: {
   if (props.hasCurrentSession) {
     if (state.serverStatus.state === 'running' && state.serverStatus.apiVersion === 2) {
       commands.push({
+        name: 'btw',
+        aliases: [],
+        description: 'Ask without interrupting the task',
+        acceptsArguments: true,
+        action: (args) => props.onSideQuestion?.(args),
+      });
+      commands.push({
         name: 'pause',
         aliases: [],
         description: 'Interrupt the current run and pause queued messages',
@@ -277,8 +286,14 @@ export function getSlashCommands(props: {
     commands.push({
       name: command.name,
       aliases: [],
-      description: command.description || command.template,
-      acceptsArguments: (command.hints?.length ?? 0) > 0,
+      description: command.description || 'Runs according to its OpenCode definition',
+      help:
+        command.source === 'command' &&
+        state.serverStatus.state === 'running' &&
+        state.serverStatus.apiVersion === 2
+          ? 'OpenCode decides whether this command runs here or in a background child. Follow children in the session list; their results return to the parent. Agent and model overrides follow the command definition.'
+          : undefined,
+      acceptsArguments: command.source === 'command' || (command.hints?.length ?? 0) > 0,
       source: command.source,
       action: (args) => {
         void runSlashCommandByName(command.name, args);

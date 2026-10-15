@@ -77,6 +77,8 @@ export type RichComposerPasteInsertion = {
 export function RichComposerArea(props: {
   editorRef: (el: HTMLDivElement) => void;
   placeholder: string;
+  ariaLabel?: string;
+  centerCaret?: boolean;
   value: string;
   promptSuggestion?: string;
   promptCompletionPending?: boolean;
@@ -117,6 +119,7 @@ export function RichComposerArea(props: {
   let historyHandledByKeydown = false;
   let revealCaretAfterControlledInput = false;
   let pendingControlledCursorReveal = false;
+  let centeredCaretFrame: number | undefined;
   let nativeInputSync: { value: string; cursorOffset: number } | undefined;
   let unregisterComposerDismiss: (() => void) | undefined;
   const [problemTooltipTargets, setProblemTooltipTargets] = createSignal<
@@ -198,7 +201,15 @@ export function RichComposerArea(props: {
   onMount(() => {
     if (editorEl) {
       props.editorRef(editorEl);
+      if (props.centerCaret) {
+        const observer = new ResizeObserver(scheduleCenteredCaret);
+        observer.observe(editorEl);
+        onCleanup(() => observer.disconnect());
+      }
     }
+  });
+  onCleanup(() => {
+    if (centeredCaretFrame !== undefined) cancelAnimationFrame(centeredCaretFrame);
   });
 
   function getChipMap(): Map<string, RichComposerChip> {
@@ -795,9 +806,29 @@ export function RichComposerArea(props: {
   }
 
   function revealCaret(controlledCursorUpdate = false) {
-    if ((!revealCaretAfterControlledInput && !controlledCursorUpdate) || !editorEl) return;
+    if (
+      (!revealCaretAfterControlledInput && !controlledCursorUpdate && !props.centerCaret) ||
+      !editorEl
+    )
+      return;
     revealCaretAfterControlledInput = false;
+    if (props.centerCaret) {
+      scheduleCenteredCaret();
+      return;
+    }
+    scrollCaretIntoView();
+  }
 
+  function scheduleCenteredCaret() {
+    if (!props.centerCaret || centeredCaretFrame !== undefined) return;
+    centeredCaretFrame = requestAnimationFrame(() => {
+      centeredCaretFrame = undefined;
+      scrollCaretIntoView(true);
+    });
+  }
+
+  function scrollCaretIntoView(center = false) {
+    if (!editorEl || (center && (document.activeElement !== editorEl || isComposing()))) return;
     const range = getSelectionRange();
     if (!range?.collapsed || !('getBoundingClientRect' in range)) return;
     let caretRect = range.getBoundingClientRect();
@@ -816,7 +847,10 @@ export function RichComposerArea(props: {
     if (caretRect.height === 0) return;
     const editorRect = editorEl.getBoundingClientRect();
 
-    if (caretRect.bottom > editorRect.bottom) {
+    if (center) {
+      const offset = (caretRect.top + caretRect.bottom - editorRect.top - editorRect.bottom) / 2;
+      if (Math.abs(offset) > 0.5) editorEl.scrollTop += offset;
+    } else if (caretRect.bottom > editorRect.bottom) {
       editorEl.scrollTop += caretRect.bottom - editorRect.bottom;
     } else if (caretRect.top < editorRect.top) {
       editorEl.scrollTop -= editorRect.top - caretRect.top;
@@ -1152,7 +1186,7 @@ export function RichComposerArea(props: {
         class="rich-composer"
         contentEditable={true}
         role="textbox"
-        aria-label="Message composer"
+        aria-label={props.ariaLabel ?? 'Message composer'}
         aria-multiline="true"
         aria-autocomplete={promptSuggestion() ? 'inline' : 'none'}
         aria-placeholder={props.placeholder}
@@ -1262,6 +1296,7 @@ export function RichComposerArea(props: {
         onFocus={() => {
           if (isComposing()) finishComposition();
           props.onFocus();
+          scheduleCenteredCaret();
         }}
         onBlur={() => {
           if (isComposing()) finishComposition();
@@ -1275,12 +1310,14 @@ export function RichComposerArea(props: {
           }
           const selection = getSelectionOffsets();
           if (selection) props.onClick(selection.start, selection.end);
+          scheduleCenteredCaret();
         }}
         onKeyUp={(e) => {
           historyHandledByKeydown = false;
           if (isComposing() || e.isComposing) return;
           const selection = getSelectionOffsets();
           if (selection) props.onKeyUp(selection.start, selection.end);
+          scheduleCenteredCaret();
         }}
         onCompositionStart={() => {
           nativeInputSync = undefined;

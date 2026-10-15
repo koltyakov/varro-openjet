@@ -104,6 +104,8 @@ class OpenCodeServer(
 
     fun currentStatus(): ServerStatus = status.get()
 
+    internal fun requestGeneration(): Int = disposeGeneration.get()
+
     fun version(): String? = serverVersion.get()
 
     /** Called off the EDT. Refresh read-only health and process diagnostics at most once a minute. */

@@ -207,6 +207,7 @@ export function createDataLoaderOperations(deps: {
   let inFlightQuestionLoad: Promise<boolean> | null = null;
   let inFlightCatalogReload: Promise<boolean> | null = null;
   let latestAgentLoad: Promise<boolean> | null = null;
+  let latestCommandLoad: Promise<boolean> | null = null;
   let latestProviderLoad: Promise<boolean> | null = null;
   let knownProviderIDs: Set<string> | null = null;
   const questionSnapshots = createMutationAwareSnapshotReconciler(deps.getQuestions);
@@ -318,17 +319,26 @@ export function createDataLoaderOperations(deps: {
     return request;
   };
 
-  const loadCommands = async () => {
+  const loadCommands = (): Promise<boolean> => {
     const workspace = workspaceGeneration;
     const generation = ++commandLoadGeneration;
-    return await loadCommandsWithDependencies(
-      {
-        listCommands: deps.listCommands,
-        setCommands: deps.setCommands,
-      },
-      deps.logError,
-      () => workspace === workspaceGeneration && generation === commandLoadGeneration
+    const isLatest = () =>
+      workspace === workspaceGeneration && generation === commandLoadGeneration;
+    const request = inheritSupersededLoad(
+      loadCommandsWithDependencies(
+        {
+          listCommands: deps.listCommands,
+          setCommands: deps.setCommands,
+        },
+        deps.logError,
+        isLatest
+      ),
+      workspace,
+      isLatest,
+      () => latestCommandLoad
     );
+    latestCommandLoad = request;
+    return request;
   };
 
   const loadProviders = (): Promise<boolean> => {
@@ -371,7 +381,7 @@ export function createDataLoaderOperations(deps: {
   };
 
   const refreshRoutingState = async () => {
-    await Promise.all([loadAgents(), loadProviders()]);
+    await Promise.all([loadAgents(), loadCommands(), loadProviders()]);
   };
 
   const performWorkspaceCatalogReload = async () => {
@@ -608,6 +618,7 @@ export function createDataLoaderOperations(deps: {
     inFlightQuestionLoad = null;
     inFlightCatalogReload = null;
     latestAgentLoad = null;
+    latestCommandLoad = null;
     latestProviderLoad = null;
     deps.setSessionsLoadingMore?.(false);
     deps.setSessionsPaginationError?.(null);

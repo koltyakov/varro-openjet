@@ -67,6 +67,8 @@ import {
 import { isFunction } from '../lib/runtime-values';
 import { ProviderConnectionDialog } from './ProviderConnectionDialog';
 import { BackgroundProcessDialog } from './BackgroundProcessDialog';
+import { SideQuestionDialog } from './SideQuestionDialog';
+import { sideQuestionView, closeSideQuestion } from '../lib/side-question';
 import { backgroundProcessView, closeBackgroundProcessView } from '../lib/background-process-view';
 import { readWebviewInstanceContext } from '../lib/state-stored-values';
 
@@ -157,6 +159,20 @@ export function Chat() {
     if (view && view.sessionID !== state.activeSessionId) closeBackgroundProcessView();
   });
   onCleanup(closeBackgroundProcessView);
+  createEffect(() => {
+    const view = sideQuestionView();
+    if (!view) return;
+    const session = state.sessions.find((entry) => entry.id === view.sessionID);
+    if (
+      state.activeSessionId !== view.sessionID ||
+      session?.directory !== view.directory ||
+      state.serverStatus.state !== 'running' ||
+      state.serverStatus.url !== view.serverURL ||
+      state.serverStatus.apiVersion !== 2
+    )
+      closeSideQuestion();
+  });
+  onCleanup(closeSideQuestion);
   const [subagentParentId, setSubagentParentId] = createSignal<string | null>(null);
   const [sidebarSubagentParentId, setSidebarSubagentParentId] = createSignal<string | null>(null);
   const [isDesktopSessionLayout, setIsDesktopSessionLayout] = createSignal(false);
@@ -968,6 +984,17 @@ export function Chat() {
             directory={view.directory}
             processID={view.processID}
             onClose={closeBackgroundProcessView}
+          />
+        )}
+      </Show>
+      <Show when={sideQuestionView()} keyed>
+        {(view) => (
+          <SideQuestionDialog
+            sessionID={view.sessionID}
+            directory={view.directory}
+            question={view.question}
+            context={view.context}
+            onClose={closeSideQuestion}
           />
         )}
       </Show>

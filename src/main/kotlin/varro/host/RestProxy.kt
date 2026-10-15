@@ -8,6 +8,7 @@ import com.intellij.openapi.diagnostic.logger
 import com.intellij.openapi.components.service
 import com.intellij.openapi.project.Project
 import varro.protocol.Json
+import varro.protocol.arr
 import varro.protocol.asArrayOrNull
 import varro.protocol.asObjectOrNull
 import varro.protocol.bool
@@ -60,6 +61,9 @@ class RestProxy(
     private val log = logger<RestProxy>()
     private val modelPricing = ModelPricingCatalog()
     private val remoteImages = RemoteImages()
+    private val sideQuestions = SideQuestions(server.transport::request, { server.transport.apiVersion },
+        { server.currentStatus() is varro.server.ServerStatus.Running }, { server.requestGeneration() to server.url() },
+        { (listOfNotNull(project.basePath) + context.context.arr("workspaceFolders")?.mapNotNull { it.asObjectOrNull().text("path") }.orEmpty()).distinct() })
     private val settings get() = varro.settings.VarroSettings.getInstance()
     private val settingsSubscription = com.intellij.openapi.application.ApplicationManager.getApplication().messageBus.connect().apply {
         subscribe(varro.settings.VarroSettings.TOPIC, varro.settings.VarroSettings.Listener {
@@ -212,6 +216,12 @@ class RestProxy(
             if (isCancelled()) throw java.util.concurrent.CancellationException("OpenCode request cancelled")
         }
 
+        if (method == "POST" && request?.segments?.size == 3 && request.segments[2] == "side-question" && sessionId != null) {
+            val directory = transferDirectory ?: request.query["directory"]?.firstOrNull()
+                ?: transfers?.get(sessionId).str("directory") ?: server.workspaceDirectory()
+            return sideQuestions.ask(path, body, directory, isCancelled)
+        }
+
         if (method == "GET" && request != null && request.segments.size == 6 &&
             request.segments[0] == "session" && request.segments[2] == "message" && request.segments[4] == "part") {
             return readContent(request, transferDirectory, isCancelled)
@@ -242,7 +252,7 @@ class RestProxy(
         if (method == "GET" && request?.pathname == "/session") return Json.array(
             mergeTransfers(result.asArrayOrNull() ?: JsonArray(), request).filter { it.asObjectOrNull().str("id") !in store.hiddenSessionIds },
         )
-        if (method == "GET" && sessionId != null && request?.segments?.size == 2) {
+        if (method == "GET" && sessionId != null && request.segments.size == 2) {
             result.asObjectOrNull()?.let { session ->
                 transfers?.get(sessionId).obj("transfer")?.let { session.add("transfer", it) }
             }

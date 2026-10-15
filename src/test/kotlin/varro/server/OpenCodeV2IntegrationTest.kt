@@ -22,14 +22,25 @@ class OpenCodeV2IntegrationTest {
         val root = temporary.newFolder().toPath()
         val workspace = Files.createDirectory(root.resolve("workspace"))
         val providerRequests = java.util.concurrent.atomic.AtomicInteger()
+        val providerInputs = CopyOnWriteArrayList<com.google.gson.JsonObject>()
         val streamGate = AtomicReference<java.util.concurrent.CountDownLatch?>()
         val provider = com.sun.net.httpserver.HttpServer.create(java.net.InetSocketAddress("127.0.0.1", 0), 0)
+        val providerExecutor = java.util.concurrent.Executors.newCachedThreadPool { runnable -> Thread(runnable, "fixture-provider").apply { isDaemon = true } }
+        provider.executor = providerExecutor
         provider.createContext("/") { exchange ->
             providerRequests.incrementAndGet()
             val input = Json.parse(exchange.requestBody.bufferedReader().readText()).asJsonObject
-            streamGate.get()?.await(20, TimeUnit.SECONDS)
+            providerInputs.add(input)
+            if (input.str("model") == "fixture-error") {
+                val bytes = Json.stringify(Json.obj("error" to Json.obj("message" to "Fixture child execution failed", "type" to "invalid_request_error"))).toByteArray()
+                exchange.responseHeaders.add("Content-Type", "application/json")
+                exchange.sendResponseHeaders(400, bytes.size.toLong())
+                exchange.responseBody.use { it.write(bytes) }
+                return@createContext
+            }
             val usage = Json.obj("prompt_tokens" to 10, "completion_tokens" to 3, "total_tokens" to 13)
             val response = if (input.bool("stream") == true) {
+                streamGate.get()?.await(20, TimeUnit.SECONDS)
                 exchange.responseHeaders.add("Content-Type", "text/event-stream")
                 val chunks = listOf(
                     Json.obj("id" to "chatcmpl-fixture", "object" to "chat.completion.chunk", "created" to 1, "model" to "fixture", "choices" to listOf(Json.obj("index" to 0, "delta" to Json.obj("content" to "OpenJet stream verified."), "finish_reason" to null))),
@@ -65,11 +76,17 @@ class OpenCodeV2IntegrationTest {
                 "\$schema" to "https://opencode.ai/config.json", "providers" to Json.obj("fixture" to Json.obj(
                     "package" to "@opencode/ai/providers/openai-compatible",
                     "settings" to Json.obj("baseURL" to "http://127.0.0.1:${provider.address.port}/v1", "apiKey" to "fixture-only"),
-                    "models" to Json.obj("fixture" to Json.obj("name" to "Fixture", "limit" to Json.obj("context" to 32000, "output" to 1000))),
+                    "models" to Json.obj(*listOf("fixture", "fixture-command", "fixture-error").map {
+                        it to Json.obj("name" to it, "limit" to Json.obj("context" to 32000, "output" to 1000))
+                    }.toTypedArray()),
                 )),
             )))
         }
         if (OpenCodeCli.compareVersions(installedVersion, "2.0.29") >= 0) {
+            val commands = Files.createDirectories(workspace.resolve(".opencode/commands"))
+            Files.writeString(commands.resolve("fixture-audit.md"), "---\ndescription: Audit fixture\nagent: general\nmodel: fixture/fixture-command\nsubagent: true\n---\nAudit \$ARGUMENTS. Do not call tools.\n")
+            Files.writeString(commands.resolve("fixture-launch-error.md"), "---\nagent: fixture-agent-does-not-exist\nsubagent: true\n---\nReply.\n")
+            Files.writeString(commands.resolve("fixture-child-error.md"), "---\nagent: general\nmodel: fixture/fixture-error\nsubagent: true\n---\nReply.\n")
             // Native policies must not be undone by the older-server custom-model fallback.
             val config = Json.parse(Files.readString(workspace.resolve("opencode.json"))).asJsonObject
             config.add("providers", Json.obj("openai" to Json.obj("models" to Json.obj("policy-fixture" to Json.obj("name" to "Denied fixture")))))
@@ -162,6 +179,10 @@ class OpenCodeV2IntegrationTest {
                 "parts" to listOf(Json.obj("type" to "text", "text" to "Reply using the fixture provider")))).data.asObjectOrNull()
             assertTrue(answer.arr("parts")!!.any { it.asObjectOrNull().str("text") == "OpenJet stream verified." })
             assertTrue(events.any { it.asObjectOrNull().str("type") == "session.next.text.delta" })
+            if (OpenCodeCli.compareVersions(version, "2.0.29") >= 0) {
+                verifySideQuestions(transport, workspace.toString(), providerRequests, streamGate)
+                verifyDelegatedCommands(transport, providerInputs)
+            }
             for (samplingDelay in listOf(0L, 75L, 250L)) {
                 val steeringSession = transport.request("POST", "/session", Json.obj("title" to "Isolated steering resume fixture")).data.asObjectOrNull().str("id")!!
                 val gate = java.util.concurrent.CountDownLatch(1)
@@ -263,6 +284,99 @@ class OpenCodeV2IntegrationTest {
             }
             reader.join(1000)
             provider.stop(0)
+            providerExecutor.shutdownNow()
+        }
+    }
+
+    private fun verifySideQuestions(transport: OpenCodeTransport, directory: String,
+        providerRequests: java.util.concurrent.atomic.AtomicInteger,
+        streamGate: AtomicReference<java.util.concurrent.CountDownLatch?>) {
+        val id = transport.request("POST", "/session", Json.obj("title" to "Isolated side question fixture",
+            "model" to Json.obj("providerID" to "fixture", "modelID" to "fixture"))).data.asObjectOrNull().str("id")!!
+        val questions = varro.host.SideQuestions(transport::request, { transport.apiVersion }, { true }, { 1 }, { listOf(directory) })
+        fun ask(history: List<com.google.gson.JsonObject> = emptyList()) = questions.ask("/session/$id/side-question",
+            Json.obj("question" to "Why?", "history" to history), directory) { false }
+        val gate = java.util.concurrent.CountDownLatch(1)
+        try {
+            transport.request("POST", "/session/$id/message", Json.obj("parts" to listOf(Json.obj("type" to "text", "text" to "Establish context."))))
+            transport.request("POST", "/session/$id/prompt_async", Json.obj("noReply" to true, "delivery" to "queue",
+                "parts" to listOf(Json.obj("type" to "text", "text" to "Keep this queued."))))
+            val before = transport.request("GET", "/session/$id").data.asObjectOrNull()
+            val history = transport.request("GET", "/session/$id/message").data
+            val inbox = transport.request("GET", "/api/session/$id/inbox").data
+            val count = providerRequests.get()
+            assertEquals("OpenJet stream verified.", ask().asObjectOrNull().str("text"))
+            assertEquals("OpenJet stream verified.", ask(listOf(Json.obj("question" to "Why?", "answer" to "Because."))).asObjectOrNull().str("text"))
+            assertEquals(count + 2, providerRequests.get())
+            assertEquals(history, transport.request("GET", "/session/$id/message").data)
+            assertEquals(inbox, transport.request("GET", "/api/session/$id/inbox").data)
+            val after = transport.request("GET", "/session/$id").data.asObjectOrNull()
+            assertEquals(before.obj("model"), after.obj("model"))
+            assertEquals(before.str("agent"), after.str("agent"))
+            // Generation must also complete independently of a stalled execution.
+            streamGate.set(gate)
+            val beforeBusy = providerRequests.get()
+            transport.request("POST", "/session/$id/prompt_async", Json.obj("parts" to listOf(Json.obj("type" to "text", "text" to "Wait for the fixture gate."))))
+            waitFor { providerRequests.get() > beforeBusy }
+            assertEquals("busy", transport.request("GET", "/session/status").data.asObjectOrNull().obj(id).str("type"))
+            assertEquals("OpenJet stream verified.", ask().asObjectOrNull().str("text"))
+            assertEquals("busy", transport.request("GET", "/session/status").data.asObjectOrNull().obj(id).str("type"))
+        } finally {
+            gate.countDown()
+            streamGate.set(null)
+            transport.request("POST", "/session/$id/abort")
+            transport.request("DELETE", "/session/$id")
+        }
+    }
+
+    private fun verifyDelegatedCommands(transport: OpenCodeTransport, providerInputs: List<com.google.gson.JsonObject>) {
+        waitFor { transport.request("GET", "/command").data!!.asJsonArray.any { it.asObjectOrNull().str("name") == "fixture-audit" } }
+        val command = transport.request("GET", "/command").data!!.asJsonArray.single { it.asObjectOrNull().str("name") == "fixture-audit" }
+        assertEquals(Json.obj("name" to "fixture-audit", "description" to "Audit fixture", "source" to "command", "template" to "", "hints" to emptyList<Any>()), command)
+        for (phase in listOf("completed", "launch", "error")) {
+            val id = transport.request("POST", "/session", Json.obj("title" to "Isolated command $phase fixture",
+                "model" to Json.obj("providerID" to "fixture", "modelID" to "fixture"))).data.asObjectOrNull().str("id")!!
+            var childID: String? = null
+            try {
+                val before = transport.request("GET", "/session/$id").data.asObjectOrNull()
+                val inputCount = providerInputs.size
+                val payload = Json.obj("command" to when (phase) { "completed" -> "fixture-audit"; "launch" -> "fixture-launch-error"; else -> "fixture-child-error" },
+                    "arguments" to "src/auth \"error handling\"", "parts" to listOf(Json.obj("type" to "file", "mime" to "text/plain", "filename" to "context.txt", "url" to "data:text/plain;base64,Y29udGV4dA==")))
+                if (phase == "launch") {
+                    assertTrue(assertThrows(OpenCodeRequestException::class.java) {
+                        transport.request("POST", "/session/$id/command", payload)
+                    }.message!!.contains("Agent not found"))
+                    assertEquals(0, transport.request("GET", "/session/$id/children").data!!.asJsonArray.size())
+                    continue
+                }
+                transport.request("POST", "/session/$id/command", payload)
+                fun results() = transport.request("GET", "/session/$id/message").data!!.asJsonArray.flatMap {
+                    it.asObjectOrNull().arr("parts")!!.map { part -> part.asJsonObject }
+                }.filter { it.obj("subagentResult") != null }
+                waitFor { results().isNotEmpty() }
+                val child = transport.request("GET", "/session/$id/children").data!!.asJsonArray.single().asJsonObject
+                childID = child.str("id")!!
+                assertEquals(id, child.str("parentID"))
+                assertEquals("general", child.str("agent"))
+                assertEquals(if (phase == "completed") "fixture-command" else "fixture-error", child.obj("model").str("modelID"))
+                val result = results().single().obj("subagentResult")
+                assertEquals(childID, result.str("sessionID"))
+                assertEquals(phase, result.str("state"))
+                if (phase == "completed") {
+                    val messages = transport.request("GET", "/session/$childID/message").data!!.asJsonArray
+                    val prompt = messages.first { it.asObjectOrNull().obj("info").str("role") == "user" }.asJsonObject.arr("parts")!!
+                    assertTrue(prompt.any { it.asObjectOrNull().str("text")?.contains("Audit src/auth \"error handling\". Do not call tools.") == true })
+                    assertTrue(prompt.any { it.asObjectOrNull().str("filename") == "context.txt" })
+                    assertEquals(1, providerInputs.drop(inputCount).count { it.str("model") == "fixture-command" })
+                }
+                val after = transport.request("GET", "/session/$id").data.asObjectOrNull()
+                assertEquals(before.obj("model"), after.obj("model"))
+                assertEquals(before.str("agent"), after.str("agent"))
+                assertEquals(1, results().size)
+            } finally {
+                childID?.let { transport.request("DELETE", "/session/$it") }
+                transport.request("DELETE", "/session/$id")
+            }
         }
     }
 

@@ -1,5 +1,6 @@
 import { STORAGE_KEYS, readStored, writeStored } from './state-storage';
 import { isString } from './runtime-values';
+import { readWebviewInstanceContext } from './state-stored-values';
 
 const INPUT_DRAFT_WRITE_DELAY_MS = 100;
 const NO_PENDING_DRAFT = Symbol('no-pending-draft');
@@ -17,6 +18,19 @@ export function readInputDraft(): string | null {
 
 export function writeInputDraft(value: string) {
   installLifecycleListeners();
+  if (readWebviewInstanceContext()) {
+    // VS Code can snapshot the webview before pagehide or a debounce runs.
+    // Checkpoint each native draft mutation, but skip unchanged values.
+    cancelPendingWrite();
+    if (value) {
+      if (readStored<unknown>(STORAGE_KEYS.inputDraft) !== value) {
+        writeStored(STORAGE_KEYS.inputDraft, value);
+      }
+    } else {
+      writeStored(STORAGE_KEYS.inputDraft, null);
+    }
+    return;
+  }
   if (!value) {
     cancelPendingWrite();
     writeStored(STORAGE_KEYS.inputDraft, null);

@@ -12,6 +12,18 @@ import org.junit.Test
  */
 class ApiRoutesTest {
 
+    @Test fun `side questions allow only the scoped V2 facade and never native generation`() {
+        val path = "/session/ses_one/side-question"
+        assertTrue(ApiRoutes.isAllowed("POST", path))
+        assertTrue(ApiRoutes.isAllowed("POST", "$path?directory=%2Frepo"))
+        for (method in listOf("GET", "DELETE", "PATCH")) assertFalse(ApiRoutes.isAllowed(method, path))
+        for (query in listOf("model=other", "directory=", "directory=/a&directory=/b")) {
+            assertFalse(ApiRoutes.isAllowed("POST", "$path?$query"))
+        }
+        assertFalse(ApiRoutes.isAllowed("POST", "/api/session/ses_one/generate"))
+        assertFalse(ApiRoutes.isAllowed("POST", "/session/a%2fb/side-question"))
+    }
+
     @Test fun `completion allows only its named endpoints without exposing credentials`() {
         assertTrue(ApiRoutes.isAllowed("GET", "/varro/prompt-completion/models"))
         assertTrue(ApiRoutes.isAllowed("POST", "/varro/prompt-completion/test"))

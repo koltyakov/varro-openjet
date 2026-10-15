@@ -219,7 +219,7 @@ class LogoWaves {
   };
 }
 
-export function StarterLogo() {
+export function StarterLogo(props: { contained?: boolean } = {}) {
   // oxlint-disable-next-line no-unassigned-vars
   let logoRef: HTMLImageElement | undefined;
   // oxlint-disable-next-line no-unassigned-vars
@@ -228,6 +228,11 @@ export function StarterLogo() {
   const [position, setPosition] = createSignal<{ top: string; left: string }>();
 
   onMount(() => {
+    if (props.contained && canvasRef) {
+      waves = new LogoWaves(canvasRef);
+      onCleanup(() => waves?.dispose());
+      return;
+    }
     const logo = logoRef;
     const area = logo?.closest<HTMLElement>('.interactive-list-shell');
     const hints = logo
@@ -273,7 +278,12 @@ export function StarterLogo() {
   });
 
   return (
-    <span class="chat-empty-logo-shell" style={position()} aria-hidden="true">
+    <span
+      class="chat-empty-logo-shell"
+      classList={{ 'is-contained': props.contained }}
+      style={position()}
+      aria-hidden="true"
+    >
       <img
         ref={logoRef}
         class="chat-empty-logo"

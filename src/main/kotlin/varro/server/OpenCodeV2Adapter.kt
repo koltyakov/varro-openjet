@@ -184,15 +184,16 @@ internal class OpenCodeV2Adapter(
                 return result(pending.map(OpenCodeV2Projection::form))
             }
             "/command" -> {
-                val commands = objects(data("GET", scoped("/api/command"))).map { it.deepCopy().apply {
-                    addProperty("description", it.str("description").orEmpty()); addProperty("template", ""); add("hints", JsonArray())
-                } }.toMutableList()
-                val config = request("GET", "/config", null, options).data.asObjectOrNull()
-                config.obj("commands")?.entrySet()?.forEach { (name, value) -> value.asObjectOrNull()?.takeIf { it.str("template") != null }?.let {
-                    commands.removeAll { it.str("name") == name }
-                    commands.add(Json.obj("name" to name, "description" to it.str("description").orEmpty(), "template" to it.get("template"), "hints" to JsonArray()))
-                } }
-                return result(commands)
+                // Only the native registry knows command precedence and delegation mode.
+                val commands = objects(data("GET", scoped("/api/command"))).map {
+                    Json.obj("name" to it.get("name"), "description" to it.str("description").orEmpty(),
+                        "source" to "command", "template" to "", "hints" to JsonArray())
+                }
+                val skills = objects(data("GET", scoped("/api/skill"))).filter { skill -> commands.none { it.str("name") == skill.str("id") } }.map {
+                    Json.obj("name" to it.get("id"), "description" to it.str("description").orEmpty(),
+                        "source" to "skill", "template" to it.get("content"), "hints" to JsonArray())
+                }
+                return result(commands + skills)
             }
             "/skill", "/project", "/vcs", "/vcs/status" -> return result(data("GET", scoped("/api$route")))
             "/project/current", "/path" -> {
@@ -239,6 +240,18 @@ internal class OpenCodeV2Adapter(
         }
         Regex("^/session/([^/]+)(?:/(.*))?$").matchEntire(route)?.let { match ->
             val id = decode(match.groupValues[1]); val endpoint = "/api/session/${encode(id)}"; val action = match.groupValues[2]
+            if (method == "POST" && action == "side-question") {
+                val prompt = OpenCodeV2SideQuestions.prompt(input)
+                val canonical = data("GET", endpoint).asObjectOrNull()
+                val sessionDirectory = canonical.obj("location").str("directory")
+                check(canonical.str("id") == id && sessionDirectory != null &&
+                    (directory == null || WorkspacePaths.isSame(sessionDirectory, directory))) {
+                    "Conversation location changed. Reopen it before asking a side question."
+                }
+                val generated = data("POST", "$endpoint/generate", Json.obj("prompt" to prompt))
+                options.checkCancelled()
+                return result(OpenCodeV2SideQuestions.answer(generated))
+            }
             if (method == "GET" && action == "background-process") {
                 val choices = backgroundServices.read(id)
                 return result(objects(data("GET", scoped("/api/shell"))).filter { it.obj("metadata").str("sessionID") == id }.map { shell ->

@@ -1477,7 +1477,12 @@ function GenericToolCall(props: {
       metadataProviderID && metadataModelID
         ? { providerID: metadataProviderID, modelID: metadataModelID }
         : null;
-    const model = latest || resolvedMetadataModel || agent?.model || parent;
+    const childModel = appState.sessions.find((session) => session.id === sessionId)?.model;
+    const resolvedChildModel =
+      childModel?.providerID && childModel.id
+        ? { providerID: childModel.providerID, modelID: childModel.id, variant: childModel.variant }
+        : null;
+    const model = latest || resolvedMetadataModel || resolvedChildModel || agent?.model || parent;
     if (!model) return [];
     const metadataInheritsParent =
       !!resolvedMetadataModel &&
@@ -1489,7 +1494,11 @@ function GenericToolCall(props: {
         ? metadataInheritsParent
           ? parent?.variant
           : undefined
-        : agent?.variant || agent?.model?.variant || (!agent?.model ? parent?.variant : undefined);
+        : resolvedChildModel
+          ? resolvedChildModel.variant
+          : agent?.variant ||
+            agent?.model?.variant ||
+            (!agent?.model ? parent?.variant : undefined);
 
     return [
       ['model', `${model.providerID}/${model.modelID}`],
@@ -1658,6 +1667,7 @@ function GenericToolCall(props: {
     if (props.lightweight) return false;
     if (props.tool.deferred) return true;
     if (props.state.status === 'error') return true;
+    if (taskSessionId()) return true;
     if (hasOnlyHeaderCommand()) return false;
     if (detailInputEntries().length > 0) return true;
     // Whitespace-only output is not expandable content: offering a chevron that
@@ -1868,6 +1878,19 @@ function GenericToolCall(props: {
                   </span>
                 </button>
               </Show>
+            </Show>
+            <Show when={taskSessionId() && props.state.status !== 'running'}>
+              <button
+                type="button"
+                class="tool-invocation-running tool-invocation-subagent-running tool-invocation-subagent-link"
+                onClick={openTaskSession}
+                title="Open subagent session"
+              >
+                <UiIcon source={navArrowRightIcon} width="12" height="12" aria-hidden="true" />
+                <span class="tool-invocation-running-copy">
+                  <strong class="tool-invocation-running-label">Open subagent session</strong>
+                </span>
+              </button>
             </Show>
           </Show>
         </div>

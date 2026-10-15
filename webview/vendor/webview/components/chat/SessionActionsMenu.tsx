@@ -7,7 +7,8 @@ import { renameSession } from '../../hooks/useOpenCode';
 import { postMessage } from '../../lib/bridge';
 import { clampPopupToViewport } from '../../lib/popup-position';
 import { shareSession, unshareSession } from '../../lib/session-sharing';
-import { getSelectedModelForSession, setError } from '../../lib/state';
+import { getSelectedModelForSession, setError, state } from '../../lib/state';
+import { openSideQuestion, sideQuestionUnavailableReason } from '../../lib/side-question';
 import { writeClipboard } from '../../lib/write-clipboard';
 import type { Session } from '../../types';
 import { showSessionActionFeedback } from './SessionActionFeedback';
@@ -234,6 +235,29 @@ export function SessionActionsMenu(props: {
                 directory={props.session.directory}
                 onComplete={() => props.state.close()}
               />
+              <Show
+                when={
+                  props.session.id === state.activeSessionId &&
+                  state.serverStatus.state === 'running' &&
+                  state.serverStatus.apiVersion === 2
+                }
+              >
+                <button
+                  type="button"
+                  role="menuitem"
+                  disabled={!!sideQuestionUnavailableReason()}
+                  title={
+                    sideQuestionUnavailableReason() ?? 'Ask without adding to conversation history'
+                  }
+                  onClick={() => {
+                    props.state.close();
+                    props.onEscape();
+                    openSideQuestion();
+                  }}
+                >
+                  Ask a side question…
+                </button>
+              </Show>
               <button
                 type="button"
                 role="menuitem"

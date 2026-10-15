@@ -137,6 +137,8 @@ type ToolbarSharedProps = {
   busyMenuRef?: HTMLDivElement | ((el: HTMLDivElement) => void);
   onQueue: () => void;
   onSteer: () => void;
+  onSideQuestion?: () => void;
+  sideQuestionDisabledReason?: string;
   onStopAndSend: () => void;
 };
 
@@ -353,6 +355,8 @@ export function ChatInputMainToolbar(props: ChatInputMainToolbarProps) {
                 ref={props.busyMenuRef}
                 onQueue={props.onQueue}
                 onSteer={props.onSteer}
+                onSideQuestion={props.onSideQuestion}
+                sideQuestionDisabledReason={props.sideQuestionDisabledReason}
                 onStopAndSend={props.onStopAndSend}
                 queueOnly={props.queueOnly}
               />

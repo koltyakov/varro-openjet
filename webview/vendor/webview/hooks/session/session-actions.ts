@@ -173,6 +173,11 @@ export async function runSlashCommandWithDependencies(
     if (deps.shouldApplyToActiveSession(sessionId)) deps.stopLoading();
     return true;
   } catch (err) {
+    // Admission may have succeeded before the connection failed. Read state, never
+    // replay the command or send a second prompt to request its result.
+    await Promise.all([deps.syncSession(sessionId), deps.recheckSessionStatus(sessionId)]).catch(
+      () => {}
+    );
     if (deps.shouldApplyToActiveSession(sessionId)) {
       deps.stopLoading();
       deps.setError(err instanceof Error ? err.message : `Failed to run /${name}`);
