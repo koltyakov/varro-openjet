@@ -66,6 +66,7 @@ export function shouldContinueInterruptedSession(messages: MessageEntry[]) {
   const lastInfo = lastMessage?.info;
   if (!lastInfo) return false;
   if (lastInfo.role === 'user') {
+    if (lastInfo.pendingDelivery) return false;
     return !lastMessage.parts.some(
       (part) => part.type === 'text' && part.text === INTERRUPTED_SESSION_CONTINUE_PROMPT
     );

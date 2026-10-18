@@ -973,3 +973,340 @@ body.vscode-high-contrast-light
     justify-content: stretch;
   }
 }
+.native-form-field {
+  min-width: 0;
+  border: 0;
+  padding: 0;
+  margin: 16px 12px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.native-form-field-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 18px;
+  gap: 8px;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.native-form-field > .question-prompt-hint {
+  margin: 0;
+  padding: 0;
+}
+
+.native-question-field > .question-prompt-hint {
+  margin: 0 0 4px;
+}
+
+.native-form-required {
+  color: var(--color-vscode-fg-muted);
+  font-weight: 400;
+}
+
+.native-form-clear {
+  flex-shrink: 0;
+  padding: 1px 4px;
+  border: 0;
+  border-radius: var(--radius-inset);
+  background: transparent;
+  color: var(--color-vscode-fg-muted);
+  font: inherit;
+  font-size: 11px;
+  line-height: 1.4;
+  cursor: pointer;
+}
+
+.native-form-clear:hover {
+  background: var(--color-vscode-toolbar-hover);
+  color: var(--color-vscode-fg);
+}
+
+.native-form-clear:focus-visible {
+  outline: 1px solid var(--color-vscode-accent);
+}
+
+.native-form-clear:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.native-form-answer {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.native-form-choices {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.native-form-text-input {
+  flex: 0 1 auto;
+  width: 100%;
+  field-sizing: content;
+  min-height: calc(1lh + 14px);
+  max-height: calc(4lh + 14px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  resize: none;
+  font-family: inherit;
+}
+
+.native-form-choices .native-question-choice {
+  border: 1px solid transparent;
+  background: transparent;
+  /* An inset stroke avoids Chromium rounding a fractional border up to 1px. */
+  box-shadow: inset 0 0 0 0.5px color-mix(in srgb, var(--color-vscode-fg) 8%, transparent);
+}
+
+.native-question-choice > .question-option-text:not(.question-custom-content) {
+  display: block;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.native-question-choice .question-option-desc {
+  margin-left: 4px;
+}
+
+.native-form-choices
+  .native-question-choice:is(.question-option-custom, .native-multiselect-custom-row) {
+  padding-top: 0;
+  padding-right: 0;
+  padding-bottom: 0;
+}
+
+.native-form-choices .native-question-choice .native-form-text-input {
+  min-height: calc(1lh + 16px);
+  max-height: calc(4lh + 16px);
+  margin: 0;
+  padding: 8px 9px 8px 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.native-question-choice.question-option-custom > .native-question-choice-input {
+  margin-top: 9px;
+}
+
+.native-question-choice-input {
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  margin: 1px 0 0;
+  border: 1.5px solid color-mix(in srgb, var(--color-vscode-muted) 58%, transparent);
+  border-radius: 50%;
+  background: transparent;
+  cursor: inherit;
+}
+
+.native-question-choice-input:checked {
+  border-color: var(--color-vscode-accent);
+  background: radial-gradient(circle, var(--color-vscode-accent) 0 3px, transparent 3.5px);
+}
+
+.native-question-choice-input:focus {
+  outline: none;
+}
+
+.native-question-choice-input:disabled {
+  opacity: 0.6;
+}
+
+.native-question-choice-input:focus-visible {
+  outline: 1px solid var(--color-vscode-accent);
+  outline-offset: 2px;
+}
+
+.native-multiselect {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.native-multiselect-indicator {
+  position: relative;
+  display: flex;
+  width: 14px;
+  height: 14px;
+  margin-top: 1px;
+}
+
+.native-multiselect-checkbox {
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  border: 1.5px solid color-mix(in srgb, var(--color-vscode-muted) 58%, transparent);
+  border-radius: 3px;
+  background: transparent;
+  cursor: inherit;
+}
+
+.native-multiselect-checkbox:checked {
+  border-color: var(--color-vscode-accent);
+  background: var(--color-vscode-accent);
+}
+
+.native-multiselect-checkbox:focus-visible {
+  outline: 1px solid var(--color-vscode-accent);
+  outline-offset: 2px;
+}
+
+.native-multiselect-check {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  color: var(--color-vscode-button-fg);
+  pointer-events: none;
+}
+
+.native-multiselect-custom-row {
+  cursor: default;
+}
+
+.native-multiselect-custom-row > .native-multiselect-indicator {
+  margin-top: 9px;
+}
+
+.native-multiselect-checkbox:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.native-multiselect-empty {
+  align-self: flex-start;
+}
+
+.native-form-select-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  min-width: 0;
+  min-height: 30px;
+  padding: 6px 14px 6px 8px;
+  color: var(--color-vscode-input-fg);
+  background: var(--color-vscode-input-bg);
+  border: 1px solid var(--color-vscode-input-border, var(--color-vscode-border));
+  border-radius: var(--radius-chip);
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.35;
+  text-align: left;
+  cursor: pointer;
+}
+
+.native-form-select-trigger > span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.native-form-select-chevron {
+  flex-shrink: 0;
+  color: var(--color-vscode-fg-muted);
+}
+
+.native-form-select-trigger:hover,
+.native-form-select-trigger:focus-visible,
+.native-form-select-trigger[aria-expanded='true'] {
+  border-color: var(--color-vscode-accent);
+  outline: none;
+}
+
+.native-form-select-trigger:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.native-form-select-options {
+  position: fixed;
+  z-index: 1100;
+  box-sizing: border-box;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 4px;
+  background: var(--color-vscode-sidebar);
+  border: 1px solid var(--color-vscode-border);
+  border-radius: var(--radius-control);
+  box-shadow: var(--shadow-popover);
+  font-size: 12px;
+}
+
+.native-form-select-options[data-popup-position-pending] {
+  visibility: hidden;
+}
+
+.native-form-select-option {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 13px;
+  align-items: center;
+  gap: 2px 8px;
+  width: 100%;
+  padding: 7px 8px;
+  border: 0;
+  border-radius: var(--radius-inset);
+  background: transparent;
+  color: var(--color-vscode-fg);
+  font: inherit;
+  line-height: 1.35;
+  text-align: left;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+
+.native-form-select-option.is-active,
+.native-form-select-option:hover {
+  background: var(--color-vscode-toolbar-hover);
+}
+
+.native-form-select-option .ui-icon {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  color: var(--color-vscode-accent);
+}
+
+.native-form-select-description {
+  grid-column: 1;
+  color: var(--color-vscode-fg-muted);
+  font-size: 11px;
+}
+
+.native-form-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.native-form-option input[type='checkbox'] {
+  flex-shrink: 0;
+  width: 13px;
+  height: 13px;
+  margin: 0;
+  accent-color: var(--color-vscode-accent);
+}
+
+.native-form-option .question-prompt-hint {
+  margin: 0;
+  padding: 0;
+}
+.native-form-error {
+  margin: 0;
+  color: var(--vscode-errorForeground);
+  font-size: 11px;
+  line-height: 1.4;
+}

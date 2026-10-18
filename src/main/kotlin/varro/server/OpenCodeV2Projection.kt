@@ -91,16 +91,16 @@ internal object OpenCodeV2Projection {
         }
     }
 
-    fun form(value: JsonObject) = Json.obj("id" to value.get("id"), "sessionID" to value.get("sessionID"),
-        "questions" to value.arr("fields").orEmpty().map { entry ->
-            val field = entry.asObjectOrNull()
-            Json.obj("header" to (field.str("title") ?: value.str("title")),
-                "question" to (field.str("description") ?: field.str("title") ?: value.str("title")),
-                "multiple" to (field.str("type") == "multiselect"), "custom" to (field.bool("custom") != false),
-                "options" to (field.arr("options")?.map { option -> Json.obj("label" to option.asObjectOrNull().str("label"),
-                    "description" to option.asObjectOrNull().str("description").orEmpty()) }
-                    ?: if (field.str("type") == "boolean") listOf(Json.obj("label" to "Yes", "description" to ""), Json.obj("label" to "No", "description" to "")) else emptyList()))
-        })
+    fun form(value: JsonObject): JsonObject {
+        val native = OpenCodeV2Forms.parse(value)
+        return Json.obj("id" to value.get("id"), "sessionID" to value.get("sessionID"), "kind" to "native-form", "form" to native,
+            "questions" to listOf(Json.obj("header" to value.get("title"), "custom" to false, "options" to emptyList<String>(),
+                "question" to "This form needs an updated Varro view. Reload the view or answer in another OpenCode client."))).apply {
+            val tool = native.obj("metadata").obj("tool")
+            if (tool.str("messageID") != null && tool.str("id") != null)
+                add("tool", Json.obj("messageID" to tool!!.get("messageID"), "callID" to tool.get("id")))
+        }
+    }
 
     fun transcript(message: JsonObject) = message.str("type") in setOf("user", "synthetic", "assistant", "compaction", "skill", "shell") ||
         (message.str("type") == "idle" && message.str("outcome") in setOf("failed", "interrupted"))

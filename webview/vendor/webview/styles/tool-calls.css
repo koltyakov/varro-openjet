@@ -1818,6 +1818,30 @@ kbd {
   min-width: 0;
 }
 
+.chat-tool-invocation-part .child-task-control-actions {
+  flex-wrap: wrap;
+  gap: 4px;
+  padding-right: 10px;
+}
+
+.chat-tool-invocation-part .child-task-control-actions > button {
+  height: 20px;
+  padding: 0 6px;
+  border: 1px solid var(--color-vscode-border-default);
+  border-radius: var(--radius-chip);
+  background: var(--color-vscode-input-surface);
+  color: var(--color-vscode-fg);
+  font: inherit;
+  line-height: 1.45;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.chat-tool-invocation-part .child-task-control-actions > button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 /* Both classes, for the same cascade reason as .terminal-command-single-line:
    .structured-tool-value sets white-space: pre-wrap later in this file. */
 .chat-tool-invocation-part .structured-tool-value.structured-tool-value-single {

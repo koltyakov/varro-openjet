@@ -32,6 +32,7 @@ export const STORAGE_KEYS = {
   queuedMessages: 'varro.queuedMessages',
   queuedMessageEdit: 'varro.queuedMessageEdit',
   inputDraft: 'varro.inputDraft',
+  nativeFormDrafts: 'varro.nativeFormDrafts.v1',
   inputDraftFiles: 'varro.inputDraftFiles',
   inputDraftProblems: 'varro.inputDraftProblems',
   lastActiveSessionId: 'varro.lastActiveSessionId',

@@ -9,7 +9,7 @@ const contextFileAttachmentSequences = new Map<string, number>();
 const clipboardImageAttachmentSequences = new Map<string, number>();
 const nativePdfAttachmentSequences = new Map<string, number>();
 
-function reserveAttachmentSequence(sequence?: number) {
+export function reserveAttachmentSequence(sequence?: number) {
   if (isNumber(sequence) && Number.isFinite(sequence)) {
     nextAttachmentSequence = Math.max(nextAttachmentSequence, sequence + 1);
     return sequence;

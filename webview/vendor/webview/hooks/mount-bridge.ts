@@ -131,6 +131,9 @@ export function createMountBridgeOperations(deps: {
           if (payload.showTurnTimer !== undefined) {
             uiStore.setShowTurnTimer(payload.showTurnTimer);
           }
+          if (payload.showEmptyStateHistogram !== undefined) {
+            uiStore.setShowEmptyStateHistogram(payload.showEmptyStateHistogram);
+          }
           if (payload.remoteImages !== undefined) {
             if (payload.remoteImages === 'off') clearRemoteImagePreviews();
             appStore.setState('remoteImages', payload.remoteImages);

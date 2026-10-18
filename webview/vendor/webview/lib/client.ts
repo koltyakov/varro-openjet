@@ -1,4 +1,29 @@
 import { apiCall, onMessage, postMessage } from './bridge';
+import type {
+  QuestionAnswer,
+  AutoApproveJudgeRequest,
+  AutoApproveJudgeResponse,
+  ChatModelSelection,
+  DecisionProviderRequest,
+  DecisionProviderStatus,
+  DroppedFile,
+  LspStatus,
+  McpStatus,
+  ModelPricing,
+  PermissionMode,
+  ProviderLimitStatus,
+  RecycleBinEntry,
+  ServerEvent,
+  ServerEventName,
+  SessionDiffSummary,
+  SessionHistoryScope,
+  SessionTitleFallbackResponse,
+  WorkspaceStatusEventSummary,
+  WorkspaceFilePick,
+  WorkspaceProblemsSnapshot,
+  OpenCodePermissionConfig,
+  OpenCodeServerMemoryPermissions,
+} from '../../shared/protocol';
 import {
   parseBackgroundProcess,
   parseBackgroundProcessOutput,
@@ -25,30 +50,6 @@ import type {
   Permission,
   Todo,
 } from '../types';
-import type {
-  AutoApproveJudgeRequest,
-  AutoApproveJudgeResponse,
-  ChatModelSelection,
-  DecisionProviderRequest,
-  DecisionProviderStatus,
-  DroppedFile,
-  LspStatus,
-  McpStatus,
-  ModelPricing,
-  PermissionMode,
-  ProviderLimitStatus,
-  RecycleBinEntry,
-  ServerEvent,
-  ServerEventName,
-  SessionDiffSummary,
-  SessionHistoryScope,
-  SessionTitleFallbackResponse,
-  WorkspaceStatusEventSummary,
-  WorkspaceFilePick,
-  WorkspaceProblemsSnapshot,
-  OpenCodePermissionConfig,
-  OpenCodeServerMemoryPermissions,
-} from '../../shared/protocol';
 import {
   buildVarroSessionEndpoint,
   isSessionHistoryScope,
@@ -66,6 +67,11 @@ import type {
 import { CURRENT_OPENCODE_ENDPOINTS } from '../../shared/opencode-endpoints';
 import { STARTUP_DEFAULT_MODEL_TIMEOUT_MS, withStartupDeadline } from '../../shared/startup';
 import { isBoolean, isNumber, isString, isObject } from './runtime-values';
+import type {
+  ChildTaskControls,
+  ChildInterruptResult,
+  BackgroundHandoffResult,
+} from '../../shared/child-task-controls';
 
 export type SessionMessagePage = MessageEntry[] & { nextCursor?: string };
 export type SessionListPage = {
@@ -84,6 +90,48 @@ export const client = {
   },
 
   session: {
+    async childTaskControls(
+      id: string,
+      directory?: string,
+      signal?: AbortSignal
+    ): Promise<ChildTaskControls> {
+      const path = withDirectory(
+        `/session/${encodeURIComponent(id)}/child-task-controls`,
+        directory
+      );
+      const result = requireRecord(await apiCall('GET', path, undefined, { signal }), path);
+      if (
+        !(result.parentID === null || isString(result.parentID)) ||
+        !isBoolean(result.stopChild) ||
+        !isBoolean(result.backgroundEligible)
+      )
+        throw malformedResponse(path, 'child task controls');
+      return {
+        parentID: result.parentID,
+        stopChild: result.stopChild,
+        backgroundEligible: result.backgroundEligible,
+      };
+    },
+    async interruptChild(id: string, directory?: string): Promise<ChildInterruptResult> {
+      const path = withDirectory(`/session/${encodeURIComponent(id)}/interrupt-child`, directory);
+      const result = requireRecord(
+        await apiCall('POST', path, undefined, { signal: AbortSignal.timeout(15_000) }),
+        path
+      );
+      if (!isBoolean(result.interrupted))
+        throw malformedResponse(path, 'child interruption acknowledgement');
+      return { interrupted: result.interrupted };
+    },
+    async backgroundParent(id: string, directory?: string): Promise<BackgroundHandoffResult> {
+      const path = withDirectory(`/session/${encodeURIComponent(id)}/background-parent`, directory);
+      const result = requireRecord(
+        await apiCall('POST', path, undefined, { signal: AbortSignal.timeout(15_000) }),
+        path
+      );
+      if (!isBoolean(result.backgrounded))
+        throw malformedResponse(path, 'background handoff acknowledgement');
+      return { backgrounded: result.backgrounded };
+    },
     async setBackgroundProcessService(
       id: string,
       processID: string,
@@ -951,8 +999,12 @@ export const client = {
         requireArray<QuestionRequest>(response, '/question')
       );
     },
-    async reply(requestID: string, answers: Array<Array<string>>): Promise<boolean> {
-      return apiCall('POST', `/question/${encodeURIComponent(requestID)}/reply`, { answers });
+    async reply(requestID: string, answers: QuestionAnswer): Promise<boolean> {
+      return apiCall(
+        'POST',
+        `/question/${encodeURIComponent(requestID)}/reply`,
+        Array.isArray(answers) ? { answers } : answers
+      );
     },
     async reject(requestID: string): Promise<boolean> {
       return apiCall('POST', `/question/${encodeURIComponent(requestID)}/reject`);

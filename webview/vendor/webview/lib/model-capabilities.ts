@@ -1,4 +1,6 @@
 import type { Provider } from '../types';
+import { getPdfInputSupport } from '../../shared/native-pdf';
+import type { PdfInputSupport } from '../../shared/native-pdf';
 import { asRecord, type UnknownRecord } from '../../shared/type-utils';
 import { isBoolean, isString } from './runtime-values';
 
@@ -153,9 +155,15 @@ export function modelSupportsPdf(
   modelID: string | null,
   providers: Provider[]
 ): boolean {
-  const input = getModel(providerID, modelID, providers)?.capabilities?.input;
-  if (Array.isArray(input)) return input.includes('pdf');
-  return asRecord(input)?.pdf === true;
+  return modelPdfInputSupport(providerID, modelID, providers) === 'supported';
+}
+
+export function modelPdfInputSupport(
+  providerID: string | null,
+  modelID: string | null,
+  providers: Provider[]
+): PdfInputSupport {
+  return getPdfInputSupport(getModel(providerID, modelID, providers)?.capabilities?.input);
 }
 
 export function modelSupportsAudio(

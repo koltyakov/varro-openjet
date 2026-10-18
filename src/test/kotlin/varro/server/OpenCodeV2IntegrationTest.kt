@@ -248,8 +248,15 @@ class OpenCodeV2IntegrationTest {
             assertEquals(0, transport.request("GET", "/permission").data!!.asJsonArray.size())
             val form = transport.request("POST", "/api/session/$id/form", Json.obj("title" to "Fixture question", "fields" to listOf(Json.obj("key" to "choice", "type" to "string", "title" to "Choose",
                 "options" to listOf(Json.obj("value" to "accepted", "label" to "Accept")))))).data.asObjectOrNull().obj("data")!!
+            val pendingForm = transport.request("GET", "/question").data!!.asJsonArray.single().asJsonObject
+            assertEquals("native-form", pendingForm.str("kind"))
+            assertEquals("accepted", pendingForm.obj("form").arr("fields")!!.single().asJsonObject.arr("options")!!.single().asJsonObject.str("value"))
+            try {
+                transport.request("POST", "/question/${form.str("id")}/reply", Json.obj("answers" to listOf(listOf("Accept"))))
+                fail("Legacy positional answers must not acknowledge a native form")
+            } catch (expected: IllegalArgumentException) { assertTrue(expected.message!!.contains("keyed, typed")) }
             assertEquals(1, transport.request("GET", "/question").data!!.asJsonArray.size())
-            transport.request("POST", "/question/${form.str("id")}/reply", Json.obj("answers" to listOf(listOf("Accept"))))
+            transport.request("POST", "/question/${form.str("id")}/reply", Json.obj("kind" to "native-form", "sessionID" to id, "answer" to Json.obj("choice" to "accepted")))
             assertEquals(0, transport.request("GET", "/question").data!!.asJsonArray.size())
             val fork = transport.request("POST", "/session/$id/fork", Json.obj()).data.asObjectOrNull().str("id")!!
             val tail = transport.request("GET", "/session/$fork/message").data!!.asJsonArray.last().asJsonObject.obj("info").str("id")!!
@@ -357,6 +364,11 @@ class OpenCodeV2IntegrationTest {
                 val child = transport.request("GET", "/session/$id/children").data!!.asJsonArray.single().asJsonObject
                 childID = child.str("id")!!
                 assertEquals(id, child.str("parentID"))
+                val controls = transport.request("GET", "/session/$childID/child-task-controls").data.asObjectOrNull()
+                assertEquals(id, controls.str("parentID"))
+                assertEquals(true, controls.bool("stopChild"))
+                assertEquals(false, controls.bool("backgroundEligible"))
+                assertNotNull(transport.request("POST", "/session/$childID/interrupt-child").data.asObjectOrNull().bool("interrupted"))
                 assertEquals("general", child.str("agent"))
                 assertEquals(if (phase == "completed") "fixture-command" else "fixture-error", child.obj("model").str("modelID"))
                 val result = results().single().obj("subagentResult")

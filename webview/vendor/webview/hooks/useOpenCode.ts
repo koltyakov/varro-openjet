@@ -2,6 +2,7 @@ export {
   alwaysAllowPermissionForProject,
   alwaysAllowPermissionForSession,
   abortSession,
+  manageChildTask,
   applySessionMcps,
   compactSession,
   continueInterruptedSession,

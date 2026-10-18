@@ -1,4 +1,5 @@
 import type { Permission, PermissionGroupMember, QuestionRequest } from '../types';
+import { parseNativeForm } from '../../shared/native-form';
 import { normalizePermissionEvent } from './session-event-reducer';
 import {
   asRecord,
@@ -117,7 +118,7 @@ function normalizeInitialQuestion(value: UnknownRecord): QuestionRequest | null 
   if (!id || !sessionID || !questions) return null;
 
   const tool = value.tool;
-  return {
+  const base = {
     id,
     sessionID,
     // SAFETY: The surrounding shape or discriminator check establishes the QuestionRequest contract used below.
@@ -130,6 +131,12 @@ function normalizeInitialQuestion(value: UnknownRecord): QuestionRequest | null 
           }
         : undefined,
   };
+  if (value.kind === 'native-form') {
+    const form = parseNativeForm(value.form);
+    if (!form || form.id !== id || form.sessionID !== sessionID) return null;
+    return { ...base, kind: 'native-form', form };
+  }
+  return base;
 }
 
 export function normalizeInitialPermissions<T>(values: T): Permission[] {

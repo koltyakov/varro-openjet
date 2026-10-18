@@ -8,6 +8,14 @@ import type { RemoteImageMode } from './remote-images';
 import type { RalphConfig, RalphRun, RalphSelectedModel } from './ralph';
 import { asRecord, isNumber, isString } from './type-utils';
 import type { UnknownRecord } from './type-utils';
+export type {
+  NativeForm,
+  NativeFormField,
+  NativeFormValue,
+  NativeFormAnswer,
+  NativeFormReply,
+  QuestionAnswer,
+} from './native-form';
 
 export interface WorkspaceFolderContext {
   name: string;
@@ -871,6 +879,7 @@ export type InitialWebviewState = {
   expandThinking?: boolean;
   showChangedFiles?: boolean;
   showTurnTimer?: boolean;
+  showEmptyStateHistogram?: boolean;
   remoteImages?: RemoteImageMode;
   promptCompletionModel?: string;
   debugShowQuotaWarning?: boolean;
@@ -921,10 +930,21 @@ export type RalphStatePayload = {
   activeIds: string[];
 };
 
+export type HandyAction = 'status' | 'start' | 'stop' | 'cancel';
+export type HandyRecordingState = 'idle' | 'recording' | 'processing' | 'unknown';
+
 export type ExtensionMessage =
   | {
       type: 'handy/result';
-      payload: { requestId: string; available: boolean; running: boolean; error?: string };
+      payload: {
+        requestId: string;
+        available: boolean;
+        running: boolean;
+        state: HandyRecordingState;
+        /** Orders state observations and unsolicited updates within this host. */
+        revision?: number;
+        error?: string;
+      };
     }
   | { type: 'server/status'; payload: ServerStatus }
   | { type: 'server/restart-blocked'; payload: RestartBlockedState }
@@ -1057,7 +1077,7 @@ export type ExtensionMessage =
 export type WebviewMessage =
   | {
       type: 'handy/request';
-      payload: { requestId: string; action: 'status' | 'toggle' | 'cancel' };
+      payload: { requestId: string; action: HandyAction };
     }
   | { type: 'context/request' }
   | { type: 'workspace/select'; payload: { path: string; requestId: number } }

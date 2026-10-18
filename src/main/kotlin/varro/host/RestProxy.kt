@@ -65,6 +65,10 @@ class RestProxy(
         { server.currentStatus() is varro.server.ServerStatus.Running }, { server.requestGeneration() to server.url() },
         { (listOfNotNull(project.basePath) + context.context.arr("workspaceFolders")?.mapNotNull { it.asObjectOrNull().text("path") }.orEmpty()).distinct() })
     private val settings get() = varro.settings.VarroSettings.getInstance()
+    private val childTasks = ChildTasks(server.transport::request, { server.transport.apiVersion },
+        { server.requestGeneration() to server.url() },
+        { (listOfNotNull(project.basePath) + context.context.arr("workspaceFolders")?.mapNotNull { it.asObjectOrNull().text("path") }.orEmpty()).distinct() },
+        { it in store.hiddenSessionIds })
     private val settingsSubscription = com.intellij.openapi.application.ApplicationManager.getApplication().messageBus.connect().apply {
         subscribe(varro.settings.VarroSettings.TOPIC, varro.settings.VarroSettings.Listener {
             if (settings.remoteImageMode() != "on") remoteImages.cancel()
@@ -140,6 +144,11 @@ class RestProxy(
         try {
             fun checkPermissionLease() = PermissionAutomationLease.assertCurrent(payload, isPermissionAutomationLeaseCurrent)
             checkPermissionLease()
+            if (skipNativeRecovery(method, path, payload.bool("interruptedRecovery") == true, server.transport.apiVersion)) {
+                log.info("interrupted-recovery native-owned, generation=${server.requestGeneration()}")
+                respond(id, data = Json.obj("skipped" to true))
+                return
+            }
             val transferDirectory = transfers?.authorizeRequest(method, path, payload.get("body"))
             val forwardedPath = if (transferDirectory == null) path else {
                 val request = ApiRoutes.parse(method, path)!!
@@ -210,7 +219,14 @@ class RestProxy(
 
     private fun forwardRequest(method: String, path: String, body: JsonElement?, queuedDispatch: Boolean, transferDirectory: String?, isCancelled: () -> Boolean): JsonElement? {
         val request = ApiRoutes.parse(method, path)
+        require(!(method == "POST" && request?.segments?.firstOrNull() == "question" &&
+            body.asObjectOrNull().str("kind") == "native-form" && server.transport.apiVersion != 2)) { "Native forms require OpenCode V2" }
         val sessionId = request?.segments?.takeIf { it.size >= 2 && it[0] == "session" }?.get(1)
+        if (request?.segments?.size == 3 && request.segments[0] == "session" &&
+            request.segments[2] in setOf("child-task-controls", "interrupt-child", "background-parent")) {
+            return childTasks.request(method, path, body, transferDirectory ?: request.query["directory"]?.firstOrNull()
+                ?: server.workspaceDirectory(), isCancelled)
+        }
         if (sessionId != null && sessionId != "status" && method != "GET") {
             transfers?.checkWritable(sessionId)
             if (isCancelled()) throw java.util.concurrent.CancellationException("OpenCode request cancelled")
@@ -599,6 +615,10 @@ class RestProxy(
         java.net.URLEncoder.encode(value, Charsets.UTF_8).replace("+", "%20")
 
     companion object {
+        internal fun skipNativeRecovery(method: String, path: String, recovery: Boolean, apiVersion: Int): Boolean =
+            recovery && apiVersion == 2 && method == "POST" &&
+                Regex("^/session/[^/]+/(?:prompt_async|message|command)$").matches(path.substringBefore('?'))
+
         /** Titles OpenCode leaves as placeholders. */
         private val UNTITLED = Regex("""^(?:untitled|new session)$""", RegexOption.IGNORE_CASE)
     }

@@ -39,7 +39,10 @@ export function sideQuestionPromptUnavailableReason(text: string): string | null
   return null;
 }
 
-export function sideQuestionUnavailableReason(checkComposerDraft = true): string | null {
+export function sideQuestionUnavailableReason(
+  checkComposerDraft = true,
+  draft = inputText()
+): string | null {
   if (state.serverStatus.state !== 'running') return 'Connect to OpenCode';
   if (state.serverStatus.apiVersion !== 2) return 'Requires OpenCode V2';
   const session = state.sessions.find((entry) => entry.id === state.activeSessionId);
@@ -49,7 +52,7 @@ export function sideQuestionUnavailableReason(checkComposerDraft = true): string
   if (state.clipboardImages.length || state.nativePdfs.length) {
     return 'Remove images or PDFs to ask a side question';
   }
-  const promptReason = sideQuestionPromptUnavailableReason(inputText());
+  const promptReason = sideQuestionPromptUnavailableReason(draft);
   if (promptReason) return promptReason;
   return null;
 }
@@ -96,8 +99,9 @@ function captureSideQuestionContext(question: string, sessionID: string): string
     .join('\n\n');
 }
 
-export function openSideQuestion(question = ''): boolean {
-  const reason = sideQuestionUnavailableReason() ?? sideQuestionPromptUnavailableReason(question);
+export function openSideQuestion(question = '', draft = inputText()): boolean {
+  const reason =
+    sideQuestionUnavailableReason(true, draft) ?? sideQuestionPromptUnavailableReason(question);
   if (reason || state.serverStatus.state !== 'running') return false;
   const session = state.sessions.find((entry) => entry.id === state.activeSessionId);
   if (!session) return false;

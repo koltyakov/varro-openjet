@@ -12,42 +12,57 @@ import java.util.concurrent.Executor
 import java.util.concurrent.TimeUnit
 
 /** One command guard is shared by all projects and composer views in this IDE. */
+@com.intellij.openapi.components.Service(com.intellij.openapi.components.Service.Level.APP)
 internal class HandyIntegration(
     private val configuredPath: () -> String = { VarroSettings.getInstance().dictationHandyPath },
     private val localHost: () -> Boolean = { !IdeHostEnvironment.current.isRemoteHost() },
     private val runtime: Runtime = Runtime(),
     private val executor: Executor = Executor { ApplicationManager.getApplication().executeOnPooledThread(it) },
-) {
-    enum class Action(val wireName: String) { STATUS("status"), TOGGLE("toggle"), CANCEL("cancel") }
+) : com.intellij.openapi.Disposable {
+    enum class Action(val wireName: String) { STATUS("status"), START("start"), STOP("stop"), CANCEL("cancel") }
     data class Request(val requestId: String, val action: Action)
-    data class Status(val available: Boolean, val running: Boolean, val error: String? = null) {
+    data class Status(val available: Boolean, val running: Boolean, val error: String? = null, val state: String = "idle", val revision: Long = 0) {
         fun payload(requestId: String): JsonObject = Json.obj(
-            "requestId" to requestId, "available" to available, "running" to running,
+            "requestId" to requestId, "available" to available, "running" to running, "state" to state, "revision" to revision,
         ).apply { error?.let { addProperty("error", it) } }
     }
 
     private val lock = Any()
     private var pending: CompletableFuture<Status>? = null
+    private var pendingAction: Action? = null
+    @Volatile private var requestedState = "idle"
+    @Volatile private var logPath: Path? = null
+    @Volatile private var disposed = false
+    private val recording = HandyRecordingState { logPath }
 
     fun handleRequest(payload: JsonObject?, post: (JsonObject) -> Unit) {
         val parsed = parseRequest(payload) ?: return
-        request(parsed.action).thenAccept { result -> post(Json.message("handy/result", result.payload(parsed.requestId))) }
+        request(parsed.action) { result -> post(Json.message("handy/result", result.payload(parsed.requestId))) }
+            .thenAccept { result -> post(Json.message("handy/result", result.payload(parsed.requestId))) }
     }
 
-    fun request(action: Action): CompletableFuture<Status> {
-        if (!localHost()) return CompletableFuture.completedFuture(Status(false, false))
+    fun request(action: Action, onState: ((Status) -> Unit)? = null): CompletableFuture<Status> {
+        if (!localHost() || disposed) return CompletableFuture.completedFuture(Status(false, false))
         synchronized(lock) {
             pending?.let { operation ->
+                if (action != Action.STATUS && pendingAction == Action.STATUS)
+                    return operation.thenCompose { request(action, onState) }
                 return operation.thenApply { status ->
-                    Status(status.available, status.running,
-                        if (action == Action.STATUS) null else "Another Handy command is still pending.")
+                    status.copy(error = if (action == Action.STATUS) null else "Another Handy command is still pending.")
                 }
             }
             val operation = CompletableFuture<Status>()
             pending = operation
+            pendingAction = action
             try {
                 executor.execute {
                     val status = performRequest(action)
+                    if (!disposed && action != Action.STATUS) {
+                        if (status.state in setOf("recording", "processing") && onState != null) recording.watch { state ->
+                            if (state != "unknown") requestedState = if (state == "recording") "recording" else "idle"
+                            onState(status(status.available, status.running))
+                        } else if (status.state == "idle") recording.stopWatching()
+                    }
                     synchronized(lock) { if (pending === operation) pending = null }
                     operation.complete(status)
                 }
@@ -59,22 +74,54 @@ internal class HandyIntegration(
         }
     }
 
+    override fun dispose() { disposed = true; recording.close() }
+
+    private fun status(available: Boolean, running: Boolean, error: String? = null) = Status(available, running, error,
+        if (recording.state == "unknown") requestedState else recording.state, recording.revision)
+
     private fun performRequest(action: Action): Status {
         var available = false
         var running = false
         return try {
-            val executable = findExecutable() ?: return Status(false, false)
+            val executable = findExecutable() ?: run { requestedState = "idle"; recording.reset("idle"); return status(false, false) }
             available = true
             running = runtime.isRunning()
-            if (action == Action.STATUS) return Status(available, running)
-            if (!running) return Status(available, false, "Start Handy and configure its model and permissions first.")
-            val result = runtime.run(listOf(executable.toString(), if (action == Action.TOGGLE) "--toggle-transcription" else "--cancel"))
+            if (!running) {
+                requestedState = "idle"; recording.reset("idle")
+                return status(available, false, if (action == Action.STATUS) null else "Start Handy and configure its model and permissions first.")
+            }
+            if (action == Action.STATUS) return status(available, running)
+            resolveLogPath(executable)
+            recording.read()
+            if (disposed) return status(available, running)
+            val state = status(available, running).state
+            if ((action == Action.START && state == "recording") || (action in setOf(Action.STOP, Action.CANCEL) && state == "idle")) {
+                requestedState = if (state == "recording") "recording" else "idle"
+                return status(available, running)
+            }
+            val observation = recording.observation
+            val result = runtime.run(listOf(executable.toString(), if (action == Action.CANCEL) "--cancel" else "--toggle-transcription"))
             check(result.exitCode == 0) { "Handy command exited with code ${result.exitCode}." }
-            Status(available, running)
+            requestedState = if (action == Action.START) "recording" else "idle"
+            recording.read()
+            if (recording.observation == observation || recording.state == "unknown") recording.assume(requestedState)
+            status(available, running)
         } catch (failure: Exception) {
             if (failure is InterruptedException) Thread.currentThread().interrupt()
-            Status(available, running, "Handy ${action.wireName} failed: ${failure.message ?: failure.javaClass.simpleName}")
+            status(available, running, "Handy ${action.wireName} failed: ${failure.message ?: failure.javaClass.simpleName}")
         }
+    }
+
+    private fun resolveLogPath(executable: Path) {
+        val directory = executable.parent
+        val portable = Files.isRegularFile(directory.resolve("portable")) && Files.isDirectory(directory.resolve("Data"))
+        val path = if (portable) directory.resolve("Data/logs/handy.log") else when {
+            runtime.mac -> Path.of(runtime.home, "Library/Logs/com.pais.handy/handy.log")
+            runtime.windows -> runtime.environment["LOCALAPPDATA"]?.let { Path.of(it, "com.pais.handy/logs/handy.log") }
+            else -> Path.of(runtime.environment["XDG_DATA_HOME"] ?: Path.of(runtime.home, ".local/share").toString(), "com.pais.handy/logs/handy.log")
+        }
+        if (path != logPath) recording.reset("unknown")
+        logPath = path
     }
 
     private fun findExecutable(): Path? {

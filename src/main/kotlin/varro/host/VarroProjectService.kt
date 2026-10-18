@@ -377,6 +377,7 @@ class VarroProjectService(private val project: Project) : Disposable {
             addProperty("expandThinking", settings.chatExpandThinking)
             addProperty("showChangedFiles", settings.chatShowChangedFiles)
             addProperty("showTurnTimer", settings.chatShowTurnTimer)
+            addProperty("showEmptyStateHistogram", settings.chatShowEmptyStateHistogram)
             addProperty("remoteImages", settings.remoteImageMode())
             addProperty("promptCompletionModel", settings.chatPromptCompletionModel)
             addProperty("desktopSessionPaneSide", settings.sessionPaneSide())
@@ -417,6 +418,7 @@ class VarroProjectService(private val project: Project) : Disposable {
                 "expandThinking" to settings.chatExpandThinking,
                 "showChangedFiles" to settings.chatShowChangedFiles,
                 "showTurnTimer" to settings.chatShowTurnTimer,
+                "showEmptyStateHistogram" to settings.chatShowEmptyStateHistogram,
                 "remoteImages" to settings.remoteImageMode(),
                 "promptCompletionModel" to settings.chatPromptCompletionModel,
                 "desktopSessionPaneSide" to settings.sessionPaneSide(),
@@ -591,12 +593,10 @@ class VarroProjectService(private val project: Project) : Disposable {
 
                 // --- Files ------------------------------------------------------
                 "files/pick" -> editor.pickFile()?.str("path")?.let { path ->
-                    attachments.describe(path)?.let { host?.post("files/dropped", Json.array(listOf(it))) }
+                    pickAttachments(listOf(path), host)
                 }
                 "files/drop" -> {
-                    val files = payload?.getAsJsonArray("paths")?.strings().orEmpty().distinct().take(100)
-                        .mapNotNull { attachments.describe(it) }
-                    host?.post("files/dropped", Json.array(files))
+                    pickAttachments(payload?.getAsJsonArray("paths")?.strings().orEmpty(), host)
                 }
                 "files/drop-content" -> {
                     payload?.getAsJsonArray("files")?.take(20)?.forEach { file ->
@@ -867,6 +867,14 @@ class VarroProjectService(private val project: Project) : Disposable {
         }
     }
 
+    private fun pickAttachments(paths: List<String>, host: WebviewHost?) {
+        if (attachments.pick(paths) { type, data -> host?.post(type, data) }) {
+            com.intellij.notification.NotificationGroupManager.getInstance().getNotificationGroup(NOTIFICATION_GROUP)
+                .createNotification("Some PDFs could not be attached. PDFs need a PDF header, filenames of 512 characters or less, and a total size of 20 MiB or less.",
+                    com.intellij.notification.NotificationType.WARNING).notify(project)
+        }
+    }
+
     private fun applyWebviewConfig(payload: JsonObject?) {
         payload.str("desktopSessionPaneSide")?.let { settings.chatDesktopSessionPaneSide = it }
         payload.str("defaultPermissionMode")?.let { settings.chatDefaultPermissionMode = it }
@@ -874,6 +882,7 @@ class VarroProjectService(private val project: Project) : Disposable {
         payload.bool("expandThinking")?.let { settings.chatExpandThinking = it }
         payload.bool("showChangedFiles")?.let { settings.chatShowChangedFiles = it }
         payload.bool("showTurnTimer")?.let { settings.chatShowTurnTimer = it }
+        payload.bool("showEmptyStateHistogram")?.let { settings.chatShowEmptyStateHistogram = it }
         broadcastConfig()
     }
 
@@ -1284,7 +1293,7 @@ class VarroProjectService(private val project: Project) : Disposable {
         const val TOOL_WINDOW_ID = "Varro"
         const val NOTIFICATION_GROUP = "Varro Notifications"
 
-        private val handyIntegration = HandyIntegration()
+        private val handyIntegration get() = com.intellij.openapi.components.service<HandyIntegration>()
 
         /** OpenCode session id alphabet, matching upstream's own validation. */
         private val SESSION_ID = Regex("""^[A-Za-z0-9_-]+$""")

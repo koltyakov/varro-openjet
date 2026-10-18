@@ -1,5 +1,5 @@
 import { batch } from 'solid-js';
-import type { PermissionMode } from '../../../shared/protocol';
+import type { QuestionAnswer, PermissionMode } from '../../../shared/protocol';
 import type { Permission, QuestionRequest, Session } from '../../types';
 
 type PermissionResponse = 'once' | 'always' | 'reject';
@@ -86,17 +86,14 @@ export async function respondPermissionWithDependencies(
 
 export async function respondQuestionWithDependencies(
   deps: {
-    replyQuestion(
-      requestId: string,
-      answers: Array<Array<string>>
-    ): Promise<void | boolean | object>;
+    replyQuestion(requestId: string, answers: QuestionAnswer): Promise<void | boolean | object>;
     beginQuestionResponse(requestId: string): number | undefined;
     cancelQuestionResponse(requestId: string, expectedGeneration?: number): boolean;
     removeResolvedQuestion(requestId: string, expectedGeneration?: number): boolean;
     setError(message: string): void;
   },
   requestId: string,
-  answers: Array<Array<string>>,
+  answers: QuestionAnswer,
   options?: { rethrow?: boolean }
 ) {
   const responseGeneration = deps.beginQuestionResponse(requestId);
@@ -239,7 +236,7 @@ type SessionApprovalDependencies = {
   canAutomatePermissions?(): boolean;
   removePermission(permissionId: string, options?: { removeGroup?: boolean }): void;
   setError(message: string): void;
-  replyQuestion(requestId: string, answers: Array<Array<string>>): Promise<void | boolean | object>;
+  replyQuestion(requestId: string, answers: QuestionAnswer): Promise<void | boolean | object>;
   beginQuestionResponse(requestId: string): number | undefined;
   cancelQuestionResponse(requestId: string, expectedGeneration?: number): boolean;
   removeResolvedQuestion(requestId: string, expectedGeneration?: number): boolean;
@@ -307,7 +304,7 @@ export class SessionApprovalOperations {
 
   readonly respondQuestion = async (
     requestId: string,
-    answers: Array<Array<string>>,
+    answers: QuestionAnswer,
     options?: { rethrow?: boolean }
   ) => {
     await respondQuestionWithDependencies(

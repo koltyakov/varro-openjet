@@ -1,3 +1,5 @@
+import { asRecord, isNumber, isString } from './type-utils';
+
 export const NATIVE_PDF_MIME = 'application/pdf';
 export const MAX_NATIVE_PDF_TOTAL_BYTES = 20 * 1024 * 1024;
 export const MAX_NATIVE_PDF_FILENAME_LENGTH = 512;
@@ -17,6 +19,24 @@ export type NativePdfAttachment = {
     type: 'file';
   };
 };
+
+export type PdfInputSupport = 'supported' | 'unsupported' | 'unknown';
+
+// Read the advertised input modality, never a model name or a generic attachment flag.
+export function getPdfInputSupport<T>(input: T): PdfInputSupport {
+  if (Array.isArray(input) && input.every(isString)) {
+    return input.includes('pdf') ? 'supported' : 'unsupported';
+  }
+  const pdf = asRecord(input)?.pdf;
+  return pdf === true ? 'supported' : pdf === false ? 'unsupported' : 'unknown';
+}
+
+export function getPdfInputError(support: PdfInputSupport): string | null {
+  if (support === 'supported') return null;
+  return support === 'unsupported'
+    ? 'The selected model does not support PDF input. Choose a model that advertises PDF input or remove the PDF.'
+    : 'PDF input support is unknown for the selected model or backend. Refresh the model catalog or choose a model that advertises PDF input.';
+}
 
 export function isPdfBytes(value: Uint8Array): boolean {
   return (
@@ -86,4 +106,3 @@ export function isNativePdfAttachment<T>(value: T): value is T & NativePdfAttach
       pdf.attachmentSequence >= 0)
   );
 }
-import { asRecord, isNumber, isString } from './type-utils';

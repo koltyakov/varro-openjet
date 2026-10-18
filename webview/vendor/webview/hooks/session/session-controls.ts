@@ -5,6 +5,7 @@ import { resolveTaskSessionId } from '../../lib/task-session';
 import { flushMessagePresentation } from '../../lib/message-list-layout';
 import { collectSteeringMessages } from '../../lib/message-steering';
 import { getSessionHistoryPromptEntries } from '../../lib/message-window';
+import type { ChildInterruptResult } from '../../../shared/child-task-controls';
 
 type ResolvedModel = { providerID: string; modelID: string; variant?: string };
 type SessionUsageLimitSnapshot =
@@ -12,6 +13,42 @@ type SessionUsageLimitSnapshot =
   | Pick<UsageLimitNotice, 'sessionID' | 'attempt'>
   | null
   | undefined;
+
+export async function interruptChildWithDependencies(
+  deps: {
+    isCurrent(): boolean;
+    markPendingAbort(sessionId: string): void;
+    interruptChild(sessionId: string): Promise<ChildInterruptResult>;
+    reconcile(sessionId: string): Promise<void>;
+    logError(context: string, cause: unknown): void;
+  },
+  sessionId: string
+): Promise<ChildInterruptResult> {
+  // Admission is not settlement. Keep status and pending prompts authoritative.
+  flushMessagePresentation(sessionId);
+  let result: ChildInterruptResult;
+  try {
+    result = await deps.interruptChild(sessionId);
+  } catch (error) {
+    if (deps.isCurrent()) {
+      try {
+        await deps.reconcile(sessionId);
+      } catch (cause) {
+        deps.logError('reconcile failed child interrupt', cause);
+      }
+    }
+    throw error;
+  }
+  if (deps.isCurrent()) {
+    if (result.interrupted) deps.markPendingAbort(sessionId);
+    try {
+      await deps.reconcile(sessionId);
+    } catch (cause) {
+      deps.logError('reconcile acknowledged child interrupt', cause);
+    }
+  }
+  return result;
+}
 
 export async function reviewSessionWithDependencies(
   deps: {

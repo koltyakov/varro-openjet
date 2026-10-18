@@ -17,6 +17,8 @@ internal class OpenCodeV2Adapter(
 ) {
     private val permissions = ConcurrentHashMap<String, String>()
     private val forms = ConcurrentHashMap<String, JsonObject>()
+    private val formResponses = ConcurrentHashMap.newKeySet<String>()
+    private val childTasks = OpenCodeV2ChildTasks()
     private val contexts = ConcurrentHashMap<String, JsonObject>()
     private val inputTypes = ConcurrentHashMap<String, String>()
     private val failures = ConcurrentHashMap<String, JsonObject>()
@@ -27,11 +29,12 @@ internal class OpenCodeV2Adapter(
     private val backgroundWork = OpenCodeV2BackgroundWork()
     private val backgroundServices = OpenCodeV2BackgroundServices(annotations, backgroundWork, classifyBackgroundProcess, backgroundChanged)
 
-    fun reset() { backgroundServices.reset(); permissions.clear(); forms.clear(); contexts.clear(); inputTypes.clear(); failures.clear(); parents.clear(); oauth.clear(); backgroundWork.reset() }
+    fun reset() { childTasks.reset(); backgroundServices.reset(); permissions.clear(); forms.clear(); contexts.clear(); inputTypes.clear(); failures.clear(); parents.clear(); oauth.clear(); backgroundWork.reset() }
 
     fun events(event: JsonObject): List<JsonObject> {
         val type = event.str("type").orEmpty()
         val data = event.obj("data") ?: return emptyList()
+        childTasks.observe(type, data)
         if (type in setOf("shell.exited", "shell.deleted")) data.str("id")?.let(backgroundServices::cancel)
         backgroundWork.observe(type, data, event.obj("location").str("directory"))
         val sessionID = data.str("sessionID")
@@ -216,30 +219,24 @@ internal class OpenCodeV2Adapter(
                 if (!forms.containsKey(id)) request("GET", "/question", null, options)
                 val form = forms[id] ?: error("OpenCode question is no longer pending")
                 val target = "/api/session/${encode(form.str("sessionID")!!)}/form/${encode(id)}"
-                if (match.groupValues[3] == "reject") raw("DELETE", target)
-                else {
-                    val answers = input.arr("answers") ?: error("Invalid question answers")
-                    val answer = Json.obj()
-                    form.arr("fields").orEmpty().forEachIndexed { index, entry ->
-                        val field = entry.asJsonObject
-                        val selected = answers.getOrNull(index).asArrayOrNull().orEmpty().map { selected ->
-                            field.arr("options").orEmpty().firstOrNull { it.asObjectOrNull().str("label") == selected.asString }.asObjectOrNull()?.get("value") ?: selected
-                        }
-                        answer.add(field.str("key"), when (field.str("type")) {
-                            "multiselect" -> Json.array(selected)
-                            "boolean" -> Json.toElement(selected.firstOrNull()?.asString == "Yes")
-                            "number", "integer" -> Json.toElement(selected.firstOrNull()?.asString?.toDoubleOrNull() ?: error("Invalid numeric answer"))
-                            else -> selected.firstOrNull() ?: Json.toElement("")
-                        })
-                    }
-                    raw("POST", "$target/reply", Json.obj("answer" to answer))
+                check(formResponses.add(id)) { "A response to this native form is already in progress" }
+                try {
+                    if (match.groupValues[3] == "reject") raw("DELETE", target)
+                    else raw("POST", "$target/reply", Json.obj("answer" to OpenCodeV2Forms.answer(input, form)))
+                    forms.remove(id, form)
+                } finally {
+                    formResponses.remove(id)
                 }
-                forms.remove(id)
             }
             return result(true)
         }
         Regex("^/session/([^/]+)(?:/(.*))?$").matchEntire(route)?.let { match ->
             val id = decode(match.groupValues[1]); val endpoint = "/api/session/${encode(id)}"; val action = match.groupValues[2]
+            if ((action == "child-task-controls" && method == "GET") ||
+                (action in setOf("interrupt-child", "background-parent") && method == "POST")) {
+                require(body == null) { "Child task controls do not accept a body" }
+                return result(childTasks.request(id, action, directory, options, ::raw))
+            }
             if (method == "POST" && action == "side-question") {
                 val prompt = OpenCodeV2SideQuestions.prompt(input)
                 val canonical = data("GET", endpoint).asObjectOrNull()
@@ -356,6 +353,17 @@ internal class OpenCodeV2Adapter(
             if (action in setOf("prompt_async", "prompt", "message", "command") && method == "POST") return synchronized(submissions[(id.hashCode() and Int.MAX_VALUE) % submissions.size]) {
                 val model = OpenCodeV2Projection.modelRef(input.get("model"))?.apply { if (input.has("variant")) add("variant", input.get("variant")) }
                 val parts = input.arr("parts").orEmpty().mapNotNull { it.asObjectOrNull() }
+                if (NativePdfInput.validate(parts, action, input)) {
+                    val selected = model ?: data("GET", endpoint).asObjectOrNull().obj("model")
+                    val catalog = try { objects(data("GET", scoped("/api/model"))) }
+                    catch (failure: Exception) {
+                        options.checkCancelled()
+                        throw IllegalStateException("Cannot verify PDF input support from the backend model catalog. No PDF was submitted. Refresh the catalog or choose another model.", failure)
+                    }
+                    val resolved = if (selected == null) data("GET", scoped("/api/model/default")).asObjectOrNull()
+                        else catalog.firstOrNull { it.str("providerID") == selected.str("providerID") && it.str("id") == selected.str("id") }
+                    NativePdfInput.requireSupported(resolved)
+                }
                 val text = parts.filter { it.str("type") == "text" }.joinToString("\n") { it.str("text").orEmpty() }
                 if (action == "message" && (input.hasNonNull("system") || input.hasNonNull("format"))) {
                     if (model != null) raw("POST", "$endpoint/model", Json.obj("model" to model))
@@ -412,6 +420,7 @@ internal class OpenCodeV2Adapter(
         val time = (result.obj("time") ?: Json.obj()).deepCopy()
         state.obj("time")?.entrySet()?.forEach { time.add(it.key, it.value) }
         state.entrySet().forEach { result.add(it.key, it.value) }
+        value.str("parentID")?.let { result.addProperty("parentID", it) }
         result.add("time", time)
         return result
     }
@@ -482,6 +491,12 @@ internal class OpenCodeV2Adapter(
         while (parents.size > 4096) parents.keys.firstOrNull()?.let(parents::remove)
         val ids = messages.map { it.obj("info").str("id") }.toMutableSet()
         inbox.sortedBy { it.obj("time").long("created") ?: 0 }.forEach { item ->
+            if (item.str("type") == "synthetic" && item.obj("payload").obj("metadata").str("source") == "shell" &&
+                item.obj("payload").obj("metadata").str("state") == "cancelled" && ids.add(item.str("id"))) {
+                messages.add(OpenCodeV2Projection.message(item.obj("payload")!!.deepCopy().apply {
+                    add("id", item.get("id")); addProperty("type", "synthetic"); add("time", item.get("time"))
+                }, id, directory.orEmpty(), context = context))
+            }
             if (item.str("type") == "user" && ids.add(item.str("id"))) messages.add(OpenCodeV2Projection.message(
                 (item.obj("payload") ?: Json.obj()).deepCopy().apply { add("id", item.get("id")); addProperty("type", "user"); add("time", item.get("time")) }, id, directory.orEmpty(), context = context).apply {
                     obj("info")!!.add("pendingDelivery", item.get("delivery"))
@@ -664,8 +679,8 @@ internal class OpenCodeV2Adapter(
     }
 
     companion object {
-        private fun objects(value: JsonElement?): List<JsonObject> = value.asArrayOrNull()?.map { it.asObjectOrNull() ?: error("Invalid OpenCode v2 record") } ?: error("Invalid OpenCode v2 list")
-        private fun encode(value: String) = URLEncoder.encode(value, Charsets.UTF_8).replace("+", "%20")
+        internal fun objects(value: JsonElement?): List<JsonObject> = value.asArrayOrNull()?.map { it.asObjectOrNull() ?: error("Invalid OpenCode v2 record") } ?: error("Invalid OpenCode v2 list")
+        internal fun encode(value: String) = URLEncoder.encode(value, Charsets.UTF_8).replace("+", "%20")
         private fun decode(value: String) = URLDecoder.decode(value, Charsets.UTF_8)
         private fun withQuery(path: String, query: Map<String, String>) = path + if (query.isEmpty()) "" else query.entries.joinToString("&", "?") { "${encode(it.key)}=${encode(it.value)}" }
         private fun legacyModel(value: JsonElement?): String? {

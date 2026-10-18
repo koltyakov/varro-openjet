@@ -6,7 +6,7 @@ import { normalizeSessionTitle } from '../../../shared/session-title';
 import { renameSession } from '../../hooks/useOpenCode';
 import { postMessage } from '../../lib/bridge';
 import { clampPopupToViewport } from '../../lib/popup-position';
-import { shareSession, unshareSession } from '../../lib/session-sharing';
+import { unshareSession } from '../../lib/session-sharing';
 import { getSelectedModelForSession, setError, state } from '../../lib/state';
 import { openSideQuestion, sideQuestionUnavailableReason } from '../../lib/side-question';
 import { writeClipboard } from '../../lib/write-clipboard';
@@ -150,12 +150,6 @@ export function SessionActionsMenu(props: {
     }
     showSessionActionFeedback('Session ID copied');
   };
-  const copyShareLink = async () => {
-    const session = props.session;
-    props.state.close();
-    if (!(await shareSession(session))) return;
-    showSessionActionFeedback('Share link copied');
-  };
   const unshare = async () => {
     const session = props.session;
     props.state.close();
@@ -295,13 +289,9 @@ export function SessionActionsMenu(props: {
               <button type="button" role="menuitem" onClick={() => void copySessionId()}>
                 Copy session ID
               </button>
-              <Show when={props.session.sharingSupported !== false}>
-                <button
-                  type="button"
-                  role="menuitem"
-                  onClick={() => (props.session.share?.url ? void unshare() : void copyShareLink())}
-                >
-                  {props.session.share?.url ? 'Unshare session' : 'Share session'}
+              <Show when={props.session.sharingSupported !== false && props.session.share?.url}>
+                <button type="button" role="menuitem" onClick={() => void unshare()}>
+                  Unshare session
                 </button>
               </Show>
               <Show when={!props.session.parentID}>

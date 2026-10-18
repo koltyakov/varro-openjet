@@ -146,6 +146,7 @@ type ChatInputMainToolbarProps = ToolbarSharedProps & {
   focusComposer: () => void;
   remoteExtensionHost: boolean;
   onDictationAvailabilityChange: () => void;
+  onDictationActivationChange: (requested: boolean) => void;
   toolbarRef: (el: HTMLDivElement) => void;
   toolbarLeftRef: (el: HTMLDivElement) => void;
   toolbarRightRef: (el: HTMLDivElement) => void;
@@ -327,6 +328,7 @@ export function ChatInputMainToolbar(props: ChatInputMainToolbarProps) {
           focusComposer={props.focusComposer}
           remote={props.remoteExtensionHost}
           onAvailabilityChange={props.onDictationAvailabilityChange}
+          onActivationChange={props.onDictationActivationChange}
         />
         <Show when={props.showAttachmentsControl}>
           <AttachButton onAttach={props.onAttach} />

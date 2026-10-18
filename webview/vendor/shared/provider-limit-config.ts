@@ -9,6 +9,7 @@ export type ExtensionConfigState = {
   expandThinking?: boolean;
   showChangedFiles?: boolean;
   showTurnTimer?: boolean;
+  showEmptyStateHistogram?: boolean;
   remoteImages?: RemoteImageMode;
   promptCompletionModel?: string;
   debugShowQuotaWarning?: boolean;
@@ -27,6 +28,7 @@ export type WebviewConfigUpdatePayload = Pick<
   | 'expandThinking'
   | 'showChangedFiles'
   | 'showTurnTimer'
+  | 'showEmptyStateHistogram'
   | 'promptCompletionModel'
   | 'debugShowQuotaWarning'
   | 'debugResetWarningDays'

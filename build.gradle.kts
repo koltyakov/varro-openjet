@@ -194,10 +194,10 @@ tasks.test {
     useJUnit()
     dependsOn(testWebviewHost)
     // Opt-in released-binary checks must not reuse a run that skipped them or tested another release.
-    for (name in listOf("VARRO_OPENCODE_TEST_BINARY", "VARRO_OPENCODE_TEST_VERSION", "VARRO_OPENCODE_DESKTOP_TEST_BINARY")) {
+    for (name in listOf("VARRO_OPENCODE_TEST_BINARY", "VARRO_OPENCODE_TEST_VERSION", "VARRO_OPENCODE_DESKTOP_TEST_BINARY", "VARRO_OPENCODE_V1_TEST_BINARY", "VARRO_OPENCODE_V1_TEST_VERSION")) {
         inputs.property(name, providers.environmentVariable(name).orElse(""))
     }
-    for (name in listOf("VARRO_OPENCODE_TEST_BINARY", "VARRO_OPENCODE_DESKTOP_TEST_BINARY")) {
+    for (name in listOf("VARRO_OPENCODE_TEST_BINARY", "VARRO_OPENCODE_DESKTOP_TEST_BINARY", "VARRO_OPENCODE_V1_TEST_BINARY")) {
         providers.environmentVariable(name).orNull?.takeIf { it.isNotBlank() }?.let { inputs.file(it) }
     }
 }

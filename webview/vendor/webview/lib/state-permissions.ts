@@ -13,6 +13,7 @@ import {
 } from './permission-grouping';
 import { captureSessionStateTime } from './session-state-clock';
 import { prepareForPermissionRemoval, shouldRemovePermissionGroup } from './message-list-layout';
+import { nativeFormDrafts } from './native-form-drafts';
 
 const resolvedQuestionIds = new Set<string>();
 const transitionedQuestionIds = new Set<string>();
@@ -30,6 +31,7 @@ export function setQuestions(questions: QuestionRequest[]) {
     for (const question of state.questions) {
       if (nextQuestionIds.has(question.id) || resolvedQuestionIds.has(question.id)) continue;
       const wasTransitioned = transitionedQuestionIds.has(question.id);
+      nativeFormDrafts.remove(question.id);
       rememberResolvedQuestion(question.id, question.sessionID);
       transitionedQuestionIds.add(question.id);
       if (!wasTransitioned) markQuestionResponsePending(question.id, question.sessionID);
@@ -46,6 +48,9 @@ export function upsertQuestion(question: QuestionRequest) {
     questionGenerations.set(question.id, questionGenerations.get(question.id)! + 1);
   }
   batch(() => {
+    // An initial/replayed ask can restore a checkpoint before questions hydrate.
+    // Only an explicit ask reusing a resolved ID starts a fresh draft.
+    if (reusesResolvedID) nativeFormDrafts.remove(question.id);
     if (!hasCurrentQuestion || reusesResolvedID) {
       resolvedQuestionIds.delete(question.id);
       transitionedQuestionIds.delete(question.id);
@@ -70,6 +75,7 @@ export function removeQuestion(requestID: string) {
 }
 
 function removeQuestionEntry(requestID: string) {
+  nativeFormDrafts.remove(requestID);
   setState(
     'questions',
     produce((questions) => {

@@ -99,6 +99,7 @@ class SessionTransfers(
             parts.size >= 3 && parts[0] == "varro" && parts[1] == "session" -> parts[2]
             request.pathname in listOf(ApiRoutes.Endpoints.PERMISSION_SESSION_RULES, ApiRoutes.Endpoints.PERMISSION_SESSION_ALLOW,
                 ApiRoutes.Endpoints.PERMISSION_PROJECT_ALLOW) -> body.asObjectOrNull().text("sessionId") ?: request.query["sessionId"]?.firstOrNull()
+            parts.size == 3 && parts[0] == "question" && body.asObjectOrNull().str("kind") == "native-form" -> body.asObjectOrNull().text("sessionID")
             else -> null
         } ?: return null
         val session = get(id) ?: return null

@@ -103,6 +103,11 @@ class VarroConfigurable : BoundConfigurable("Varro") {
                 checkBox("Show the elapsed turn duration")
                     .bindSelected(settings::chatShowTurnTimer)
             }
+            row {
+                checkBox("Show the interactive histogram in empty chats")
+                    .bindSelected(settings::chatShowEmptyStateHistogram)
+                    .comment("Animates while hovered.")
+            }
             row("Chat font size:") {
                 intTextField(0..100)
                     .bindIntText(settings::chatFontSize)
@@ -130,8 +135,8 @@ class VarroConfigurable : BoundConfigurable("Varro") {
                     .comment("Optional absolute executable path. Leave empty to search standard installation locations and PATH.")
                     .columns(40)
             }
-            row { comment("Start Handy and configure its model and permissions first. Click the composer mic to toggle dictation; right-click to cancel. Requires a local IDE host.") }
-            row { comment("The speaking icon tracks Varro toggles, not Handy's global shortcut. Disable Handy's Auto Submit option to review text before sending.") }
+            row { comment("Start Handy and configure its model and permissions first. Click the mic again to finish and keep the text; right-click to cancel. Requires a local IDE host.") }
+            row { comment("Optional lifecycle logs track recording and processing. Disable Handy's Auto Submit option to review text before sending.") }
         }
 
         group("Notifications") {

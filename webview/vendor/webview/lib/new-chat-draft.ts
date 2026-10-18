@@ -1,4 +1,4 @@
-import { batch } from 'solid-js';
+import { batch, createSignal } from 'solid-js';
 import { getDefaultPrimaryAgentName } from '../hooks/routing-state';
 import {
   clearMessages,
@@ -22,6 +22,8 @@ import { resetMessageEditState } from './message-edit-state';
 import { resetToolCallExpansionState } from './tool-call-expansion-state';
 
 let newChatDraftGeneration = 0;
+const [newChatDraftKey, setNewChatDraftKey] = createSignal(0);
+export { newChatDraftKey };
 
 export function getNewChatDraftGeneration() {
   return newChatDraftGeneration;
@@ -62,6 +64,7 @@ export function startNewChatDraft() {
   const deferTranscriptClear = !blankSessionId && state.messages.length > 0;
   const craftedText = inputText();
   batch(() => {
+    setNewChatDraftKey(draftGeneration);
     resetMessageEditState();
     setInputText(craftedText);
     resetToolCallExpansionState();

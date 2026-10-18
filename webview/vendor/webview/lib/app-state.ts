@@ -237,6 +237,8 @@ export interface AppStateInstance {
   setShowChangedFiles: Setter<boolean>;
   showTurnTimer: Accessor<boolean>;
   setShowTurnTimer: Setter<boolean>;
+  showEmptyStateHistogram: Accessor<boolean>;
+  setShowEmptyStateHistogram: Setter<boolean>;
   desktopSessionPaneSide: Accessor<DesktopSessionPaneSide>;
   setDesktopSessionPaneSide: Setter<DesktopSessionPaneSide>;
   inputText: Accessor<string>;
@@ -514,6 +516,9 @@ export function createAppState(): AppStateInstance {
   const [showTurnTimer, setShowTurnTimer] = createSignal(
     initialWebviewState.showTurnTimer ?? false
   );
+  const [showEmptyStateHistogram, setShowEmptyStateHistogram] = createSignal(
+    initialWebviewState.showEmptyStateHistogram ?? false
+  );
   const [desktopSessionPaneSide, setDesktopSessionPaneSide] = createSignal<DesktopSessionPaneSide>(
     readDesktopSessionPaneSide(initialWebviewState)
   );
@@ -613,6 +618,8 @@ export function createAppState(): AppStateInstance {
     setShowChangedFiles,
     showTurnTimer,
     setShowTurnTimer,
+    showEmptyStateHistogram,
+    setShowEmptyStateHistogram,
     desktopSessionPaneSide,
     setDesktopSessionPaneSide,
     inputText,
@@ -706,6 +713,8 @@ export const showChangedFiles = defaultAppState.showChangedFiles;
 export const setShowChangedFiles = defaultAppState.setShowChangedFiles;
 export const showTurnTimer = defaultAppState.showTurnTimer;
 export const setShowTurnTimer = defaultAppState.setShowTurnTimer;
+export const showEmptyStateHistogram = defaultAppState.showEmptyStateHistogram;
+export const setShowEmptyStateHistogram = defaultAppState.setShowEmptyStateHistogram;
 export const desktopSessionPaneSide = defaultAppState.desktopSessionPaneSide;
 export const setDesktopSessionPaneSide = defaultAppState.setDesktopSessionPaneSide;
 export const inputText = defaultAppState.inputText;
@@ -777,6 +786,7 @@ export function resetDefaultAppState() {
   setExpandThinking(next.expandThinking());
   setShowChangedFiles(next.showChangedFiles());
   setShowTurnTimer(next.showTurnTimer());
+  setShowEmptyStateHistogram(next.showEmptyStateHistogram());
   setDesktopSessionPaneSide(next.desktopSessionPaneSide());
   setInputText(next.inputText());
   setNextPastedImageIndex(next.nextPastedImageIndex());

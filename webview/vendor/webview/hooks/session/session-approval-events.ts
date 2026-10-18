@@ -1,7 +1,8 @@
 import { serverEvents } from '../../lib/client';
 import { normalizePermissionEvent } from '../../lib/session-event-reducer';
 import { permissionsStore } from '../../lib/stores/permissions-store';
-import type { Permission, QuestionRequest } from '../../types';
+import { normalizeInitialQuestions } from '../../lib/permission-grouping';
+import type { Permission } from '../../types';
 import { getPermissionReplyId, getQuestionReplyId } from './session-event-utils';
 import { isSharedDirectPermission } from '../../../shared/permission-rules';
 import type { UnknownRecord } from '../../../shared/type-utils';
@@ -162,8 +163,8 @@ export function registerApprovalEventHandlers(deps: ApprovalEventDependencies): 
     serverEvents.on('question.asked', (data) => {
       const props = data.properties;
       if (props) {
-        // SAFETY: question.asked is decoded by the server-event contract as a complete question request.
-        permissionsStore.upsertQuestion(props as QuestionRequest);
+        for (const question of normalizeInitialQuestions([props]))
+          permissionsStore.upsertQuestion(question);
       }
     })
   );
@@ -172,8 +173,8 @@ export function registerApprovalEventHandlers(deps: ApprovalEventDependencies): 
     serverEvents.on('question.v2.asked', (data) => {
       const props = data.properties;
       if (props) {
-        // SAFETY: question.v2.asked is decoded by the server-event contract as a complete question request.
-        permissionsStore.upsertQuestion(props as QuestionRequest);
+        for (const question of normalizeInitialQuestions([props]))
+          permissionsStore.upsertQuestion(question);
       }
     })
   );

@@ -102,6 +102,14 @@ export function parseExtensionMessage<T>(value: T): ExtensionMessage | null {
         payload.requestId.length > 128 ||
         !isBoolean(payload.available) ||
         !isBoolean(payload.running) ||
+        (payload.state !== 'idle' &&
+          payload.state !== 'recording' &&
+          payload.state !== 'processing' &&
+          payload.state !== 'unknown') ||
+        (payload.revision !== undefined &&
+          (!isNumber(payload.revision) ||
+            !Number.isSafeInteger(payload.revision) ||
+            payload.revision < 0)) ||
         (payload.error !== undefined && !isString(payload.error))
       )
         return null;
@@ -109,8 +117,10 @@ export function parseExtensionMessage<T>(value: T): ExtensionMessage | null {
         requestId: payload.requestId,
         available: payload.available,
         running: payload.running,
+        state: payload.state,
       };
       if (payload.error !== undefined) result.error = payload.error;
+      if (isNumber(payload.revision)) result.revision = payload.revision;
       return { type, payload: result };
     }
     case 'session/transferred': {
@@ -353,6 +363,8 @@ export function parseExtensionMessage<T>(value: T): ExtensionMessage | null {
       if (isBoolean(payload.expandThinking)) config.expandThinking = payload.expandThinking;
       if (isBoolean(payload.showChangedFiles)) config.showChangedFiles = payload.showChangedFiles;
       if (isBoolean(payload.showTurnTimer)) config.showTurnTimer = payload.showTurnTimer;
+      if (isBoolean(payload.showEmptyStateHistogram))
+        config.showEmptyStateHistogram = payload.showEmptyStateHistogram;
       if (
         payload.remoteImages === 'off' ||
         payload.remoteImages === 'ask' ||

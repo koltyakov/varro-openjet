@@ -46,6 +46,7 @@ class VarroSettings : PersistentStateComponent<VarroSettings> {
     var chatExpandThinking: Boolean = false
     var chatShowChangedFiles: Boolean = false
     var chatShowTurnTimer: Boolean = true
+    var chatShowEmptyStateHistogram: Boolean = false
     /** Application-only consent. Repository configuration must never enable network requests. */
     var chatRemoteImages: String = "ask"
     /** Restored by new editor/window chats; each open chat keeps its own toggle. */

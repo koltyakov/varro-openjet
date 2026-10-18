@@ -9,6 +9,14 @@ import org.junit.rules.TemporaryFolder
 import java.nio.file.Files
 
 class QuotaAdaptersTest {
+    @Test fun `token sharing never calls Codex usage or falls back to local credentials`() {
+        val credentials = QuotaCredentials(temporary.newFolder().toPath(), emptyMap())
+        val adapters = QuotaAdapters(QuotaHttp { error("Token sharing must not make quota requests") }, credentials, null)
+        val auth = Json.obj("openai" to Json.obj("type" to "oauth", "methodID" to "chatgpt-token-sharing", "access" to "fixture"))
+        val result = adapters.poll(Json.obj("id" to "openai"), auth, "model", now)!!
+        assertEquals("unsupported", result.str("status")); assertTrue(result.str("note")!!.contains("Codex browser"))
+        assertFalse(result.has("windows")); assertFalse(result.has("usageLimitResets"))
+    }
     @get:Rule val temporary = TemporaryFolder()
     private val now = 1_800_000_000_000L
     private data class Fixture(val id: String, val endpoint: String, val payload: String, val remaining: Int, val quotaId: String)

@@ -1,5 +1,6 @@
 import { createOpenCodeRuntime, type OpenCodeRuntime } from './open-code-runtime-instance';
 import type {
+  QuestionAnswer,
   PermissionMode,
   QueuedContextSnapshot,
   SessionWorkspaceTarget,
@@ -162,8 +163,13 @@ export async function openPlan(markdown: string, sessionId?: string | null) {
   await getCurrentOpenCodeRuntime().openPlan(markdown, sessionId);
 }
 
-export async function abortSession() {
-  await getCurrentOpenCodeRuntime().abortSession();
+export async function abortSession(sessionId?: string) {
+  if (sessionId) await getCurrentOpenCodeRuntime().abortSession(sessionId);
+  else await getCurrentOpenCodeRuntime().abortSession();
+}
+
+export async function manageChildTask(sessionId: string, action: 'stop' | 'background') {
+  return getCurrentOpenCodeRuntime().manageChildTask(sessionId, action);
 }
 
 export async function undoSession() {
@@ -213,7 +219,7 @@ export async function alwaysAllowPermissionForSession(sessionId: string, permiss
 
 export async function respondQuestion(
   requestID: string,
-  answers: Array<Array<string>>,
+  answers: QuestionAnswer,
   options?: { rethrow?: boolean }
 ) {
   await getCurrentOpenCodeRuntime().respondQuestion(requestID, answers, options);

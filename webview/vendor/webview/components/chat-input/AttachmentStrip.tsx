@@ -229,12 +229,11 @@ export function AttachmentStrip(props: {
                 item.value.contextFile?.path ||
                 item.value.filename
               }
-              detail={props.nativePdfsSupported ? 'PDF' : undefined}
-              icon={props.nativePdfsSupported ? undefined : 'file'}
+              detail="PDF"
               title={
                 props.nativePdfsSupported
                   ? item.value.filename
-                  : item.value.contextFile?.relativePath || item.value.filename
+                  : `${item.value.filename}: PDF input is not advertised by the selected model`
               }
               onClick={
                 !props.nativePdfsSupported && item.value.contextFile && props.onOpenFile

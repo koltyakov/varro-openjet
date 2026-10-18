@@ -32,7 +32,7 @@ export function SendControls(props: {
             disabled={!props.canSend}
             aria-label="Send (Enter)"
           >
-            <SendIcon size={14} />
+            <SendIcon size={15} />
           </button>
         </Tooltip>
       }
@@ -46,7 +46,7 @@ export function SendControls(props: {
               onClick={props.onSend}
               aria-label="Add to queue (Enter)"
             >
-              <SendIcon size={14} />
+              <SendIcon size={15} />
             </button>
           </Tooltip>
         }
@@ -58,7 +58,7 @@ export function SendControls(props: {
               onClick={props.onSend}
               aria-label="Add to queue (Enter)"
             >
-              <SendIcon size={14} />
+              <SendIcon size={15} />
             </button>
           </Tooltip>
           <Tooltip content="More send options">

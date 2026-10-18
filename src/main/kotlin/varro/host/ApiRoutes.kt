@@ -56,7 +56,7 @@ object ApiRoutes {
 
     /** Session sub-resources that accept a POST action. */
     private val SESSION_ACTIONS = setOf(
-        "abort", "fork", "prompt_async", "resume-steering", "revert", "summarize", "unrevert", "init", "command", "side-question",
+        "abort", "interrupt-child", "background-parent", "fork", "prompt_async", "resume-steering", "revert", "summarize", "unrevert", "init", "command", "side-question",
     )
 
     /**
@@ -351,6 +351,9 @@ object ApiRoutes {
                 (request.query["view"] == null || request.query["view"] == listOf("thumbnail"))
         },
         route("/session/:id/todo") { request, _ ->
+            request.method == "GET" && request.optionalDirectory()
+        },
+        route("/session/:id/child-task-controls") { request, _ ->
             request.method == "GET" && request.optionalDirectory()
         },
         route("/session/:id/background-process") { request, _ ->

@@ -1,7 +1,6 @@
 import { batch, createSignal, onCleanup, onMount } from 'solid-js';
-import { syncWindowChatTheme } from '../../lib/window-chat-theme';
-import { reconcile } from 'solid-js/store';
 import type {
+  QuestionAnswer,
   AutoApproveJudgeReference,
   ExtensionMessage,
   PermissionMode,
@@ -9,6 +8,8 @@ import type {
   SessionWorkspaceTarget,
   WebviewThemeKind,
 } from '../../../shared/protocol';
+import { syncWindowChatTheme } from '../../lib/window-chat-theme';
+import { reconcile } from 'solid-js/store';
 import {
   AUTO_APPROVE_JUDGE_TIMEOUT_MS,
   createSessionWorkspaceMetadata,
@@ -108,7 +109,10 @@ import {
 import { SessionActionOperations } from '../session/session-actions';
 import type { SessionCommandOptions } from '../session/session-actions';
 import { SessionApprovalOperations } from '../session/session-approvals';
-import { SessionControlOperations } from '../session/session-controls';
+import {
+  SessionControlOperations,
+  interruptChildWithDependencies,
+} from '../session/session-controls';
 import {
   createSessionMessageSyncCoordinator,
   registerLoadingStatusPollEffect,
@@ -207,7 +211,8 @@ export interface OpenCodeRuntime {
   ): Promise<boolean>;
   implementPlan(prompt: string, sessionId?: string | null): Promise<void>;
   openPlan(markdown: string, sessionId?: string | null): Promise<void>;
-  abortSession(): Promise<void>;
+  abortSession(sessionId?: string): Promise<void>;
+  manageChildTask(sessionId: string, action: 'stop' | 'background'): Promise<string>;
   undoSession(): Promise<void>;
   redoSession(): Promise<void>;
   initSession(): Promise<void>;
@@ -228,7 +233,7 @@ export interface OpenCodeRuntime {
   alwaysAllowPermissionForSession(sessionId: string, permissionId: string): Promise<void>;
   respondQuestion(
     requestID: string,
-    answers: Array<Array<string>>,
+    answers: QuestionAnswer,
     options?: { rethrow?: boolean }
   ): Promise<void>;
   updatePermissionModeForSession(mode: PermissionMode, sessionId?: string | null): Promise<void>;
@@ -3247,8 +3252,58 @@ export function createOpenCodeRuntime(): OpenCodeRuntime {
     await sessionActionOperations.openPlan(markdown, sessionId);
   }
 
-  async function abortSession() {
-    await sessionControlOperations.abortSession();
+  async function abortSession(sessionId?: string) {
+    await sessionControlOperations.abortSession(sessionId);
+  }
+
+  async function manageChildTask(
+    sessionId: string,
+    action: 'stop' | 'background'
+  ): Promise<string> {
+    const workspace = workspaceGeneration;
+    const directory = getSessionDirectory(sessionId);
+    const isCurrent = () => workspace === workspaceGeneration;
+    const reconcileChild = async (id: string) => {
+      if (!isCurrent()) return;
+      await Promise.all([
+        syncSessionMessages(id),
+        recheckSessionStatus(id),
+        syncPendingPermissions({ fresh: true, waitForAutomation: false }),
+        loadQuestions(),
+      ]);
+    };
+    if (action === 'stop') {
+      const result = await interruptChildWithDependencies(
+        {
+          isCurrent,
+          markPendingAbort: sessionStatusOperations.markPendingAbort,
+          interruptChild: (id) => client.session.interruptChild(id, directory),
+          reconcile: reconcileChild,
+          logError,
+        },
+        sessionId
+      );
+      return result.interrupted ? 'Child stop accepted.' : 'Child already idle. History refreshed.';
+    }
+    const snapshot = await client.session.childTaskControls(sessionId, directory);
+    if (!isCurrent()) throw new Error('Workspace changed before background handoff');
+    let backgrounded = false;
+    try {
+      backgrounded = (await client.session.backgroundParent(sessionId, directory)).backgrounded;
+    } finally {
+      if (isCurrent()) {
+        const reconciliations = await Promise.allSettled([
+          reconcileChild(sessionId),
+          ...(snapshot.parentID ? [reconcileChild(snapshot.parentID)] : []),
+        ]);
+        for (const result of reconciliations) {
+          if (result.status === 'rejected') logError('reconcile background handoff', result.reason);
+        }
+      }
+    }
+    return backgrounded
+      ? 'Eligible blocking work moved to background.'
+      : 'No background handoff confirmed. Work may have already finished.';
   }
 
   async function undoSession() {
@@ -3364,7 +3419,7 @@ export function createOpenCodeRuntime(): OpenCodeRuntime {
 
   async function respondQuestion(
     requestID: string,
-    answers: Array<Array<string>>,
+    answers: QuestionAnswer,
     options?: { rethrow?: boolean }
   ) {
     await sessionApprovalOperations.respondQuestion(requestID, answers, options);
@@ -3421,6 +3476,7 @@ export function createOpenCodeRuntime(): OpenCodeRuntime {
     implementPlan,
     openPlan,
     abortSession,
+    manageChildTask,
     undoSession,
     redoSession,
     initSession,

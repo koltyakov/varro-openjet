@@ -4,13 +4,14 @@ import org.junit.Assert.*
 import org.junit.Test
 import varro.host.HandyIntegration.Action
 import varro.host.HandyIntegration.CommandResult
-import varro.host.HandyIntegration.Status
-import varro.protocol.Json
+import varro.protocol.*
 import java.nio.file.Path
 import java.util.concurrent.Executor
+import java.nio.file.Files
+import java.nio.file.StandardOpenOption.APPEND
 
 class HandyIntegrationTest {
-    private class Runtime(os: String = "Mac OS X", environment: Map<String, String> = emptyMap()) : HandyIntegration.Runtime(os, "/home/test", environment) {
+    private class Runtime(os: String = "Mac OS X", environment: Map<String, String> = emptyMap()) : HandyIntegration.Runtime(os, "/fixture/no-home", environment) {
         val inspected = mutableListOf<Path>()
         val commands = mutableListOf<List<String>>()
         var executable: (Path) -> Boolean = { true }
@@ -21,21 +22,24 @@ class HandyIntegrationTest {
         override fun run(command: List<String>): CommandResult { commands += command; return execute(command) }
         override fun userId() = "501"
     }
-
-    private val direct = Executor { it.run() }
-    private fun integration(runtime: Runtime, path: String = "", local: Boolean = true, executor: Executor = direct) =
+    private fun integration(runtime: Runtime, path: String = "", local: Boolean = true, executor: Executor = Executor { it.run() }) =
         HandyIntegration({ path }, { local }, runtime, executor)
 
-    @Test fun `remote hosts never discover or activate Handy`() {
+    @Test fun `remote and disposed hosts never discover or activate Handy`() {
         val runtime = Runtime()
-        for (action in Action.entries) assertEquals(Status(false, false), integration(runtime, local = false).request(action).join())
-        assertTrue(runtime.inspected.isEmpty())
-        assertTrue(runtime.commands.isEmpty())
+        val remote = integration(runtime, local = false)
+        val disposed = integration(runtime).apply { dispose() }
+        for (action in Action.entries) for (handy in listOf(remote, disposed)) {
+            assertFalse(handy.request(action).join().available)
+            assertEquals("idle", handy.request(action).join().state)
+        }
+        assertTrue(runtime.inspected.isEmpty()); assertTrue(runtime.commands.isEmpty())
     }
 
-    @Test fun `status discovers the macOS app and checks only the current user's processes`() {
+    @Test fun `status checks only installation and current user processes`() {
         val runtime = Runtime()
-        assertEquals(Status(true, true), integration(runtime).request(Action.STATUS).join())
+        val status = integration(runtime).request(Action.STATUS).join()
+        assertTrue(status.available); assertTrue(status.running); assertEquals("idle", status.state); assertEquals(0L, status.revision)
         assertEquals(listOf(Path.of("/Applications/Handy.app/Contents/MacOS/Handy")), runtime.inspected)
         assertEquals(listOf(listOf("/usr/bin/pgrep", "-u", "501", "-x", "Handy|handy")), runtime.commands)
     }
@@ -43,140 +47,133 @@ class HandyIntegrationTest {
     @Test fun `missing and stopped apps never execute dictation commands`() {
         val runtime = Runtime().apply { executable = { false } }
         val handy = integration(runtime)
-        assertEquals(Status(false, false), handy.request(Action.TOGGLE).join())
+        assertFalse(handy.request(Action.START).join().available)
         assertTrue(runtime.commands.isEmpty())
-        runtime.executable = { true }
-        runtime.execute = { CommandResult(1) }
-        assertEquals(Status(true, false), handy.request(Action.STATUS).join())
-        val result = handy.request(Action.TOGGLE).join()
-        assertTrue(result.available)
-        assertFalse(result.running)
-        assertTrue(result.error!!.contains("Start Handy"))
+        runtime.executable = { true }; runtime.execute = { CommandResult(1) }
+        assertFalse(handy.request(Action.STATUS).join().running)
+        assertTrue(handy.request(Action.START).join().error!!.contains("Start Handy"))
         assertTrue(runtime.commands.all { it.first() == "/usr/bin/pgrep" })
     }
 
-    @Test fun `toggle and cancel use fixed arguments without interpreting configured paths`() {
-        val path = Path.of("/custom/Handy with spaces;safe").toAbsolutePath().toString()
-        for ((action, flag) in listOf(Action.TOGGLE to "--toggle-transcription", Action.CANCEL to "--cancel")) {
-            val runtime = Runtime()
-            assertEquals(Status(true, true), integration(runtime, path).request(action).join())
-            assertEquals(listOf(Path.of(path)), runtime.inspected)
-            assertEquals(listOf(path, flag), runtime.commands.last())
-            assertEquals(2, runtime.commands.size)
-        }
+    @Test fun `explicit intent uses fixed arguments and fallback state without logs`() {
+        val path = "/custom/Handy with spaces;safe"
+        val runtime = Runtime(); val handy = integration(runtime, path)
+        assertEquals("recording", handy.request(Action.START).join().state)
+        assertEquals(listOf(path, "--toggle-transcription"), runtime.commands.last())
+        val count = runtime.commands.size
+        assertEquals("recording", handy.request(Action.START).join().state)
+        assertEquals(count + 1, runtime.commands.size) // inspection only, no duplicate toggle
+        assertEquals("idle", handy.request(Action.STOP).join().state)
+        assertEquals(listOf(path, "--toggle-transcription"), runtime.commands.last())
+        handy.request(Action.START).join()
+        assertEquals("idle", handy.request(Action.CANCEL).join().state)
+        assertEquals(listOf(path, "--cancel"), runtime.commands.last())
+        val stopped = runtime.commands.size
+        handy.request(Action.STOP).join(); handy.request(Action.CANCEL).join()
+        assertEquals(stopped + 2, runtime.commands.size)
     }
 
-    @Test fun `configured paths must be absolute and never fall back to other installs`() {
+    @Test fun `configured paths must be absolute with no fallback and discovery is bounded`() {
         val runtime = Runtime()
         assertTrue(integration(runtime, "relative/handy").request(Action.STATUS).join().error!!.contains("absolute"))
         assertTrue(runtime.inspected.isEmpty())
         runtime.executable = { false }
-        val missing = Path.of("/missing/Handy").toAbsolutePath()
-        assertEquals(Status(false, false), integration(runtime, " $missing ").request(Action.TOGGLE).join())
-        assertEquals(listOf(missing), runtime.inspected)
+        assertFalse(integration(runtime, " /missing/Handy ").request(Action.START).join().available)
+        assertEquals(listOf(Path.of("/missing/Handy")), runtime.inspected)
+        runtime.executable = { runtime.time = 2_000_000_000L; true }
+        assertTrue(integration(runtime).request(Action.START).join().error!!.contains("discovery timed out"))
         assertTrue(runtime.commands.isEmpty())
     }
 
-    @Test fun `macOS discovery includes the user's Applications folder`() {
-        val runtime = Runtime().apply { executable = { it == Path.of("/home/test/Applications/Handy.app/Contents/MacOS/Handy") } }
-        assertEquals(Status(true, true), integration(runtime).request(Action.STATUS).join())
-        assertEquals(2, runtime.inspected.size)
-    }
-
-    @Test fun `Linux discovery ignores relative PATH entries and duplicate candidates`() {
-        org.junit.Assume.assumeFalse(System.getProperty("os.name").lowercase().contains("windows"))
-        val runtime = Runtime("Linux", mapOf("PATH" to ".:/custom/bin:/custom/bin")).apply {
+    @Test fun `platform discovery ignores relative PATH entries and uses no shell`() {
+        val linux = Runtime("Linux", mapOf("PATH" to ".:/custom/bin:/custom/bin")).apply {
             executable = { it == Path.of("/custom/bin/handy") }
         }
-        assertEquals(Status(true, true), integration(runtime).request(Action.TOGGLE).join())
-        assertFalse(runtime.inspected.contains(Path.of("handy")))
-        assertEquals(1, runtime.inspected.count { it == Path.of("/custom/bin/handy") })
-        assertEquals(listOf("/custom/bin/handy", "--toggle-transcription"), runtime.commands.last())
-    }
-
-    @Test fun `Windows discovery checks install locations and uses tasklist without a shell`() {
-        val runtime = Runtime("Windows 11", mapOf("LOCALAPPDATA" to "/user/local", "ProgramFiles" to "/programs")).apply {
+        assertTrue(integration(linux).request(Action.START).join().available)
+        assertFalse(linux.inspected.contains(Path.of("handy")))
+        assertEquals(1, linux.inspected.count { it == Path.of("/custom/bin/handy") })
+        val mac = Runtime().apply { executable = { it == Path.of("/fixture/no-home/Applications/Handy.app/Contents/MacOS/Handy") } }
+        assertTrue(integration(mac).request(Action.STATUS).join().available)
+        val windows = Runtime("Windows 11", mapOf("LOCALAPPDATA" to "/fixture/local")).apply {
             execute = { CommandResult(0, "\"handy.exe\",\"123\",\"Console\",\"1\",\"12 K\"\r\n") }
         }
-        val handy = integration(runtime)
-        assertEquals(Status(true, true), handy.request(Action.STATUS).join())
-        assertEquals(Path.of("/user/local/Handy/handy.exe"), runtime.inspected.single())
-        assertEquals(listOf("tasklist.exe", "/FI", "IMAGENAME eq handy.exe", "/FO", "CSV", "/NH"), runtime.commands.single())
-        runtime.execute = { CommandResult(0, "INFO: No tasks are running which match the specified criteria.") }
-        assertEquals(Status(true, false), handy.request(Action.STATUS).join())
+        assertTrue(integration(windows).request(Action.STATUS).join().running)
+        assertEquals(listOf("tasklist.exe", "/FI", "IMAGENAME eq handy.exe", "/FO", "CSV", "/NH"), windows.commands.single())
     }
 
     @Test fun `inspection and activation failures never retry a mutation`() {
         val runtime = Runtime().apply { execute = { error("inspection denied") } }
         val handy = integration(runtime)
-        assertTrue(handy.request(Action.TOGGLE).join().error!!.contains("inspection denied"))
+        assertTrue(handy.request(Action.START).join().error!!.contains("inspection denied"))
         assertEquals(1, runtime.commands.size)
         runtime.commands.clear()
         runtime.execute = { if (it.first() == "/usr/bin/pgrep") CommandResult(0, "123") else error("timed out") }
-        assertTrue(handy.request(Action.TOGGLE).join().error!!.contains("timed out"))
+        assertTrue(handy.request(Action.START).join().error!!.contains("timed out"))
         assertEquals(2, runtime.commands.size)
-        runtime.commands.clear()
-        runtime.execute = { CommandResult(2) }
-        assertTrue(handy.request(Action.CANCEL).join().error!!.contains("inspection"))
-        assertEquals(1, runtime.commands.size)
-        runtime.commands.clear()
         runtime.execute = { if (it.first() == "/usr/bin/pgrep") CommandResult(0, "123") else CommandResult(3) }
-        assertTrue(handy.request(Action.CANCEL).join().error!!.contains("code 3"))
-        assertEquals(2, runtime.commands.size)
+        assertTrue(handy.request(Action.START).join().error!!.contains("code 3"))
     }
 
-    @Test fun `a late filesystem result cannot activate dictation`() {
-        val runtime = Runtime().apply { executable = { time = 2_000_000_000L; true } }
-        val status = integration(runtime).request(Action.TOGGLE).join()
-        assertTrue(status.error!!.contains("discovery timed out"))
-        assertFalse(status.available)
-        assertTrue(runtime.commands.isEmpty())
-    }
-
-    @Test fun `all views share discovery and overlapping mutations are rejected`() {
-        val tasks = mutableListOf<Runnable>()
-        val runtime = Runtime()
+    @Test fun `overlapping mutations are rejected but status cannot consume a deliberate click`() {
+        val tasks = mutableListOf<Runnable>(); val runtime = Runtime()
         val handy = integration(runtime, executor = Executor { tasks += it })
-        val first = handy.request(Action.TOGGLE)
-        val second = handy.request(Action.TOGGLE)
-        val cancel = handy.request(Action.CANCEL)
         val status = handy.request(Action.STATUS)
+        val start = handy.request(Action.START)
+        tasks.removeAt(0).run()
+        assertEquals("idle", status.join().state)
         assertEquals(1, tasks.size)
+        val duplicate = handy.request(Action.START)
         tasks.removeAt(0).run()
-        assertEquals(Status(true, true), first.join())
-        assertTrue(second.join().error!!.contains("pending"))
-        assertTrue(cancel.join().error!!.contains("pending"))
-        assertEquals(Status(true, true), status.join())
-        assertEquals(2, runtime.commands.size)
-        val next = handy.request(Action.CANCEL)
-        tasks.removeAt(0).run()
-        assertEquals(Status(true, true), next.join())
-        assertEquals(4, runtime.commands.size)
+        assertEquals("recording", start.join().state)
+        assertTrue(duplicate.join().error!!.contains("pending"))
+        assertEquals(3, runtime.commands.size)
     }
 
     @Test fun `executor rejection releases the command guard`() {
-        var rejected = true
-        val runtime = Runtime()
+        var rejected = true; val runtime = Runtime()
         val handy = integration(runtime, executor = Executor { if (rejected) error("executor stopped") else it.run() })
-        assertTrue(handy.request(Action.TOGGLE).join().error!!.contains("executor stopped"))
+        assertTrue(handy.request(Action.START).join().error!!.contains("executor stopped"))
         rejected = false
-        assertEquals(Status(true, true), handy.request(Action.STATUS).join())
+        assertTrue(handy.request(Action.STATUS).join().available)
     }
 
-    @Test fun `protocol validation ignores malformed requests and correlates results`() {
-        val runtime = Runtime()
-        val handy = integration(runtime)
-        val replies = mutableListOf<com.google.gson.JsonObject>()
-        for (payload in listOf(null, Json.obj(), Json.obj("requestId" to 1, "action" to "toggle"),
+    @Test fun `protocol validates intent and returns lifecycle state and revision`() {
+        val handy = integration(Runtime()); val replies = mutableListOf<com.google.gson.JsonObject>()
+        for (payload in listOf(null, Json.obj(), Json.obj("requestId" to 1, "action" to "start"),
             Json.obj("requestId" to "", "action" to "status"), Json.obj("requestId" to "x".repeat(129), "action" to "status"),
-            Json.obj("requestId" to "id", "action" to "launch"), Json.obj("requestId" to "id", "action" to 1))) {
-            handy.handleRequest(payload) { replies += it }
-        }
+            Json.obj("requestId" to "id", "action" to "toggle"), Json.obj("requestId" to "id", "action" to 1))) handy.handleRequest(payload) { replies += it }
         assertTrue(replies.isEmpty())
-        assertTrue(runtime.commands.isEmpty())
-        handy.handleRequest(Json.obj("requestId" to "id", "action" to "status")) { replies += it }
-        assertEquals(Json.message("handy/result", Json.obj("requestId" to "id", "available" to true, "running" to true)), replies.single())
-        assertFalse(replies.single().getAsJsonObject("payload").has("error"))
-        assertEquals("failure", Status(true, false, "failure").payload("id").get("error").asString)
+        handy.handleRequest(Json.obj("requestId" to "id", "action" to "start")) { replies += it }
+        val payload = replies.single().obj("payload")!!
+        assertEquals("id", payload.str("requestId")); assertEquals("recording", payload.str("state")); assertTrue(payload.long("revision")!! > 0)
+    }
+
+    @Test fun `portable lifecycle logs report external completion and prevent a stop from restarting recording`() {
+        val root = Files.createTempDirectory("varro-handy-portable-")
+        fun line(message: String) = "[2026-10-18][10:00:00][handy_app_lib::actions][INFO] $message\n"
+        val log = root.resolve("Data/logs/handy.log")
+        Files.createDirectories(log.parent); Files.writeString(root.resolve("portable"), "")
+        Files.writeString(log, line("Text pasted successfully"))
+        val runtime = Runtime().apply {
+            execute = { command ->
+                if (command.last() == "--toggle-transcription") Files.writeString(log,
+                    "[2026-10-18][10:00:00][handy_app_lib::managers::audio][INFO] Recording started for binding default\n", APPEND)
+                CommandResult(0, "123")
+            }
+        }
+        val handy = integration(runtime, root.resolve("Handy").toString())
+        try {
+            assertEquals("idle", handy.request(Action.STATUS).join().state)
+            val idle = java.util.concurrent.CountDownLatch(1)
+            assertEquals("recording", handy.request(Action.START) { if (it.state == "idle") idle.countDown() }.join().state)
+            Files.writeString(log, line("Text pasted successfully"), APPEND)
+            assertTrue("Watcher must publish completion", idle.await(5, java.util.concurrent.TimeUnit.SECONDS))
+            val before = runtime.commands.size
+            assertEquals("idle", handy.request(Action.STOP).join().state)
+            assertEquals(before + 1, runtime.commands.size)
+        } finally {
+            handy.dispose()
+            Files.walk(root).use { paths -> paths.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists) }
+        }
     }
 }

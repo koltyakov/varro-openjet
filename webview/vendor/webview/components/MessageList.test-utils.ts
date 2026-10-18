@@ -4,6 +4,7 @@ import {
   setExpandThinking,
   setState,
   setShowFileDiffs,
+  setShowEmptyStateHistogram,
   setShowThinkingPreference,
   state,
   stopLoading,
@@ -94,6 +95,7 @@ export function installMessageListTestEnvironment(
     setState('sessionAutoPermissionCounts', reconcile({}));
     setState('skippedPlanSessions', reconcile({}));
     setShowFileDiffs(false);
+    setShowEmptyStateHistogram(false);
     setExpandThinking(false);
     setShowThinkingPreference(true);
     stopLoading();

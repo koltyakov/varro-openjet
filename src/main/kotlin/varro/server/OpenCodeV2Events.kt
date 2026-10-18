@@ -54,7 +54,8 @@ internal object OpenCodeV2Events {
             "permission.asked" -> return listOf(emit(type, OpenCodeV2Projection.permission(data)))
             "permission.replied" -> return listOf(emit(type))
             "form.created" -> return data.obj("form")?.let { listOf(emit("question.asked", OpenCodeV2Projection.form(it))) }.orEmpty()
-            "form.replied", "form.cancelled" -> return listOf(emit(if (type == "form.replied") "question.replied" else "question.rejected", properties.apply { add("requestID", data.get("id")) }))
+            "form.replied", "form.cancelled" -> return listOf(emit(if (type == "form.replied") "question.replied" else "question.rejected",
+                Json.obj("sessionID" to data.get("sessionID"), "requestID" to data.get("id"))))
             "session.inbox.enqueued", "session.inbox.delivered" -> return listOf(emit(if (type.endsWith("enqueued")) "session.next.prompt.admitted" else "session.next.prompted", properties.apply { add("messageID", data.get("inboxID")) }))
             "session.skill.activated" -> return listOf(emit("session.next.synthetic"))
             "session.shell.started", "session.shell.ended" -> return next(properties.apply { add("callID", data.obj("shell")?.get("id")); add("output", data.obj("output")?.get("output")) })

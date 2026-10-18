@@ -533,7 +533,9 @@ function getAutomaticAction(part: TextPart): string | null {
   if (text.startsWith('Instructions from:')) return 'Loaded agent instructions';
   if (text.startsWith('<shell ')) {
     const header = SHELL_HEADER_RE.exec(text)?.[1] ?? '';
-    if (/\bstate=(?:"failed"|'failed')/.test(header)) return 'Background command failed';
+    if (/\bstate=(?:"cancelled"|'cancelled')/.test(header)) return 'Background command cancelled';
+    if (/\bstate=(?:"(?:failed|error)"|'(?:failed|error)')/.test(header))
+      return 'Background command failed';
     return 'Background command finished';
   }
   if (/^The plan at .+ has been approved, you can now edit files\. Execute the plan$/s.test(text)) {

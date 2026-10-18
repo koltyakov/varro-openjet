@@ -4,6 +4,7 @@ import { rejectQuestion, respondQuestion } from '../hooks/useOpenCode';
 import { defaultAppState } from '../lib/state';
 import { chatBubbleQuestionIcon, checkIcon } from '../lib/ui-icons';
 import { UiIcon } from './UiIcon';
+import { NativeFormPrompt } from './NativeFormPrompt';
 
 type QuestionDraft = {
   selected: Array<Array<string>>;
@@ -24,6 +25,18 @@ function saveQuestionDraft(id: string, draft: QuestionDraft): void {
 }
 
 export function QuestionPrompt(props: { request: QuestionRequest }) {
+  return (
+    <Show
+      keyed
+      when={props.request.kind === 'native-form' ? props.request.form : undefined}
+      fallback={<LegacyQuestionPrompt request={props.request} />}
+    >
+      {(form) => <NativeFormPrompt form={form} />}
+    </Show>
+  );
+}
+
+function LegacyQuestionPrompt(props: { request: QuestionRequest }) {
   const questions = () => props.request.questions || [];
   const isCustomEnabled = (questionIndex: number) => questions()[questionIndex]?.custom !== false;
   const ensureAnswerSlots = <T,>(values: T[], fallback: T) =>

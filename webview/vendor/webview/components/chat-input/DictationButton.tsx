@@ -1,47 +1,71 @@
 import { Show, createSignal, onCleanup, onMount } from 'solid-js';
+import type { HandyAction } from '../../../shared/protocol';
 import { onMessage, postMessage } from '../../lib/bridge';
 import { microphoneIcon, microphoneSpeakingSolidIcon } from '../../lib/ui-icons';
 import { Tooltip } from '../Tooltip';
 import { UiIcon } from '../UiIcon';
 import { showSessionActionFeedback } from '../chat/SessionActionFeedback';
 
-type DictationAction = 'status' | 'toggle' | 'cancel';
 const REQUEST_TIMEOUT_MS = 8_000;
 
 export function DictationButton(props: {
   focusComposer: () => void;
   remote: boolean;
   onAvailabilityChange?: () => void;
+  onActivationChange?: (requested: boolean) => void;
 }) {
   const [available, setAvailable] = createSignal(false);
   const [running, setRunning] = createSignal(false);
-  // Handy's CLI has no recording-status response. This is only our last toggle request.
+  // Prefer observed Handy state; the host supplies requested-state fallback
+  // when Handy's optional lifecycle logs are unavailable.
   const [activationRequested, setActivationRequested] = createSignal(false);
   const [busy, setBusy] = createSignal(false);
+  let queuedAction: Exclude<HandyAction, 'status'> | undefined;
+  let watchedRequestId: string | undefined;
+  let lastRevision = -1;
   let pending:
-    | { id: string; action: DictationAction; timer: ReturnType<typeof setTimeout> }
+    | { id: string; action: HandyAction; timer: ReturnType<typeof setTimeout> }
     | undefined;
 
   const label = () => (activationRequested() ? 'Stop Handy dictation' : 'Start Handy dictation');
   const tooltip = () =>
     !running()
-      ? 'Start Handy first to use dictation'
-      : `${label()}. Right-click to cancel. The icon tracks Varro toggles only; Handy shortcuts may change recording state.`;
+      ? 'Open Handy to dictate'
+      : activationRequested()
+        ? 'Click to finish dictation'
+        : 'Click to dictate. Click again when done.';
 
-  function request(action: DictationAction) {
-    if (props.remote || pending) return;
+  function updateActivationRequested(requested: boolean) {
+    if (activationRequested() === requested) return;
+    setActivationRequested(requested);
+    props.onActivationChange?.(requested);
+  }
+
+  function request(action: HandyAction) {
+    if (props.remote) return;
+    if (pending) {
+      if (action !== 'status' && pending.action === 'status' && !queuedAction) {
+        props.focusComposer();
+        queuedAction = action;
+        setBusy(true);
+      }
+      return;
+    }
     if (action !== 'status') props.focusComposer();
     const id = crypto.randomUUID();
+    if (action !== 'status') watchedRequestId = id;
     setBusy(action !== 'status');
     const timer = setTimeout(() => {
       pending = undefined;
       setBusy(false);
       if (action !== 'status') {
-        setActivationRequested(false);
+        updateActivationRequested(false);
         showSessionActionFeedback(
           'Handy did not respond. Check its recording state before toggling again.',
           'warning'
         );
+      } else {
+        dispatchQueuedAction();
       }
     }, REQUEST_TIMEOUT_MS);
     pending = { id, action, timer };
@@ -49,29 +73,47 @@ export function DictationButton(props: {
       clearTimeout(timer);
       pending = undefined;
       setBusy(false);
+      updateActivationRequested(false);
       if (action !== 'status')
         showSessionActionFeedback('Handy integration is unavailable.', 'warning');
     }
   }
 
+  function dispatchQueuedAction() {
+    const action = queuedAction;
+    queuedAction = undefined;
+    if (action) request(action);
+  }
+
   const unsubscribe = onMessage((message) => {
-    if (message.type !== 'handy/result' || message.payload.requestId !== pending?.id) return;
-    const action = pending.action;
-    clearTimeout(pending.timer);
-    pending = undefined;
-    setBusy(false);
+    if (message.type !== 'handy/result') return;
+    const command = message.payload.requestId === pending?.id ? pending : undefined;
+    if (!command && message.payload.requestId !== watchedRequestId) return;
+    if (command) {
+      clearTimeout(command.timer);
+      pending = undefined;
+      setBusy(false);
+    }
+    const revision = message.payload.revision;
+    if (revision !== undefined && revision < lastRevision) {
+      if (command) dispatchQueuedAction();
+      return;
+    }
+    if (revision !== undefined) lastRevision = revision;
     const availabilityChanged = available() !== message.payload.available;
     setAvailable(message.payload.available);
     if (availabilityChanged) props.onAvailabilityChange?.();
     setRunning(message.payload.running);
-    if (!message.payload.running || message.payload.error) setActivationRequested(false);
+    updateActivationRequested(
+      message.payload.available && message.payload.running && message.payload.state === 'recording'
+    );
+    if (message.payload.state === 'idle' || message.payload.state === 'unknown')
+      watchedRequestId = undefined;
     if (message.payload.error) {
-      if (action !== 'status') showSessionActionFeedback(message.payload.error, 'warning');
-    } else if (action === 'toggle' && message.payload.available && message.payload.running) {
-      setActivationRequested((value) => !value);
-    } else if (action === 'cancel') {
-      setActivationRequested(false);
+      if (command && command.action !== 'status')
+        showSessionActionFeedback(message.payload.error, 'warning');
     }
+    if (command) dispatchQueuedAction();
   });
   const refresh = () => {
     if (document.visibilityState !== 'hidden') request('status');
@@ -85,6 +127,7 @@ export function DictationButton(props: {
     refreshTimer = setInterval(refresh, 30_000);
   });
   onCleanup(() => {
+    updateActivationRequested(false);
     unsubscribe();
     if (pending) clearTimeout(pending.timer);
     clearInterval(refreshTimer);
@@ -101,9 +144,10 @@ export function DictationButton(props: {
           classList={{ 'activation-requested': activationRequested() }}
           aria-label={label()}
           aria-pressed={activationRequested()}
+          aria-busy={busy()}
           disabled={!running() || busy()}
           onMouseDown={(event) => event.preventDefault()}
-          onClick={() => request('toggle')}
+          onClick={() => request(activationRequested() ? 'stop' : 'start')}
           onContextMenu={(event) => {
             event.preventDefault();
             if (running() && !busy()) request('cancel');

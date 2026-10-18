@@ -9,6 +9,7 @@ import {
   onCleanup,
   onMount,
 } from 'solid-js';
+import type { JSX } from 'solid-js';
 import { Portal } from 'solid-js/web';
 import {
   isAbortedToolError,
@@ -68,6 +69,7 @@ import {
   toolsIcon,
 } from '../lib/ui-icons';
 import { UiIcon } from './UiIcon';
+import { ChildTaskControls } from './chat/ChildTaskControls';
 
 export { resetToolCallExpansionState } from '../lib/tool-call-expansion-state';
 
@@ -1457,7 +1459,13 @@ function GenericToolCall(props: {
     if (sessionId) {
       for (const entry of getMessageLookup().bySessionId.get(sessionId) ?? []) {
         const info = entry.info;
-        if (info.role !== 'assistant' || info.sessionID !== sessionId) continue;
+        if (
+          info.role !== 'assistant' ||
+          info.sessionID !== sessionId ||
+          !info.providerID ||
+          !info.modelID
+        )
+          continue;
         if (!latest || info.time.created >= latest.time.created) latest = info;
       }
     }
@@ -1794,6 +1802,22 @@ function GenericToolCall(props: {
               when={isBash() && bashCommand()}
               fallback={
                 <StructuredToolCard
+                  actions={
+                    <Show
+                      keyed
+                      when={
+                        isTask() &&
+                        props.state.status === 'running' &&
+                        props.tool.sessionID === appState.activeSessionId &&
+                        !appState.sessions.find(
+                          (session) => session.id === appState.activeSessionId
+                        )?.parentID &&
+                        taskSessionId()
+                      }
+                    >
+                      {(sessionId) => <ChildTaskControls sessionId={sessionId} />}
+                    </Show>
+                  }
                   inputEntries={detailInputEntries()}
                   result={structuredResult()}
                   onOpenPath={openGenericToolFile}
@@ -1955,6 +1979,7 @@ function LiveTerminalOutput(props: { content: string }) {
 }
 
 function StructuredToolCard(props: {
+  actions?: JSX.Element;
   inputEntries: Array<[string, unknown]>;
   result: StructuredToolResult | null;
   onOpenPath: (path: string) => void;
@@ -1967,6 +1992,7 @@ function StructuredToolCard(props: {
 
   return (
     <div class="structured-tool-card">
+      {props.actions}
       <For each={nonPromptEntries()}>
         {([key, value]) => {
           const blockValue = shouldShowStructuredToolValueAsBlock(key, value);
