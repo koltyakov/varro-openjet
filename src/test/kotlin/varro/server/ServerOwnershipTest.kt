@@ -15,8 +15,10 @@ class ServerOwnershipTest {
         var listening = setOf(123L)
         var dead = setOf(999L)
         var accountValue: Account? = null
+        var onListeners: (() -> Unit)? = null
         override fun listeners(port: Int): Set<Long> {
             check(!fail) { "inspection failed" }
+            onListeners?.invoke()
             return listening
         }
         override fun executable(pid: Long) = "/usr/bin/opencode"
@@ -374,6 +376,67 @@ class ServerOwnershipTest {
         assertFalse(manager.registrationChanged())
         identity.serverBirth = "darwin:replacement"
         assertTrue(manager.registrationChanged())
+    }
+
+    @Test fun `an empty listener observation cannot replace a live managed registration`() = fixture { shared, legacy, identity ->
+        val manager = ServerOwnership(4096, shared, legacy, identity)
+        privateFile(manager.path, Json.stringify(lease()))
+        assertNotNull(manager.connection())
+        val before = Files.readString(manager.path)
+        identity.listening = emptySet()
+        val failure = assertThrows(IllegalStateException::class.java) { manager.registrationChanged() }
+        assertTrue(failure.message!!.contains("observed listening PIDs: none"))
+        assertFalse(manager.refresh(4096, takeover = true)) // startup/lifecycle remain strict
+        assertEquals(before, Files.readString(manager.path))
+        identity.listening = setOf(123)
+        assertFalse(manager.registrationChanged())
+        assertFalse(manager.credentialOnly)
+        identity.listening = setOf(456)
+        assertTrue(manager.registrationChanged())
+    }
+
+    @Test fun `credential-only startup recheck recovers the original active or relinquished lease only`() {
+        for (state in listOf("active", "relinquished")) fixture { shared, legacy, identity ->
+            val original = lease().apply {
+                addProperty("state", state); addProperty("hostPid", ProcessHandle.current().pid())
+                addProperty("hostBirthIdentity", "darwin:host-start")
+            }
+            val path = shared.resolve("varro-opencode-server-4096.json")
+            privateFile(path, Json.stringify(original))
+            identity.listening = emptySet()
+            val manager = ServerOwnership(4096, shared, legacy, identity, verifyCredentials = { true })
+            assertNotNull(manager.connection()); assertTrue(manager.credentialOnly)
+            assertFalse(manager.recheckAttachment(4096)); assertTrue(manager.credentialOnly)
+            assertEquals(original, ServerOwnership.record(path))
+            identity.listening = setOf(123)
+            assertTrue(manager.recheckAttachment(4096)); assertFalse(manager.credentialOnly)
+            assertEquals(123L, manager.registeredPid)
+            assertEquals(state == "relinquished", manager.refresh(4096))
+            assertEquals("secret", manager.connection()!!.password)
+        }
+    }
+
+    @Test fun `credential rechecks reject replacement ambiguity modified evidence and cancellation`() {
+        for (mode in listOf("reused-pid", "executable", "multiple-listeners", "changed-record", "cancelled", "cancelled-during-inspection", "companion-only")) fixture { shared, legacy, identity ->
+            val path = shared.resolve("varro-opencode-server-4096.json")
+            if (mode == "companion-only") privateFile(Path.of("$path.credentials"), Json.stringify(Json.obj("version" to 1, "port" to 4096,
+                "owner" to "companion", "createdAt" to 1, "password" to "secret")))
+            else privateFile(path, Json.stringify(lease().apply { if (mode == "executable") addProperty("executable", "/different/opencode") }))
+            identity.listening = emptySet()
+            val manager = ServerOwnership(4096, shared, legacy, identity, verifyCredentials = { true })
+            assertNotNull(manager.connection()); assertTrue(manager.credentialOnly)
+            identity.listening = if (mode == "multiple-listeners") setOf(123, 456) else setOf(123)
+            if (mode == "reused-pid") identity.serverBirth = "darwin:replacement"
+            if (mode == "changed-record") privateFile(path, Json.stringify(lease().apply { addProperty("owner", "changed") }))
+            val before = if (Files.exists(path)) Files.readString(path) else null
+            var cancelled = mode == "cancelled"
+            if (mode == "cancelled-during-inspection") identity.onListeners = { cancelled = true }
+            if (mode.startsWith("cancelled")) assertThrows(java.util.concurrent.CancellationException::class.java) { manager.recheckAttachment(4096) { cancelled } }
+            else assertFalse(mode, manager.recheckAttachment(4096))
+            assertTrue(manager.credentialOnly); assertNull(manager.registeredPid)
+            assertFalse(manager.refresh(4096, takeover = true)); assertFalse(manager.stop(1))
+            assertEquals(before, if (Files.exists(path)) Files.readString(path) else null)
+        }
     }
 
     @Test fun `credential companions reject coerced types and symlinks`() = fixture { shared, _, _ ->

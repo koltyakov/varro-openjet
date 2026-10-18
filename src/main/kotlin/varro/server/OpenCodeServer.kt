@@ -467,6 +467,12 @@ class OpenCodeServer(
         setStatus(ServerStatus.Running(url(), EventStreamState.DEGRADED, transport.apiVersion))
         runningSince = System.currentTimeMillis()
         transport.startEventStream(OpenCodeRequestScope.normalizeDirectory(workspaceCwd()))
+        if (settings.serverAutoStart && process.isCredentialOnly) scheduler.execute {
+            fun changed() = disposeGeneration.get() != generation || phase.get() == Phase.DISPOSING || status.get() !is ServerStatus.Running
+            if (!changed()) runCatching {
+                if (process.recheckCredentialOwnership(::changed) && !changed()) versionInfoEpoch.incrementAndGet()
+            }.onFailure { log.info("OpenCode credential-only registration recheck could not complete; lifecycle checks remain required", it) }
+        }
         if (maintenanceStarted.compareAndSet(false, true)) scheduler.scheduleWithFixedDelay({
             if (isAttachOnly() || status.get() !is ServerStatus.Running) return@scheduleWithFixedDelay
             val changed = runCatching { process.registrationChanged() }

@@ -281,6 +281,7 @@ class OpenCodeV2IntegrationTest {
             transport.request("DELETE", "/session/$imported")
             transport.request("DELETE", "/session/$id")
             assertFalse(transport.request("GET", "/session").data!!.asJsonArray.any { it.asObjectOrNull().str("id") == id })
+            if (OpenCodeCli.compareVersions(version, "2.0.32") >= 0) verifyAttachedQuotaCredentials(transport, root)
         } finally {
             streamGate.getAndSet(null)?.countDown()
             transport.dispose()
@@ -293,6 +294,45 @@ class OpenCodeV2IntegrationTest {
             provider.stop(0)
             providerExecutor.shutdownNow()
         }
+    }
+
+    private fun verifyAttachedQuotaCredentials(transport: OpenCodeTransport, root: java.nio.file.Path) {
+        // All credentials are synthetic, in this fixture's server database. OpenAI is denied
+        // by the fixture policy, and quota HTTP is stubbed, so no provider receives them.
+        val ids = mutableListOf<String>()
+        fun create(access: String, account: String, method: String = "chatgpt-browser") {
+            val created = transport.request("POST", "/api/credential", Json.obj("integrationID" to "openai", "activate" to true,
+                "value" to Json.obj("type" to "oauth", "methodID" to method, "access" to access, "refresh" to "fixture-unused-refresh",
+                    "expires" to System.currentTimeMillis() + 86_400_000, "metadata" to Json.obj("accountID" to account)))).data.asObjectOrNull().obj("data")!!
+            ids += created.str("id")!!
+        }
+        try {
+            create("fixture-inactive-token", "inactive-account")
+            create("fixture-active-token", "active-account")
+            val host = Files.createDirectories(root.resolve("attached-quota-host"))
+            val credentials = varro.host.quota.QuotaCredentials(host, emptyMap())
+            Files.createDirectories(credentials.authPath.parent)
+            Files.writeString(credentials.authPath, "invalid local auth")
+            Files.writeString(credentials.v2DatabasePath, "invalid local database")
+            var polls = 0
+            varro.host.ProviderQuotaBackend(credentials, { method, path, body, directory ->
+                if (path == "/config/providers") Json.obj("providers" to listOf(Json.obj("id" to "openai", "models" to Json.obj())))
+                else transport.request(method, path, body, RequestOptions(directory = directory)).data
+            }, varro.host.quota.QuotaHttp { request ->
+                polls++
+                assertEquals("Bearer fixture-active-token", request.headers["Authorization"])
+                assertEquals("active-account", request.headers["ChatGPT-Account-Id"])
+                varro.host.quota.QuotaResponse(200, """{"rate_limit":{"primary_window":{"used_percent":20}}}""".toByteArray())
+            }, apiVersion = { 2 }, attachOnly = { true }).use { backend ->
+                val status = backend.get("openai", null, null)
+                assertEquals("available", status.str("status")); assertEquals(1, polls)
+                assertFalse(Json.stringify(status).contains("fixture-active-token"))
+                create("fixture-sharing-token", "sharing-account", "chatgpt-token-sharing")
+                val unsupported = backend.get("openai", null, null)
+                assertEquals("unsupported", unsupported.str("status")); assertEquals(1, polls)
+                assertTrue(unsupported.str("note")!!.contains("Codex browser"))
+            }
+        } finally { ids.reversed().forEach { transport.request("DELETE", "/api/credential/$it") } }
     }
 
     private fun verifySideQuestions(transport: OpenCodeTransport, directory: String,

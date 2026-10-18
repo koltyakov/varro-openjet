@@ -109,6 +109,11 @@ compete under that claim if no owner replaces the server. External and credentia
 are never implicitly relaunched.
 Background registration checks run every thirty seconds. A verified replacement triggers recovery;
 failed inspection is logged without disconnecting an established connection.
+An empty listener result while the registered PID remains alive is inconclusive,
+not replacement proof. Startup and lifecycle operations still require a matching
+listener. Credential-only startup schedules one private-registration recheck.
+Fresh original PID, executable and birth evidence can restore ordinary ownership
+recovery; changed records, replacement processes and PID-free companions cannot.
 `VARRO_TEST_STATE_ROOT`, when set to an absolute path, isolates server records in its `servers`
 directory and disables legacy server-record discovery. Unit fixtures can also supply a server-state
 directory explicitly; they do not use production records.
@@ -122,6 +127,13 @@ Recovery publishes a new owner and drops obsolete injected configuration. Generi
 attachment and PID-free companions remain read-only and do not rewrite ownership evidence.
 
 With automatic startup disabled and no managed process, the connection is attach-only. It uses the configured port and skips local service discovery, ownership recovery and CLI maintenance. Model routing reads the server's configuration, and summaries and usage reports use API history rather than local databases. Usage reports support up to 250 sessions through the API. File-based configuration, quota polling with local credentials, local CLI actions and local history import report that the action must run on the server host. Session permissions and API-backed Markdown transcript export remain available.
+
+Attach-only V2 connections can read OpenAI subscription quotas using the active
+OpenAI OAuth credential from the authenticated server's `/api/credential` endpoint.
+This exception never reads the IDE's credential database, Codex files or environment
+tokens, and never grants stop, restart or maintenance rights. Other attached
+providers and V1 still report unsupported. Missing API support or a failed credential
+read does not fall back to a local account.
 
 ## Component map
 

@@ -130,6 +130,84 @@ class ProviderQuotaBackendTest {
         }
     }
 
+    @Test fun `attached V2 OpenAI quotas use only the active server account and track account changes`() {
+        val creds = credentials()
+        Files.writeString(creds.authPath, "invalid legacy auth")
+        Files.writeString(creds.v2DatabasePath, "invalid local database")
+        Files.createDirectories(creds.home.resolve(".codex"))
+        Files.writeString(creds.home.resolve(".codex/auth.json"), "invalid local Codex auth")
+        var account = "first"
+        var polls = 0
+        val updates = mutableListOf<JsonObject>()
+        ProviderQuotaBackend(creds, { method, path, body, directory ->
+            assertEquals("GET", method); assertNull(body); assertEquals("/work", directory)
+            when (path) {
+                "/config/providers" -> metadata("openai")
+                "/api/credential" -> Json.obj("data" to listOf(
+                    Json.obj("integrationID" to "openai", "active" to false, "value" to Json.obj("type" to "oauth", "access" to "inactive-token")),
+                    Json.obj("integrationID" to "unrelated", "active" to true, "value" to Json.obj("type" to "oauth", "access" to "wrong-token")),
+                    Json.obj("integrationID" to "openai", "active" to true, "value" to Json.obj("type" to "oauth", "methodID" to "chatgpt-browser",
+                        "access" to "$account-token", "metadata" to Json.obj("accountID" to account, "accountId" to "obsolete")))))
+                else -> error("Unexpected server request")
+            }
+        }, QuotaHttp {
+            polls++
+            assertEquals("Bearer $account-token", it.headers["Authorization"])
+            assertEquals(account, it.headers["ChatGPT-Account-Id"])
+            if (account == "first") response("""{"rate_limit":{"primary_window":{"used_percent":20}}}""") else response("{}", 429)
+        }, updates::add, apiVersion = { 2 }, attachOnly = { true }).use { backend ->
+            val first = backend.get("openai", "model", "/work")
+            assertEquals("available", first.str("status"))
+            assertEquals(first, backend.get("openai", "model", "/work")); assertEquals(1, polls)
+            account = "second"
+            val second = backend.get("openai", "model", "/work")
+            assertEquals("error", second.str("status")); assertFalse(second.has("windows")); assertEquals(2, polls)
+            for (result in updates + first + second) for (secret in listOf("first-token", "second-token", "inactive-token", "wrong-token", "obsolete"))
+                assertFalse(Json.stringify(result).contains(secret))
+        }
+    }
+
+    @Test fun `attached quotas never substitute local credentials when the server has no active OAuth`() {
+        for (mode in listOf("inactive", "key", "malformed", "unavailable", "missing-access", "missing-value", "token-sharing")) {
+            val creds = credentials(Json.obj("openai" to Json.obj("type" to "oauth", "access" to "local-token")))
+            writeQuotaCredentials(creds.v2DatabasePath, Json.array(listOf(Json.obj("active" to true, "integrationID" to "openai",
+                "value" to Json.obj("type" to "oauth", "access" to "local-db-token")))))
+            Files.createDirectories(creds.home.resolve(".codex"))
+            Files.writeString(creds.home.resolve(".codex/auth.json"), """{"tokens":{"access_token":"local-codex-token"}}""")
+            ProviderQuotaBackend(creds, { _, path, _, _ -> when (path) {
+                "/config/providers" -> metadata("openai")
+                "/api/credential" -> when (mode) {
+                    "unavailable" -> error("server credential request failed")
+                    "malformed" -> Json.obj()
+                    else -> Json.obj("data" to listOf(Json.obj("integrationID" to "openai", "active" to (mode != "inactive"),
+                        "value" to when (mode) {
+                            "key" -> Json.obj("type" to "key", "key" to "server-key")
+                            "missing-access" -> Json.obj("type" to "oauth")
+                            "missing-value" -> null
+                            else -> Json.obj("type" to "oauth", "access" to "server-token", "methodID" to if (mode == "token-sharing") "chatgpt-token-sharing" else "chatgpt-browser")
+                        })))
+                }
+                else -> error("Unexpected server request")
+            } }, QuotaHttp { error("Must not poll using local or token-sharing credentials") }, apiVersion = { 2 }, attachOnly = { true }).use { backend ->
+                val result = backend.get("openai", null, null)
+                assertEquals(mode, if (mode in listOf("malformed", "unavailable")) "error" else "unsupported", result.str("status"))
+                assertFalse(result.has("windows")); assertFalse(result.has("usageLimitResets"))
+                assertFalse(Json.stringify(result).contains("local-token"))
+                if (mode == "token-sharing") assertTrue(result.str("note")!!.contains("Codex browser"))
+            }
+        }
+    }
+
+    @Test fun `other attached providers and V1 do not read server or local credentials`() {
+        for ((version, provider) in listOf(1 to "openai", 2 to "anthropic", 2 to "openrouter")) {
+            ProviderQuotaBackend(credentials(), { _, _, _, _ -> error("No server reads allowed") }, QuotaHttp { error("No HTTP allowed") },
+                apiVersion = { version }, attachOnly = { true }).use { backend ->
+                val result = backend.get(provider, null, null)
+                assertEquals("unsupported", result.str("status")); assertTrue(result.str("note")!!.contains("attach-only"))
+            }
+        }
+    }
+
     @Test fun `missing invalid or unavailable V2 credentials never fall back to V1`() {
         for (failure in listOf("empty", "invalid", "unavailable")) {
             val creds = credentials(Json.obj("openai" to Json.obj("type" to "oauth", "access" to "stale-v1-token")))

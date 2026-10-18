@@ -108,6 +108,12 @@ class OpenCodeProcess(
     fun refreshOwnership(takeover: Boolean = false): Boolean = ownership.refresh(port, takeover,
         serverPassword?.takeIf { credentialPort == port }, serverUsername).also { managed.set(it) }
 
+    internal fun recheckCredentialOwnership(isCancelled: () -> Boolean): Boolean {
+        if (!ownership.recheckAttachment(port, isCancelled)) return false
+        refreshOwnership()
+        return true
+    }
+
     fun confirmOwnership(): Boolean {
         val pid = handler.get()?.process?.pid() ?: return false
         val registered = runCatching { ownership.register(port, pid, serverPassword, serverUsername) }

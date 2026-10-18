@@ -5012,13 +5012,13 @@ export function MessageList() {
     if (Math.abs(delta) <= 0.5) return;
 
     const nextScrollTop = containerRef.scrollTop + delta;
-    if (delta > 0) setAppendBottomReserve((current) => current + delta);
     appendBottomReserveTarget = nextScrollTop;
+    // Growth above the summary already extends the scroll range. Reserve only an
+    // actual shortfall, not that same growth again as accumulating empty space.
     setPreservedScrollTop(nextScrollTop);
     const shortfall = nextScrollTop - containerRef.scrollTop;
     if (shortfall <= 0.5) return;
 
-    appendBottomReserveTarget += shortfall;
     setAppendBottomReserve((current) => current + shortfall);
     queueMicrotask(() => {
       if (!containerRef || state.activeSessionId !== anchor.sessionId) return;

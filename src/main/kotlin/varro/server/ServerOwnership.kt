@@ -188,12 +188,37 @@ internal class ServerOwnership(
         verifiedAt = System.currentTimeMillis()
     }
 
+    /** One fresh identity check can recover the original lease, never promote credentials alone. */
+    @Synchronized fun recheckAttachment(port: Int, isCancelled: () -> Boolean = { false }): Boolean {
+        fun checkCurrent() {
+            if (isCancelled() || Thread.currentThread().isInterrupted)
+                throw java.util.concurrent.CancellationException("OpenCode registration recovery cancelled")
+        }
+        checkCurrent()
+        val saved = attachment ?: return false
+        if (port != saved.connection.port || read(saved.source) != saved.record) return false
+        val lease = record(path) ?: if (!Files.exists(path)) record(marker, false) else null
+        if (lease == null || lease.get("port").asInt != port || lease.str("owner") != saved.record.str("owner") ||
+            (saved.source == path && lease != saved.record) ||
+            (lease.str("password") != null && credentials(lease) != saved.connection) || !matches(lease)) return false
+        checkCurrent()
+        if (read(saved.source) != saved.record || (record(path) ?: if (!Files.exists(path)) record(marker, false) else null) != lease) return false
+        checkCurrent()
+        admitted = lease.deepCopy()
+        attachment = null
+        return true
+    }
+
     /** Host handoff is harmless; a changed listener or launch registration needs fresh startup. */
     @Synchronized fun registrationChanged(): Boolean {
         val expected = admitted ?: return false
         val recorded = record(path) ?: if (!Files.exists(path)) record(marker, false) else return false
         if (recorded != null && listOf("owner", "pid", "port", "executable", "birthIdentity").any { recorded.get(it) != expected.get(it) }) return true
-        return !matches(expected)
+        val inspection = inspectLease(expected)
+        check(!inspection.inconclusive) { "The managed OpenCode listener could not be verified; its registration was retained for recovery. ${inspection.reason}" }
+        if (!inspection.matches) com.intellij.openapi.diagnostic.logger<ServerOwnership>().info(
+            "OpenCode process identity changed; fresh connection verification is required. ${inspection.reason}")
+        return !inspection.matches
     }
 
     @Synchronized fun refresh(port: Int, takeover: Boolean = false, password: String? = null, username: String = "opencode"): Boolean {
@@ -322,11 +347,23 @@ internal class ServerOwnership(
         return inspect.matchesBirth(birth, inspect.birth(pid), lease.get("createdAt").asLong)
     }
 
-    private fun matches(lease: JsonObject): Boolean {
+    private data class Inspection(val matches: Boolean, val reason: String = "", val inconclusive: Boolean = false)
+
+    private fun matches(lease: JsonObject): Boolean = inspectLease(lease).matches
+
+    private fun inspectLease(lease: JsonObject): Inspection {
         val pid = lease.get("pid").asLong
-        return inspect.listeners(lease.get("port").asInt) == setOf(pid) &&
-            inspect.normalizeExecutable(lease.str("executable")!!) == inspect.normalizeExecutable(inspect.executable(pid)) &&
-            inspect.matchesBirth(lease.str("birthIdentity")!!, inspect.birth(pid), lease.get("createdAt").asLong)
+        val port = lease.get("port").asInt
+        val listeners = inspect.listeners(port)
+        if (listeners != setOf(pid)) return Inspection(false,
+            "Expected PID $pid on port $port; observed listening PIDs: ${listeners.sorted().joinToString(", ").ifEmpty { "none" }}.",
+            listeners.isEmpty() && inspect.alive(pid))
+        val executable = inspect.executable(pid)
+        if (inspect.normalizeExecutable(lease.str("executable")!!) != inspect.normalizeExecutable(executable))
+            return Inspection(false, "Executable identity changed for PID $pid.")
+        if (!inspect.matchesBirth(lease.str("birthIdentity")!!, inspect.birth(pid), lease.get("createdAt").asLong))
+            return Inspection(false, "Birth identity changed for PID $pid.")
+        return Inspection(true)
     }
 
     private fun retired(lease: JsonObject): Boolean {

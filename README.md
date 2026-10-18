@@ -174,6 +174,11 @@ Quota badges show remaining allowances and reset times when the provider exposes
 
 The Codex quota popup also shows the remaining credit balance when the usage endpoint provides it, even without active quota windows.
 
+Attach-only OpenCode V2 connections can show OpenAI subscription limits using the
+server's active Codex OAuth account. They never substitute the IDE's local account.
+ChatGPT token sharing cannot read usage limits or reset credits; use Codex browser
+login for those values. Other attached providers and V1 remain unsupported.
+
 When a poll fails, Varro may show the last successful snapshot for up to 15 minutes. Quota caches are project-local. Antigravity needs a detected local language-server port or the `ANTIGRAVITY_BASE_URL` and `ANTIGRAVITY_CSRF_TOKEN` environment variables, with a loopback IP address in the URL.
 
 Usage reports open as Markdown documents and cover retained history across projects for today, the last 7 and 30 days, and optionally all time. They read the local OpenCode database without starting the server and include prompt counts, tokens, cache usage, and assistant duration by provider and model. If the database is missing, reports fall back to REST history for up to 250 sessions.

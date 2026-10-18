@@ -77,7 +77,9 @@ Chat and quota polling use different paths. Chat goes through OpenCode; quota po
 
 - Confirm that the provider supports quota reporting. See [provider limits and usage](../README.md#provider-limits-and-usage) for the supported adapters.
 - Check the provider's existing login or API-key configuration. Supported adapters can refresh OAuth tokens, but invalid or revoked credentials need a new login.
-- Like upstream Varro, V2 quota polling reads the local `opencode.db` read-only, not V1's `auth.json` or `/api/credential`. The IDE must use the same `OPENCODE_DB` or `XDG_DATA_HOME` as OpenCode. Credentials are selected by active status, then newest creation time and ID. Reconnect the provider if its credentials are invalid. OpenCode manages V2 OAuth rotation. Attach-only connections do not support quota polling.
+- Managed/local V2 quota polling reads `opencode.db` read-only, not V1's `auth.json`. The IDE must use the same `OPENCODE_DB` or `XDG_DATA_HOME` as OpenCode. Credentials are selected by active status, then newest creation time and ID. OpenCode manages V2 OAuth rotation.
+- Attach-only V2 supports OpenAI subscription quotas through the connected server's authenticated `/api/credential` endpoint. Only its active OpenAI OAuth account is used. An unavailable endpoint, inactive account or API-key login cannot fall back to the IDE's database, local Codex login or environment tokens. Other attached providers and V1 remain unsupported.
+- ChatGPT token sharing cannot read numeric usage limits or reset credits. Reconnect OpenAI using **Codex browser (legacy)** to display them.
 - Check the IDE's HTTP proxy and certificate settings if the quota error concerns connectivity or TLS.
 - After a failed poll, a badge may show the last successful snapshot for up to 15 minutes. Rate-limit responses trigger backoff, so repeated requests may not immediately produce a new poll.
 

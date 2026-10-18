@@ -44,6 +44,7 @@ class OpenCodeHostServices(
         },
         onUpdate = onProviderLimitUpdate,
         apiVersion = { server.transport.apiVersion },
+        attachOnly = server::isAttachOnly,
     )
 
     fun clearProviderQuotaCache() {
@@ -260,11 +261,7 @@ class OpenCodeHostServices(
     // --- Provider quotas ------------------------------------------------------
 
     override fun providerLimit(providerId: String, modelId: String?): JsonObject =
-        if (server.isAttachOnly()) Json.obj(
-            "providerID" to providerId, "modelID" to modelId, "status" to "unsupported",
-            "source" to "provider", "checkedAt" to System.currentTimeMillis(),
-            "note" to "Provider quota checks need server-side credentials and are not supported in attach-only mode. Check usage with your provider or on the OpenCode server host.",
-        ) else providerQuotas.get(providerId, modelId, project.guessProjectDir()?.path ?: project.basePath)
+        providerQuotas.get(providerId, modelId, project.guessProjectDir()?.path ?: project.basePath)
 
     // --- Session diff summary -------------------------------------------------
 

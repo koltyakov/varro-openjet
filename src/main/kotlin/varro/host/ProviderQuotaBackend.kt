@@ -18,6 +18,7 @@ class ProviderQuotaBackend(
     private val onUpdate: (JsonObject) -> Unit = {},
     private val clock: () -> Long = System::currentTimeMillis,
     private val apiVersion: () -> Int = { 1 },
+    private val attachOnly: () -> Boolean = { false },
 ) : AutoCloseable {
     private data class Key(val provider: String, val model: String?, val directory: String?)
     private data class Entry(val identity: String, val status: JsonObject, val expires: Long)
@@ -62,17 +63,24 @@ class ProviderQuotaBackend(
     private fun load(key: Key, version: Long): JsonObject {
         var identity = ""
         var result = try {
+            val attached = attachOnly()
+            val v2 = apiVersion() == 2
+            if (attached && (!v2 || key.provider != "openai")) return status(key, "unsupported",
+                "Provider quota checks need server-side credentials and are not supported in attach-only mode. Check usage with your provider or on the OpenCode server host.")
             val metadata = request("GET", "/config/providers", null, key.directory)
             val providers = metadata.asObjectOrNull().elements("providers").ifEmpty { metadata.asArrayOrNull()?.toList().orEmpty() }
             val provider = providers.firstOrNull { it.asObjectOrNull().str("id") == key.provider }.asObjectOrNull()
                 ?: throw QuotaFailure("Provider was not found in OpenCode configuration")
-            val v2 = apiVersion() == 2
-            val auth = if (!QuotaAdapters.requiresOpenCodeAuth(key.provider)) JsonObject()
+            val auth = if (attached) attachedOpenAI(request("GET", "/api/credential", null, key.directory))
+                else if (!QuotaAdapters.requiresOpenCodeAuth(key.provider)) JsonObject()
                 else if (v2) credentials.v2AuthStore(provider) else credentials.authStore()
-            val token = credentials.token(provider, auth)
+            if (attached && auth.obj("openai").str("type") != "oauth") return status(key, "unsupported",
+                "OpenAI subscription limits require an active Codex OAuth connection on the OpenCode server.")
+            val token = if (attached) auth.obj("openai").str("access") else credentials.token(provider, auth)
             // Re-read identity before using a quota cache, so logging in with a new
             // account cannot show the previous account's remaining allowance.
-            identity = QuotaCredentials.fingerprint(Json.stringify(provider), Json.stringify(auth),
+            identity = if (attached) QuotaCredentials.fingerprint("attached-v2", Json.stringify(provider), Json.stringify(auth))
+                else QuotaCredentials.fingerprint(Json.stringify(provider), Json.stringify(auth),
                 Json.stringify(if (key.provider == "anthropic" && auth.obj("anthropic").str("type") != "oauth") credentials.read(credentials.claudePath) else null),
                 Json.stringify(if (key.provider == "openai") credentials.codex(auth) else null),
                 if (key.provider in setOf("google", "gemini")) credentials.gemini(key.provider, auth).orEmpty() else "",
@@ -134,6 +142,19 @@ class ProviderQuotaBackend(
             onUpdate(Json.obj("directory" to key.directory, "status" to result.deepCopy()))
             result
         }
+    }
+
+    /** Credentials stay host-only. No local database, files, inactive account or env fallback. */
+    private fun attachedOpenAI(response: JsonElement?): JsonObject {
+        val entries = response.asObjectOrNull().arr("data") ?: throw QuotaFailure("Invalid OpenCode V2 credential response")
+        val selected = entries.mapNotNull { it.asObjectOrNull() }.firstOrNull {
+            it.str("integrationID") == "openai" && it.bool("active") == true
+        }.obj("value")
+        if (selected.str("type") != "oauth" || selected.text("access") == null) return JsonObject()
+        return Json.obj("openai" to selected!!.deepCopy().apply {
+            val metadata = selected.obj("metadata")
+            (metadata.text("accountID") ?: metadata.text("accountId"))?.let { addProperty("accountId", it) }
+        })
     }
 
     private fun status(key: Key, state: String, note: String, source: String = "provider") = Json.obj(
