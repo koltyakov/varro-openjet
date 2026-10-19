@@ -25,6 +25,7 @@ import { InlineMessageImage } from './InlineMessageImage';
 import { FileTypeIcon } from './FileTypeIcon';
 import { lightBulbIcon, navArrowRightIcon } from '../lib/ui-icons';
 import { UiIcon } from './UiIcon';
+import { FormattedModelName } from './chat-input/ToolbarPickers';
 import { createDeferredPart, deferredFilePath } from '../lib/deferred-content';
 
 export function MessagePart(props: {
@@ -174,8 +175,7 @@ function ReasoningBlock(props: {
   const detailLabel = () => getReasoningDetailLabel(props.messageInfo);
   const headerLabel = () =>
     formatReasoningHeader(
-      subjectLabel() || (expanded() ? 'Reasoning' : reasoningDescription() || null),
-      detailLabel()
+      subjectLabel() || (expanded() ? 'Reasoning' : reasoningDescription() || null)
     );
   const durationLabel = () => formatReasoningDuration(props.part.time);
 
@@ -316,6 +316,14 @@ function ReasoningBlock(props: {
           <BrainTopicIcon class={isStreaming() ? 'thinking-in-progress' : undefined} />
           <span class={`thinking-label-text${isStreaming() ? ' shimmer-progress' : ''}`}>
             {headerLabel()}
+            <Show when={detailLabel()}>
+              {(label) => (
+                <>
+                  {' · '}
+                  <FormattedModelName name={label()} showFastTooltip={false} />
+                </>
+              )}
+            </Show>
           </span>
         </span>
         <Show when={durationLabel()}>

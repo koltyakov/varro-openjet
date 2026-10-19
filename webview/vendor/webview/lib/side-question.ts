@@ -22,7 +22,7 @@ export function sideQuestionPromptUnavailableReason(text: string): string | null
   const prompt = getSideQuestionText(text) ?? text;
   if (getSkillReferences(prompt).length) return 'Side questions cannot use skills';
   if (
-    !state.enableProblemsContext &&
+    !state.autoAttachProblems &&
     (prompt.includes(PROBLEMS_REFERENCE) ||
       state.inlineProblems.some((reference) => prompt.includes(problemReferenceMarker(reference))))
   ) {
@@ -75,7 +75,8 @@ function captureSideQuestionContext(question: string, sessionID: string): string
       attachedDiagnostics: state.attachedDiagnostics,
       inlineProblems: state.inlineProblems,
       issuesEnabled: state.issuesEnabled,
-      enableProblemsContext: state.enableProblemsContext,
+      autoAttachProblems: state.autoAttachProblems,
+      autoAttachActiveFile: state.autoAttachActiveFile,
     },
     sessionID,
     sourcePrompt,

@@ -884,7 +884,8 @@ export type InitialWebviewState = {
   promptCompletionModel?: string;
   debugShowQuotaWarning?: boolean;
   debugResetWarningDays?: number;
-  enableProblemsContext?: boolean;
+  autoAttachProblems?: boolean;
+  autoAttachActiveFile?: boolean;
   desktopSessionPaneSide?: DesktopSessionPaneSide;
   defaultPermissionMode?: PermissionMode;
   chatFontSize: number;

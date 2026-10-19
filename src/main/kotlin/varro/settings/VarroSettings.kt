@@ -51,8 +51,10 @@ class VarroSettings : PersistentStateComponent<VarroSettings> {
     var chatRemoteImages: String = "ask"
     /** Restored by new editor/window chats; each open chat keeps its own toggle. */
     var windowChatThemeReversed: Boolean = false
-    /** Mirrors `varro.chat.enableProblemsContext`; applies to automatic and explicit problem context. */
+    /** Mirrors `varro.chat.autoAttachProblems`; retain the persisted name for existing opt-outs. */
     var chatEnableProblemsContext: Boolean = true
+    /** Automatic file/selection context only. Explicit attachments and database context are unaffected. */
+    var chatAutoAttachActiveFile: Boolean = true
 
     /** `left` or `right`; which side the sessions pane takes on wide layouts. */
     var chatDesktopSessionPaneSide: String = "right"

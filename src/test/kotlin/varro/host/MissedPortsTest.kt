@@ -20,6 +20,30 @@ class MissedPortsTest {
     private fun item(id: String = "queued", owner: String = "sidebar", session: String = "s") =
         Json.obj("id" to id, "ownerViewId" to owner, "sessionId" to session, "text" to "do work", "paused" to false)
 
+    @Test fun `queue persistence retains automatic attachment identity without dropping explicit files`() {
+        val queued = item().apply {
+            add("queuedContext", Json.obj(
+                "currentDocumentEnabled" to true,
+                "autoAttachedFilePath" to "/workspace/app.kt",
+                "editorContext" to Json.obj("workspacePath" to "/workspace"),
+            ))
+            add("droppedFiles", Json.array(listOf(
+                Json.obj("path" to "/workspace/app.kt", "type" to "file"),
+                Json.obj("path" to "/workspace/manual.kt", "type" to "file", "attachmentSequence" to 1),
+            )))
+        }
+        val path = temporary.root.toPath().resolve("queue.json")
+        val queue = QueuedDispatches(path, JsonArray())
+        queue.update("sidebar", Json.array(listOf(queued)))
+        queued.obj("queuedContext")!!.addProperty("autoAttachedFilePath", "/changed.kt")
+        val restored = QueuedDispatches(path, JsonArray()).messages()[0].asJsonObject
+        assertEquals("/workspace/app.kt", restored.obj("queuedContext").str("autoAttachedFilePath"))
+        assertEquals(2, restored.arr("droppedFiles")!!.size())
+        val store = VarroStore().apply { queuedMessages = Json.array(listOf(restored)) }
+        val reloaded = VarroStore().apply { loadState(store.state) }
+        assertEquals(restored, reloaded.queuedMessages[0])
+    }
+
     @Test fun `queue admissions survive crashes and suppress stale renderer snapshots`() {
         val path = temporary.root.toPath().resolve("queue.json")
         val initial = Json.array(listOf(item()))

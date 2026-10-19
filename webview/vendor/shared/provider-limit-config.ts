@@ -14,7 +14,8 @@ export type ExtensionConfigState = {
   promptCompletionModel?: string;
   debugShowQuotaWarning?: boolean;
   debugResetWarningDays?: number;
-  enableProblemsContext?: boolean;
+  autoAttachProblems?: boolean;
+  autoAttachActiveFile?: boolean;
   desktopSessionPaneSide: DesktopSessionPaneSide;
   defaultPermissionMode: PermissionMode;
   chatFontSize: number;
@@ -32,7 +33,8 @@ export type WebviewConfigUpdatePayload = Pick<
   | 'promptCompletionModel'
   | 'debugShowQuotaWarning'
   | 'debugResetWarningDays'
-  | 'enableProblemsContext'
+  | 'autoAttachProblems'
+  | 'autoAttachActiveFile'
   | 'desktopSessionPaneSide'
   | 'defaultPermissionMode'
 >;

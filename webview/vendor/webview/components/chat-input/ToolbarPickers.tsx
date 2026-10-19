@@ -1017,7 +1017,12 @@ export function ModelPickerButton(props: {
 
 function ModelSpeedIcons(props: { count: number }) {
   return (
-    <span class="model-speed-icons" role="img" aria-label={FAST_MODE_COST_WARNING}>
+    <span
+      class="model-speed-icons"
+      classList={{ 'model-speed-icons-ultrafast': props.count === 2 }}
+      role="img"
+      aria-label={FAST_MODE_COST_WARNING}
+    >
       <For each={Array.from({ length: props.count }, (_, index) => index)}>
         {() => <UiIcon source={flashSolidIcon} class="model-speed-icon" width={12} height={12} />}
       </For>
@@ -1037,10 +1042,10 @@ export function FormattedModelName(props: {
           <>
             <Show
               when={props.showFastTooltip !== false}
-              fallback={<ModelSpeedIcons count={part === '⚡⚡⚡' ? 3 : 1} />}
+              fallback={<ModelSpeedIcons count={part === '⚡⚡⚡' ? 2 : 1} />}
             >
               <Tooltip content={FAST_MODE_COST_WARNING} delay={300}>
-                <ModelSpeedIcons count={part === '⚡⚡⚡' ? 3 : 1} />
+                <ModelSpeedIcons count={part === '⚡⚡⚡' ? 2 : 1} />
               </Tooltip>
             </Show>
             <Show when={props.showSpeedLabel}>

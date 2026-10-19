@@ -1458,8 +1458,22 @@
   vertical-align: -2px;
 }
 
-.model-speed-icons > .model-speed-icon + .model-speed-icon {
-  margin-left: -3px;
+.model-speed-icons-ultrafast {
+  isolation: isolate;
+}
+
+.model-speed-icons-ultrafast > .model-speed-icon {
+  position: relative;
+  z-index: 2;
+}
+
+.model-speed-icons-ultrafast > .model-speed-icon + .model-speed-icon {
+  margin-left: -8px;
+}
+
+.model-speed-icons-ultrafast > .model-speed-icon:nth-child(2) {
+  z-index: 1;
+  opacity: 0.4;
 }
 
 .model-speed-label {

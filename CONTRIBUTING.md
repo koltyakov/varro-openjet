@@ -6,6 +6,8 @@ Start with the [architecture guide](docs/architecture.md) for the component map,
 
 Local development needs JDK 21 and the Node/npm versions pinned in [`webview/package.json`](webview/package.json). Volta selects those Node/npm versions automatically. Use the repository's Gradle wrapper.
 
+npm 12 blocks dependency install scripts by default. The webview's `allowScripts` approves the locked esbuild and optional fsevents installers. After dependency updates, review `npm install-scripts ls` before approving new versions. OpenJet has no Git dependencies and does not need upstream's Git allowlist.
+
 From the repository root:
 
 ```bash

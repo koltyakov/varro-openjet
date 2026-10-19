@@ -5578,6 +5578,25 @@ export function MessageList() {
     setAppendBottomReserve(0);
   }
 
+  function releaseEmptyPointerScrollRange() {
+    if (!containerRef || !pointerScrollOwnershipActive) return;
+    const reserve = untrack(appendBottomReserve);
+    if (reserve <= 0.5) return;
+    const reserveElement = trackRef?.querySelector<HTMLElement>('.append-scroll-bottom-reserve');
+    if (
+      !reserveElement ||
+      reserveElement.getBoundingClientRect().top > containerRef.getBoundingClientRect().top
+    ) {
+      return;
+    }
+    // Measurement can shorten a virtual prefix by more than a viewport. Keeping that obsolete
+    // range must not let a native drag leave every message above the viewport. There is no painted
+    // anchor to preserve here; let the browser clamp to real content, without a competing scroll write.
+    pointerScrollRange = Math.max(0, bottomScrollTop() - reserve);
+    appendBottomReserveTarget = 0;
+    setAppendBottomReserve(0);
+  }
+
   function startAppendScrollTransition(sessionId: string) {
     if (!containerRef || stickyNavigationOwnsScroll()) return;
     pendingMeasuredAppendScroll = false;
@@ -6058,6 +6077,7 @@ export function MessageList() {
 
   function onScroll() {
     if (!containerRef) return;
+    releaseEmptyPointerScrollRange();
     const autoScrollEnabled = autoScroll();
     const now = performance.now();
     const top = clampEditScrollTop(containerRef.scrollTop);
@@ -6799,10 +6819,16 @@ export function MessageList() {
   }
 
   function releasePointerScrollOwnership() {
+    const ownedScroll = pointerScrollOwnershipActive;
+    releaseEmptyPointerScrollRange();
     pointerScrollOwnershipActive = false;
     pointerScrollRange = 0;
     containerRef?.style.removeProperty('overflow-anchor');
     if (containerRef) delete containerRef.dataset.pointerScrollOwned;
+    // Scroll events deliberately retain the whole range while the thumb is held. Release its
+    // offscreen reserve now: pointerup need not produce another scroll or resize event, and a
+    // subsequent drag would otherwise grab that stale range and land below every message.
+    if (ownedScroll) releaseOffscreenBottomReserve();
   }
 
   function handleFocusIn(event: FocusEvent) {
@@ -7448,6 +7474,7 @@ export function MessageList() {
         // Replacement content consumes reserve. Counting both as new range would retain another
         // tray's height on every completion throughout the hold.
         pointerScrollRange = Math.max(pointerScrollRange, range - untrack(appendBottomReserve));
+        releaseEmptyPointerScrollRange();
       }
       if (trackChanged && !appendReserveReconcileFrame) {
         // Consuming a reserve changes the observed track itself. A microtask still runs

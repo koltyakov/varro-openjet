@@ -72,6 +72,11 @@ class VarroConfigurable : BoundConfigurable("Varro") {
 
         group("Chat") {
             row {
+                checkBox("Automatically attach the active file or editor selection")
+                    .bindSelected(settings::chatAutoAttachActiveFile)
+                    .comment("Applies to queued messages too. Manually attached files and database context are unaffected.")
+            }
+            row {
                 checkBox("Include IDE problems in chat context")
                     .bindSelected(settings::chatEnableProblemsContext)
             }

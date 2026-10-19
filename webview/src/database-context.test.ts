@@ -194,6 +194,35 @@ describe('DataGrip context contract', () => {
     expect(JSON.stringify(sent)).toContain('readme.md');
   });
 
+  it('keeps database context when automatic file attachment is disabled', () => {
+    const sent = buildSessionSendBody(
+      {
+        selectedAgent: null,
+        selectedModel: null,
+        providers: [],
+        providerDefaults: {},
+        modelVariantSelections: {},
+        terminalSelection: null,
+        droppedFiles: [],
+        clipboardImages: [],
+        autoAttachActiveFile: false,
+        editorContext: adaptContext({
+          workspacePath: '/project',
+          activeFile: null,
+          selection: null,
+          diagnostics: [],
+          databaseContext: consoleContext,
+          databaseEnvironment: environment,
+        }),
+      },
+      'ses-test',
+      'Explain the query',
+      () => true
+    );
+    expect(JSON.stringify(sent)).toContain('select * from orders');
+    expect(JSON.stringify(sent)).toContain('Demo SQLite');
+  });
+
   it('freezes datasource inventory and merges it without replacing the console connection', () => {
     const original = structuredClone(environment);
     const queued = cloneDatabaseContext(original)!;

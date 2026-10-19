@@ -67,7 +67,7 @@ export function getSlashCommands(props: {
   ]);
 
   const commands: SlashCommand[] = [
-    ...(state.enableProblemsContext
+    ...(state.autoAttachProblems
       ? [
           {
             name: PROBLEMS_COMMAND_NAME,

@@ -116,8 +116,11 @@ export function createMountBridgeOperations(deps: {
         },
         setConfig: (payload) => {
           applyChatFontConfig(payload);
-          if (payload.enableProblemsContext !== undefined) {
-            appStore.setState('enableProblemsContext', payload.enableProblemsContext);
+          if (payload.autoAttachProblems !== undefined) {
+            appStore.setState('autoAttachProblems', payload.autoAttachProblems);
+          }
+          if (payload.autoAttachActiveFile !== undefined) {
+            appStore.setState('autoAttachActiveFile', payload.autoAttachActiveFile);
           }
           if (payload.showFileDiffs !== undefined) {
             uiStore.setShowFileDiffs(payload.showFileDiffs);

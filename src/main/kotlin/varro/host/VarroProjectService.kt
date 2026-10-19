@@ -373,7 +373,7 @@ class VarroProjectService(private val project: Project) : Disposable {
 
             // Configuration mirrored from settings.
             addProperty("showFileDiffs", settings.chatShowFileDiffs)
-            addProperty("enableProblemsContext", settings.chatEnableProblemsContext)
+            addChatContextConfig(settings)
             addProperty("expandThinking", settings.chatExpandThinking)
             addProperty("showChangedFiles", settings.chatShowChangedFiles)
             addProperty("showTurnTimer", settings.chatShowTurnTimer)
@@ -414,7 +414,6 @@ class VarroProjectService(private val project: Project) : Disposable {
             "config/update",
             Json.obj(
                 "showFileDiffs" to settings.chatShowFileDiffs,
-                "enableProblemsContext" to settings.chatEnableProblemsContext,
                 "expandThinking" to settings.chatExpandThinking,
                 "showChangedFiles" to settings.chatShowChangedFiles,
                 "showTurnTimer" to settings.chatShowTurnTimer,
@@ -426,7 +425,7 @@ class VarroProjectService(private val project: Project) : Disposable {
                 "chatFontSize" to resolvedChatFontSize(),
                 "chatEditorFontSize" to resolvedEditorFontSize(),
                 "chatFontFamily" to settings.chatFontFamily,
-            ),
+            ).apply { addChatContextConfig(settings) },
         )
     }
 

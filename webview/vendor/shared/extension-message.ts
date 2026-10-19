@@ -381,8 +381,10 @@ export function parseExtensionMessage<T>(value: T): ExtensionMessage | null {
         payload.debugResetWarningDays >= 5
       )
         config.debugResetWarningDays = payload.debugResetWarningDays;
-      if (isBoolean(payload.enableProblemsContext))
-        config.enableProblemsContext = payload.enableProblemsContext;
+      if (isBoolean(payload.autoAttachProblems))
+        config.autoAttachProblems = payload.autoAttachProblems;
+      if (isBoolean(payload.autoAttachActiveFile))
+        config.autoAttachActiveFile = payload.autoAttachActiveFile;
       return { type, payload: config };
     }
 

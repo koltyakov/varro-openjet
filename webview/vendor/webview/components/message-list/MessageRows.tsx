@@ -30,6 +30,7 @@ import type { ToolCallPermissionMatch } from '../../lib/tool-call-matching';
 import type { MessageEntry, QuestionRequest, ToolPart } from '../../types';
 import { ForkIcon } from '../ForkIcon';
 import { Message as MessageComponent } from '../Message';
+import { FormattedModelName } from '../chat-input/ToolbarPickers';
 import { projectAutomaticActionMessage } from '../message/UserMessageContent';
 import { SessionPauseDivider, SessionResumeButton } from '../message/SessionPauseDivider';
 import type { SessionPause } from '../../lib/session-pauses';
@@ -260,18 +261,26 @@ export function MessageRow(
                 content={
                   <div class="model-change-tooltip">
                     <span>From: </span>
-                    <span>{change().from}</span>
+                    <span>
+                      <FormattedModelName name={change().from} showFastTooltip={false} />
+                    </span>
                     <span>To: </span>
-                    <span>{change().to}</span>
+                    <span>
+                      <FormattedModelName name={change().to} showFastTooltip={false} />
+                    </span>
                   </div>
                 }
               >
                 <span class="model-change-label" tabindex="0">
                   <span class="model-change-normal">
-                    {change().normalFrom} → {change().normalTo}
+                    <FormattedModelName name={change().normalFrom} showFastTooltip={false} />
+                    {' → '}
+                    <FormattedModelName name={change().normalTo} showFastTooltip={false} />
                   </span>
                   <span class="model-change-narrow">
-                    {change().narrowFrom} → {change().narrowTo}
+                    <FormattedModelName name={change().narrowFrom} showFastTooltip={false} />
+                    {' → '}
+                    <FormattedModelName name={change().narrowTo} showFastTooltip={false} />
                   </span>
                 </span>
               </Tooltip>

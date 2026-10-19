@@ -14,4 +14,16 @@ class ProblemsContextSettingsTest {
         restored.loadState(VarroSettings())
         assertTrue(restored.chatEnableProblemsContext)
     }
+
+    @Test fun `active file context defaults on and persists independently of problems`() {
+        val settings = VarroSettings()
+        assertTrue(settings.chatAutoAttachActiveFile)
+        settings.chatAutoAttachActiveFile = false
+        val restored = VarroSettings().apply { loadState(settings.getState()) }
+        assertFalse(restored.chatAutoAttachActiveFile)
+        assertTrue(restored.chatEnableProblemsContext)
+        restored.loadState(VarroSettings().apply { chatEnableProblemsContext = false })
+        assertTrue(restored.chatAutoAttachActiveFile)
+        assertFalse(restored.chatEnableProblemsContext)
+    }
 }

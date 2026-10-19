@@ -1,6 +1,7 @@
-import { createSignal } from 'solid-js';
+import { batch, createSignal } from 'solid-js';
 import {
   claimQueuedMessageDispatch,
+  error as sendError,
   getSelectedModelForSession,
   getSelectedAgentForSession,
   isActiveSessionWorking,
@@ -9,6 +10,7 @@ import {
   releaseQueuedMessageDispatch,
   removeQueuedMessage,
   replaceQueuedMessage,
+  setError,
   setState,
   state,
 } from '../../lib/state';
@@ -46,6 +48,17 @@ const [failedSteerQueuedMessageIds, setFailedSteerQueuedMessageIds] = createSign
 >(new Set());
 
 export { steeringQueuedMessageIds, failedSteerQueuedMessageIds };
+
+export function getQueuedMessageWorkspaceDirectory(
+  item: (typeof state.queuedMessages)[number]
+): string | undefined {
+  // The selected folder can differ from a workspace-scoped session's owning directory.
+  return (
+    (state.sessions.find((session) => session.id === item.sessionId)?.directory ??
+      item.queuedContext?.editorContext.workspacePath) ||
+    undefined
+  );
+}
 
 type QueuedModelSnapshot = NonNullable<QueuedContextSnapshot['editorContext']['queuedModel']>;
 
@@ -157,9 +170,11 @@ export function acceptQueuedSteer(sessionId: string, promptText: string | null) 
       matchesQueuedPromptText(queued.text, promptText)
   );
   if (!item) return;
-  updateQueuedSteerId(setSteeringQueuedMessageIds, item.id, false);
-  updateQueuedSteerId(setFailedSteerQueuedMessageIds, item.id, false);
-  removeQueuedMessage(item.id);
+  batch(() => {
+    updateQueuedSteerId(setSteeringQueuedMessageIds, item.id, false);
+    updateQueuedSteerId(setFailedSteerQueuedMessageIds, item.id, false);
+    removeQueuedMessage(item.id);
+  });
 }
 
 export async function sendQueuedAsSteer(item: (typeof state.queuedMessages)[number]) {
@@ -169,16 +184,18 @@ export async function sendQueuedAsSteer(item: (typeof state.queuedMessages)[numb
   if (steeringQueuedMessageIds().has(item.id)) return;
   updateQueuedSteerId(setSteeringQueuedMessageIds, item.id, true);
   updateQueuedSteerId(setFailedSteerQueuedMessageIds, item.id, false);
+  if (state.activeSessionId === item.sessionId) setError(null);
   const priorAttemptId = item.messageId;
   const messageId = priorAttemptId ?? createOpenCodeMessageID();
-  const workspaceDirectory = item.queuedContext?.editorContext.workspacePath ?? undefined;
+  const workspaceDirectory = getQueuedMessageWorkspaceDirectory(item);
   if (!priorAttemptId) replaceQueuedMessage(item.id, { ...item, messageId });
   let sent = false;
   let dispatchLease: number | null = null;
   try {
     if (priorAttemptId) {
       dispatchLease = await claimQueuedMessageDispatch(item, 'steer');
-      if (dispatchLease === null) return;
+      if (dispatchLease === null)
+        throw new Error('Could not claim queued message dispatch. Try again.');
       const admitted = await queuedMessageWasAdmitted(
         item.sessionId,
         priorAttemptId,
@@ -193,7 +210,8 @@ export async function sendQueuedAsSteer(item: (typeof state.queuedMessages)[numb
       }
     }
     dispatchLease = await claimQueuedMessageDispatch(item, 'steer');
-    if (dispatchLease === null) return;
+    if (dispatchLease === null)
+      throw new Error('Could not claim queued message dispatch. Try again.');
     if (state.messagesLoading && state.activeSessionId === item.sessionId) return;
     if (!canSteerQueuedMessage(item)) return;
     sent = await sendWithQueuedModelSnapshot(item, async (selectedModel) => {
@@ -220,16 +238,24 @@ export async function sendQueuedAsSteer(item: (typeof state.queuedMessages)[numb
       if (selectedModel) options.selectedModel = selectedModel;
       return (await sendMessage(item.text, options)) !== false;
     });
-  } catch {
+  } catch (error) {
     sent = false;
+    if (state.activeSessionId === item.sessionId) {
+      setError(
+        `Could not send steering message: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
   } finally {
     if (!sent && dispatchLease !== null) releaseQueuedMessageDispatch(item, dispatchLease);
-    updateQueuedSteerId(setSteeringQueuedMessageIds, item.id, false);
+    batch(() => {
+      if (sent) removeQueuedMessage(item.id);
+      updateQueuedSteerId(setSteeringQueuedMessageIds, item.id, false);
+    });
   }
-  if (sent) {
-    removeQueuedMessage(item.id);
-    return;
-  }
+  if (sent) return;
   if (!state.queuedMessages.some((queued) => queued.id === item.id)) return;
+  if (state.activeSessionId === item.sessionId) {
+    setError(sendError() ?? 'Could not send steering message. Try again.');
+  }
   updateQueuedSteerId(setFailedSteerQueuedMessageIds, item.id, true);
 }

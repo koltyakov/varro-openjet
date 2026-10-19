@@ -123,7 +123,8 @@ export interface AppState {
   emptyStateLogoUri: string;
   currentDocumentEnabled: boolean;
   issuesEnabled: boolean;
-  enableProblemsContext: boolean;
+  autoAttachProblems: boolean;
+  autoAttachActiveFile: boolean;
   promptCompletionModel: string;
   remoteImages: RemoteImageMode;
   debugShowQuotaWarning: boolean;
@@ -392,7 +393,8 @@ export function createAppState(): AppStateInstance {
       !discardQueuedEditDraft && Array.isArray(storedInlineProblems)
         ? storedInlineProblems.filter(isInlineProblem)
         : [],
-    enableProblemsContext: initialWebviewState.enableProblemsContext ?? true,
+    autoAttachProblems: initialWebviewState.autoAttachProblems ?? true,
+    autoAttachActiveFile: initialWebviewState.autoAttachActiveFile ?? true,
     promptCompletionModel: initialWebviewState.promptCompletionModel ?? '',
     remoteImages: parseRemoteImageMode(initialWebviewState.remoteImages),
     debugShowQuotaWarning: initialWebviewState.debugShowQuotaWarning ?? false,

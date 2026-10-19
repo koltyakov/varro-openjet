@@ -302,6 +302,9 @@ function normalizeStoredQueuedMessage<T>(value: T): QueuedMessage | null {
       ? {
           editorContext: queuedContextRecord.editorContext,
           currentDocumentEnabled: queuedContextRecord.currentDocumentEnabled,
+          autoAttachedFilePath: isString(queuedContextRecord.autoAttachedFilePath)
+            ? queuedContextRecord.autoAttachedFilePath
+            : undefined,
           issuesEnabled: isBoolean(queuedContextRecord.issuesEnabled)
             ? queuedContextRecord.issuesEnabled
             : undefined,

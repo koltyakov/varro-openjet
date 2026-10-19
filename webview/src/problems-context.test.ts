@@ -32,7 +32,8 @@ describe('JetBrains problems context', () => {
     const message = {
       type: 'config/update',
       payload: {
-        enableProblemsContext: false,
+        autoAttachProblems: false,
+        autoAttachActiveFile: false,
         desktopSessionPaneSide: 'right',
         defaultPermissionMode: 'auto',
         chatFontSize: 13,
