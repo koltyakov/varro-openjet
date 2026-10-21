@@ -533,6 +533,8 @@ export const SERVER_EVENT_NAMES = [
   'project.updated',
   'session.created',
   'session.updated',
+  'session.archived',
+  'session.unarchived',
   'session.deleted',
   'session.status',
   'session.error',

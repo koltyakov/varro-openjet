@@ -283,7 +283,7 @@ object ApiRoutes {
         route(Endpoints.PERMISSION_SERVER_MEMORY) { request, _ ->
             when (request.method) {
                 "GET" -> request.onlyQuery("sessionId", "directory")
-                "DELETE" -> request.optionalDirectory()
+                "DELETE", "PATCH" -> request.optionalDirectory()
                 else -> false
             }
         },

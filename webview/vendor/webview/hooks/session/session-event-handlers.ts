@@ -333,6 +333,7 @@ export function registerSessionEventHandlers(deps: EventHandlerDependencies) {
   // delta fragments carry no `seq`). Lets us resync only when a durable event was
   // actually missed, instead of defensively on every progress event.
   const lastSeqBySession = new Map<string, number>();
+  const archiveRefreshes = new Map<string, ServerEvent>();
   // A lower seq may be a stale replay or a server reset. Keep the old cursor until
   // canonical repair succeeds and the lower sequence advances.
   const pendingSequenceResets = new Map<string, { seq: number; repaired: boolean }>();
@@ -347,6 +348,7 @@ export function registerSessionEventHandlers(deps: EventHandlerDependencies) {
   let pendingPermissionSync = false;
   let serverReconciliation: Promise<void | boolean | object> | null = null;
   const removeDeletedSession = (sessionId: string) => {
+    archiveRefreshes.delete(sessionId);
     settledIdleSessions.delete(sessionId);
     const retryTimer = transientConnectionRetryTimers.get(sessionId);
     if (retryTimer !== undefined) clearTimeout(retryTimer);
@@ -1255,6 +1257,7 @@ export function registerSessionEventHandlers(deps: EventHandlerDependencies) {
 
   cleanups.push(() => {
     disposed = true;
+    archiveRefreshes.clear();
     messageSyncs.clear();
     pendingTranscriptMessageSyncs.clear();
     pendingTerminalStepSettles.clear();
@@ -1343,6 +1346,8 @@ export function registerSessionEventHandlers(deps: EventHandlerDependencies) {
 
   cleanups.push(
     serverEvents.on('session.deleted', (data) => {
+      const sessionID = getServerEventSessionId(data);
+      if (sessionID) archiveRefreshes.delete(sessionID);
       if (observeSequence(data) === 'gap') return;
       // SAFETY: The surrounding shape or discriminator check establishes the owner type contract used below.
       const id = (data.properties?.info as { id: string } | undefined)?.id;
@@ -1351,6 +1356,29 @@ export function registerSessionEventHandlers(deps: EventHandlerDependencies) {
       }
     })
   );
+
+  for (const eventName of ['session.archived', 'session.unarchived'] as const) {
+    cleanups.push(
+      serverEvents.on(eventName, (event) => {
+        const sessionID = getEventString(event.properties, 'sessionID');
+        if (!sessionID) return;
+        archiveRefreshes.set(sessionID, event);
+        if (archiveRefreshes.size > MAX_TRACKED_SESSION_SEQUENCES)
+          archiveRefreshes.delete(archiveRefreshes.keys().next().value!);
+        if (observeSequence(event) === 'gap') return;
+        // Native archive events contain only an ID. A full snapshot also restores
+        // sessions removed from the catalog and clears the old archive timestamp.
+        void deps
+          .syncSession(sessionID, {
+            shouldApply: () => !disposed && archiveRefreshes.get(sessionID) === event,
+          })
+          .catch((error) => deps.logError('syncSession after archive change', error))
+          .finally(() => {
+            if (archiveRefreshes.get(sessionID) === event) archiveRefreshes.delete(sessionID);
+          });
+      })
+    );
+  }
 
   cleanups.push(
     serverEvents.on('session.status', (data) => {

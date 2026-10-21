@@ -5,6 +5,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import solid from 'vite-plugin-solid';
 import { defineConfig, type Plugin } from 'vite';
+import { staticImports } from './scripts/static-imports.mjs';
 
 const projectRoot = dirname(fileURLToPath(import.meta.url));
 const gradleProperties = readFileSync(resolve(projectRoot, '../gradle.properties'), 'utf8');
@@ -20,6 +21,7 @@ if (!pluginVersion) throw new Error('Missing pluginVersion in gradle.properties'
 const assetVersionPlugin: Plugin = {
   name: 'varro-webview-asset-version',
   generateBundle(_options, bundle) {
+    this.emitFile({ type: 'asset', fileName: 'webview.imports.json', source: JSON.stringify(staticImports(bundle)) });
     const hash = createHash('sha256');
     for (const fileName of Object.keys(bundle).toSorted()) {
       const output = bundle[fileName]!;

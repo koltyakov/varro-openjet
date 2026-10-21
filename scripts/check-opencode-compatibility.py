@@ -20,7 +20,7 @@ SUITES = (
 
 def released_version(value):
     if not re.fullmatch(r"2\.\d+\.\d+", value):
-        raise argparse.ArgumentTypeError("Use an exact released V2 version, such as 2.0.32")
+        raise argparse.ArgumentTypeError("Use an exact released V2 version, such as 2.1.1")
     return value
 
 

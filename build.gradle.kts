@@ -65,15 +65,20 @@ intellijPlatform {
 
     pluginVerification {
         ides {
-            // Cover every supported branch, including the oldest JCEF runtime.
-            create("IU", "2025.2.6.3")
-            create("IU", "2025.3.6.1")
-            create("IU", "2026.1.5")
-            create("IU", "2026.2.3")
-            create("IU", "263.6800.24")
-            // Gradle 2.18.1 currently fails to resolve DataGrip's DG release feed
-            // through its DB product code. A local installation still verifies it.
-            providers.gradleProperty("datagripVerificationPath").orNull?.let { local(it) }
+            val selected = providers.gradleProperty("verificationIde").orNull
+            if (selected != null) {
+                create("IU", selected)
+            } else {
+                // Cover every supported branch, including the oldest JCEF runtime.
+                create("IU", "2025.2.6.3")
+                create("IU", "2025.3.6.1")
+                create("IU", "2026.1.5")
+                create("IU", "2026.2.3")
+                create("IU", "263.6800.24")
+                // Gradle 2.18.1 currently fails to resolve DataGrip's DG release feed
+                // through its DB product code. A local installation still verifies it.
+                providers.gradleProperty("datagripVerificationPath").orNull?.let { local(it) }
+            }
         }
     }
 }
@@ -129,6 +134,7 @@ val buildWebview = tasks.register<Exec>("buildWebview") {
 
     inputs.dir(webviewDir.dir("src"))
     inputs.dir(webviewDir.dir("vendor"))
+    inputs.dir(webviewDir.dir("scripts"))
     inputs.files(
         layout.projectDirectory.file("gradle.properties"),
         webviewDir.file("package.json"),
@@ -175,6 +181,26 @@ tasks.named("check") {
     dependsOn(testWebviewHost)
 }
 
+val typecheckWebview = tasks.register<Exec>("typecheckWebview") {
+    group = "verification"
+    description = "Type-check the host bridge and vendored UI."
+    dependsOn(installWebviewDeps)
+    workingDir = webviewDir.asFile
+    commandLine(npmCommand("run", "typecheck"))
+    onlyIf { !skipWebview }
+}
+
+val verifyWebviewSources = tasks.register<Exec>("verifyWebviewSources") {
+    group = "verification"
+    description = "Verify the upstream snapshot hash without modifying vendored files."
+    workingDir = webviewDir.asFile
+    commandLine(npmCommand("run", "sync:check"))
+    onlyIf { !skipWebview }
+}
+
+tasks.named("check") { dependsOn(typecheckWebview, verifyWebviewSources) }
+buildWebview { dependsOn(verifyWebviewSources) }
+
 tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach {
     compilerOptions {
         jvmTarget = JvmTarget.JVM_21
@@ -203,6 +229,9 @@ tasks.test {
 }
 
 tasks.named<org.jetbrains.intellij.platform.gradle.tasks.RunIdeTask>("runIde") {
+    providers.gradleProperty("hostBenchmarkDirectory").orNull?.let {
+        systemProperty("varro.hostBenchmark.directory", file(it).absolutePath)
+    }
     providers.gradleProperty("scrollBenchmarkUrl").orNull?.let {
         systemProperty("varro.scrollBenchmark.url", it)
     }

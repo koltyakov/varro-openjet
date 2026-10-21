@@ -18,8 +18,7 @@ import com.intellij.openapi.project.guessProjectDir
 import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.openapi.vfs.VfsUtil
 import com.intellij.openapi.vfs.VirtualFile
-import com.intellij.psi.search.FilenameIndex
-import com.intellij.psi.search.GlobalSearchScope
+import com.intellij.openapi.roots.ProjectFileIndex
 import com.intellij.testFramework.LightVirtualFile
 import com.intellij.diff.DiffContentFactory as DiffFactory
 import com.intellij.diff.DiffManager
@@ -45,9 +44,6 @@ import java.util.concurrent.atomic.AtomicReference
 class EditorIntegration(private val project: Project) {
 
     private val log = logger<EditorIntegration>()
-
-    /** Cache for file search, mirroring upstream's short-lived ranking cache. */
-    private val searchCache = AtomicReference<Pair<Long, List<VirtualFile>>?>(null)
 
     private fun projectRoot(): String? = project.guessProjectDir()?.path ?: project.basePath
 
@@ -227,35 +223,41 @@ class EditorIntegration(private val project: Project) {
     /**
      * Ranked file search for the composer's `@` picker.
      *
-     * Upstream uses `vscode.workspace.findFiles` with a short-lived cache and a
-     * ranking heuristic; the JetBrains equivalent is the filename index, which is
-     * already maintained and avoids walking the tree per keystroke.
+     * Uses project VFS entries without reading file contents or waiting for smart mode.
+     * Non-blocking read actions yield to writes; newer queries cancel older scans.
      */
-    fun searchFiles(query: String, limit: Int): JsonArray {
+    fun searchFiles(query: String, limit: Int, isCancelled: () -> Boolean = { false }): JsonArray {
         val root = projectRoot()
         val normalized = query.trim().lowercase()
         val results = JsonArray()
 
-        val files = runCatching {
-            ApplicationManager.getApplication().runReadAction<List<VirtualFile>> {
+        val files = try {
+            com.intellij.openapi.application.ReadAction.nonBlocking<List<VirtualFile>> {
                 if (normalized.isEmpty()) {
                     recentFiles()
                 } else {
-                    FilenameIndex.getAllFilesByExt(project, "", GlobalSearchScope.projectScope(project))
-                        .asSequence()
-                        .filter { !it.isDirectory }
-                        .filter { matches(it, normalized, root) }
-                        .sortedBy { rank(it, normalized) }
-                        .take(limit)
-                        .toList()
+                    val ranked = FileSearch<VirtualFile>(normalized, limit, isCancelled)
+                    // The project file index also works during indexing and excludes library/excluded roots.
+                    ProjectFileIndex.getInstance(project).iterateContent { file ->
+                        com.intellij.openapi.progress.ProgressManager.checkCanceled()
+                        if (isCancelled()) throw java.util.concurrent.CancellationException("File search superseded")
+                        if (!file.isDirectory && file.isValid) {
+                            ranked.offer(file, WorkspacePaths.relativeWithin(file.path, root) ?: file.path)
+                        }
+                        true
+                    }
+                    ranked.results()
                 }
-            }
-        }.getOrElse { failure ->
+            }.expireWith(project).expireWhen(isCancelled)
+                .submit(com.intellij.util.concurrency.AppExecutorUtil.getAppExecutorService()).get()
+        } catch (failure: Exception) {
+            if (isCancelled() || failure is com.intellij.openapi.progress.ProcessCanceledException ||
+                failure is java.util.concurrent.CancellationException) throw java.util.concurrent.CancellationException("File search cancelled")
             log.warn("File search failed", failure)
             emptyList()
         }
 
-        files.take(limit).forEach { file ->
+        files.take(limit.coerceIn(1, 100)).forEach { file ->
             results.add(
                 Json.obj(
                     "path" to file.path,
@@ -271,27 +273,6 @@ class EditorIntegration(private val project: Project) {
         com.intellij.openapi.fileEditor.impl.EditorHistoryManager.getInstance(project)
             .fileList
             .filter { it.isValid && !it.isDirectory && it.isInLocalFileSystem }
-
-    private fun matches(file: VirtualFile, query: String, root: String?): Boolean {
-        val relative = WorkspacePaths.relativeWithin(file.path, root) ?: file.name
-        return relative.lowercase().contains(query) || file.name.lowercase().contains(query)
-    }
-
-    /**
-     * Lower ranks sort first: an exact filename prefix beats a filename match,
-     * which beats a path-only match. Shallower paths win ties, matching how the
-     * VS Code picker feels.
-     */
-    private fun rank(file: VirtualFile, query: String): Int {
-        val name = file.name.lowercase()
-        val depth = file.path.count { it == '/' || it == '\\' }
-        return when {
-            name == query -> 0
-            name.startsWith(query) -> 1_000 + depth
-            name.contains(query) -> 10_000 + depth
-            else -> 100_000 + depth
-        }
-    }
 
     private fun sanitizeTitle(title: String): String =
         title.replace(Regex("""[\\/:*?"<>|]"""), "-").take(120).ifBlank { "varro" }

@@ -150,7 +150,7 @@ Writes merge changed fields under a cross-process file lock and replace the JSON
 
 To copy existing V1 history into V2, connect to V2 and run **Tools > Varro > Import OpenCode v1 Session into v2**. Select a conversation from the current workspace. The importer copies its same-workspace children, keeps the original records unchanged, and does not execute historical tools or send a model request. Copies have new IDs and a `(v1 copy)` title suffix.
 
-V2 session sharing is unavailable. Varro stores V2-only metadata and archive timestamp overrides under `$XDG_STATE_HOME/varro/opencode-v2`, defaulting to `~/.local/state/varro/opencode-v2`. These annotations use the same format as Varro for VS Code. See [V2 support](docs/opencode-v2-support.md) for the adapter and verification details.
+V2 session sharing is unavailable. Varro stores local metadata and older-server archive overrides under `$XDG_STATE_HOME/varro/opencode-v2`, defaulting to `~/.local/state/varro/opencode-v2`. These annotations use the same format as Varro for VS Code. Capable V2 servers own archive state, so archive and restore changes are visible to other clients. Saved server allowances observed through OpenJet can be edited in Permissions when the server supports editing. Tested baselines are V1 1.19.3 and V2 2.1.1. See [V2 support](docs/opencode-v2-support.md) for details.
 
 - Queue messages while a session is running. The host persists queued dispatches and reconciles them with message history after reconnecting. It does not automatically retry a send whose outcome is uncertain.
 - On V2, use `/btw`, **Side question** in the busy-send menu, or the conversation menu to ask without interrupting the task. Follow-ups stay in the dialog, not session history or the queue. Questions use the session's current context without tools; file references alone do not read files. Closing the dialog cancels its request, not the task.
@@ -228,7 +228,7 @@ For Kotlin-only iteration, `-PskipWebview=true` skips webview dependency install
 
 ### CI and releases
 
-GitHub Actions runs `./gradlew --no-daemon --stacktrace check buildPlugin` for pull requests, pushes to `main`, and tags starting with `v`. This runs the Kotlin and webview host tests and builds the plugin ZIP. Successful builds save the ZIP as the `plugin-archive` workflow artifact for 14 days.
+GitHub Actions runs `./gradlew --no-daemon --stacktrace check buildPlugin` for pull requests, pushes to `main`, and tags starting with `v`. This runs Kotlin and webview host tests, TypeScript checking, vendor integrity, and plugin packaging. A separate job tests the pinned published OpenCode V2 release in isolated fixtures. Main, tag, manual, and weekly runs also run Plugin Verifier across the supported IDE matrix. Successful builds save the ZIP as the `plugin-archive` workflow artifact for 14 days.
 
 To publish a release, push a version tag on the commit you want to ship:
 
@@ -237,7 +237,7 @@ git tag v0.1.0
 git push origin v0.1.0
 ```
 
-Use tags such as `v0.1.0` for stable releases or `v0.2.0-rc.1` for prereleases. The workflow uses the tag without the `v` prefix as `pluginVersion`, overriding `gradle.properties` for that build. After tests and packaging pass, it creates or updates the GitHub release, generates release notes, and attaches `varro-openjet-<version>.zip`. Tags with a prerelease suffix produce GitHub prereleases.
+Use tags such as `v0.1.0` for stable releases or `v0.2.0-rc.1` for prereleases. The workflow uses the tag without the `v` prefix as `pluginVersion`, overriding `gradle.properties` for that build. After tests, compatibility checks, Plugin Verifier, and packaging pass, it creates or updates the GitHub release, generates release notes, and attaches `varro-openjet-<version>.zip`. Tags with a prerelease suffix produce GitHub prereleases.
 
 Release publishing uses the built-in `GITHUB_TOKEN`; no additional secrets are needed. The release job has `contents: write` permission. Branch and pull-request builds use the version in `gradle.properties`.
 

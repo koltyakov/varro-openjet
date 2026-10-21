@@ -39,12 +39,18 @@ import java.util.concurrent.atomic.AtomicReference
  * and pushing a context snapshot per keystroke would flood the JS bridge for a
  * payload the composer only reads when the user sends a message.
  */
-class ContextProvider(private val project: Project) : Disposable {
+class ContextProvider(private val project: Project, private val hasConsumers: () -> Boolean = { true }) : Disposable {
 
     private val current = AtomicReference(JsonObject())
     private val refreshRequested = AtomicBoolean(false)
     private val refreshAlarm = Alarm(Alarm.ThreadToUse.SWING_THREAD, this)
     private var lastTextEditor: java.lang.ref.WeakReference<Editor>? = null
+    private var cachedRootPaths: List<String>? = null
+    private var cachedFolders = JsonArray()
+    private val diagnosticRevision = java.util.concurrent.atomic.AtomicLong()
+    private data class DiagnosticKey(val file: String?, val stamp: Long?, val start: Int?, val end: Int?, val revision: Long)
+    private var diagnosticKey: DiagnosticKey? = null
+    private var cachedDiagnostics = emptyList<JsonObject>()
 
     /**
      * Listeners are attached after construction, never passed in.
@@ -68,8 +74,16 @@ class ContextProvider(private val project: Project) : Disposable {
     init {
         project.getService(DatabaseContextSource::class.java)?.addListener(::scheduleRefresh)
         val connection = project.messageBus.connect(this)
+        connection.subscribe(com.intellij.openapi.roots.ModuleRootListener.TOPIC, object : com.intellij.openapi.roots.ModuleRootListener {
+            override fun rootsChanged(event: com.intellij.openapi.roots.ModuleRootEvent) {
+                ApplicationManager.getApplication().invokeLater({ refresh() }, project.disposed)
+            }
+        })
         connection.subscribe(DaemonCodeAnalyzer.DAEMON_EVENT_TOPIC, object : DaemonCodeAnalyzer.DaemonListener {
-            override fun daemonFinished() = scheduleRefresh()
+            override fun daemonFinished() {
+                diagnosticRevision.incrementAndGet()
+                scheduleRefresh()
+            }
         })
         connection.subscribe(
             FileEditorManagerListener.FILE_EDITOR_MANAGER,
@@ -100,19 +114,27 @@ class ContextProvider(private val project: Project) : Disposable {
             this,
         )
         multicaster.addDocumentListener(object : com.intellij.openapi.editor.event.DocumentListener {
-            override fun documentChanged(event: com.intellij.openapi.editor.event.DocumentEvent) = scheduleRefresh()
+            override fun documentChanged(event: com.intellij.openapi.editor.event.DocumentEvent) {
+                if (event.document === lastTextEditor?.get()?.document) scheduleRefresh()
+            }
         }, this)
 
         com.intellij.openapi.editor.EditorFactory.getInstance().addEditorFactoryListener(
             object : EditorFactoryListener {
-                override fun editorReleased(event: EditorFactoryEvent) = scheduleRefresh()
+                override fun editorReleased(event: EditorFactoryEvent) {
+                    if (event.editor.project == project) scheduleRefresh()
+                }
             },
             this,
         )
 
-        // Seed the snapshot so the boot payload has something real to carry.
-        // No listener can exist yet, so nothing is notified.
-        current.set(runCatching { buildContext() }.getOrElse { JsonObject() })
+        // Services can be constructed under a background read lock. Seed workspace identity
+        // without waiting for the EDT; createPanel refreshes editor state before building the page.
+        current.set(ApplicationManager.getApplication().runReadAction<JsonObject> {
+            val path = project.guessProjectDir()?.path ?: project.basePath
+            Json.obj("workspacePath" to path, "workspaceDirectory" to path,
+                "activeWorkspacePath" to path, "workspaceFolders" to workspaceFolders())
+        })
     }
 
     /**
@@ -120,24 +142,33 @@ class ContextProvider(private val project: Project) : Disposable {
      * while still updating context during continuous typing or caret movement.
      */
     fun scheduleRefresh() {
+        if (project.isDisposed || !hasConsumers()) return
         if (!refreshRequested.compareAndSet(false, true)) return
-        if (project.isDisposed) return
         refreshAlarm.addRequest({
             refreshRequested.set(false)
-            if (!project.isDisposed) refresh()
+            if (!project.isDisposed && hasConsumers()) refresh()
         }, 75)
     }
 
     /** Recomputes the snapshot and notifies when it actually changed. */
     fun refresh() {
+        val app = ApplicationManager.getApplication()
+        if (!app.isDispatchThread) {
+            app.invokeAndWait { refresh() }
+            return
+        }
+        if (project.isDisposed) return
         val next = runCatching { buildContext() }.getOrElse { JsonObject() }
         val previous = current.getAndSet(next)
         if (previous == next) return
         notifyListeners(next)
     }
 
-    /** Re-sends the current snapshot without recomputing, for `context/request`. */
-    fun replay() = notifyListeners(current.get())
+    /** Refreshes on demand, including when the project previously had no consumers. */
+    fun replay() {
+        refresh()
+        notifyListeners(current.get())
+    }
 
     /** Match existing editor state without changing the clipboard or saving a buffer. */
     fun matchCopiedSelection(text: String, plainTextOnly: Boolean): JsonObject? {
@@ -189,7 +220,16 @@ class ContextProvider(private val project: Project) : Disposable {
             add("databaseEnvironment", databaseEnvironment)
         }
 
-        val diagnostics = WorkspaceProblems.highlights(project, file, editor)
+        val selected = editor?.selectionModel?.takeIf { it.hasSelection() }
+        val key = DiagnosticKey(file?.path, editor?.document?.modificationStamp,
+            selected?.selectionStart, selected?.selectionEnd, diagnosticRevision.get())
+        val diagnostics = if (!varro.settings.VarroSettings.getInstance().chatEnableProblemsContext) emptyList() else {
+            if (diagnosticKey != key) {
+                cachedDiagnostics = WorkspaceProblems.highlights(project, file, editor)
+                diagnosticKey = key
+            }
+            cachedDiagnostics
+        }
         context.add("diagnostics", Json.array(WorkspaceProblems.ranked(diagnostics, (editor?.caretModel?.logicalPosition?.line ?: 0) + 1)))
         context.addProperty("diagnosticsTotal", diagnostics.size)
         context.add("diagnosticCounts", WorkspaceProblems.counts(diagnostics))
@@ -197,11 +237,15 @@ class ContextProvider(private val project: Project) : Disposable {
     }
 
     private fun workspaceFolders(): JsonArray {
-        val folders = JsonArray()
         val roots = ProjectRootManager.getInstance(project).contentRoots
+        val paths = roots.map { it.path }.ifEmpty { listOfNotNull(project.basePath) }
+        if (paths == cachedRootPaths) return cachedFolders
+        val folders = JsonArray()
         if (roots.isEmpty()) {
             val base = project.basePath ?: return folders
             folders.add(Json.obj("name" to project.name, "path" to base))
+            cachedRootPaths = paths
+            cachedFolders = folders
             return folders
         }
         // Content roots include module and generated-source roots. Only the
@@ -213,6 +257,8 @@ class ContextProvider(private val project: Project) : Disposable {
         topLevel.forEach { root ->
             folders.add(Json.obj("name" to root.name, "path" to root.path))
         }
+        cachedRootPaths = paths
+        cachedFolders = folders
         return folders
     }
 
@@ -265,30 +311,31 @@ class ContextProvider(private val project: Project) : Disposable {
         val document = editor.document
         val unsaved = file != null && FileDocumentManager.getInstance().isDocumentUnsaved(document)
 
-        val (kind, text, startLine, endLine) = when {
+        val (kind, text, startLine, endLine, truncated) = when {
             model.hasSelection() -> {
                 val start = document.getLineNumber(model.selectionStart) + 1
                 val end = document.getLineNumber(model.selectionEnd) + 1
-                TextSlice("selection", model.selectedText.orEmpty(), start, end)
+                TextSlice("selection", boundedText(document.immutableCharSequence, model.selectionStart, model.selectionEnd), start, end,
+                    model.selectionEnd - model.selectionStart > MAX_EDITOR_TEXT)
             }
-            unsaved -> TextSlice("dirty-buffer", document.text, 1, document.lineCount.coerceAtLeast(1))
+            unsaved -> TextSlice("dirty-buffer", boundedText(document.immutableCharSequence, 0, document.textLength),
+                1, document.lineCount.coerceAtLeast(1), document.textLength > MAX_EDITOR_TEXT)
             else -> return null
         }
         if (text.isEmpty()) return null
 
-        val truncated = text.length > MAX_EDITOR_TEXT
         return Json.obj(
             "kind" to kind,
             "path" to file?.path,
             "relativePath" to (file?.let { WorkspacePaths.relativeWithin(it.path, workspacePath) ?: it.name } ?: ""),
             "language" to (file?.let { languageId(it) } ?: "plaintext"),
             "range" to Json.obj("startLine" to startLine, "endLine" to endLine),
-            "text" to if (truncated) text.take(MAX_EDITOR_TEXT) else text,
+            "text" to text,
             "truncated" to truncated,
         )
     }
 
-    private data class TextSlice(val kind: String, val text: String, val startLine: Int, val endLine: Int)
+    private data class TextSlice(val kind: String, val text: String, val startLine: Int, val endLine: Int, val truncated: Boolean)
 
     private fun languageId(file: VirtualFile): String =
         file.fileType.name.lowercase().ifBlank { file.extension ?: "plaintext" }
@@ -297,5 +344,7 @@ class ContextProvider(private val project: Project) : Disposable {
 
     companion object {
         private const val MAX_EDITOR_TEXT = 100_000
+        internal fun boundedText(text: CharSequence, start: Int, end: Int): String =
+            text.subSequence(start, minOf(end, start + MAX_EDITOR_TEXT)).toString()
     }
 }

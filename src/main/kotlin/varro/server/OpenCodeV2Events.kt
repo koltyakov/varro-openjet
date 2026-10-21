@@ -29,6 +29,7 @@ internal object OpenCodeV2Events {
             })))
             "session.renamed" -> return listOf(emit("session.updated", Json.obj("info" to Json.obj("id" to sessionID, "title" to data.get("title"), "time" to Json.obj("updated" to event.get("created"))))))
             "session.deleted" -> return listOf(emit(type, Json.obj("sessionID" to sessionID, "info" to Json.obj("id" to sessionID))))
+            "session.archived", "session.unarchived" -> return listOf(emit(type))
             "session.status.updated" -> return listOf(emit("session.status"))
             "session.execution.started" -> return listOf(emit("session.status", Json.obj("sessionID" to sessionID, "status" to if (context.bool("backgroundPending") == true) background else status("busy"))))
             "session.execution.succeeded" -> return listOf(emit("session.status", Json.obj("sessionID" to sessionID, "status" to if (context.bool("backgroundPending") == true) background else status("idle"))))
@@ -75,7 +76,10 @@ internal object OpenCodeV2Events {
             return next(properties.apply { addProperty("textID", "$id:$kind:$ordinal"); addProperty("reasoningID", "$id:$kind:$ordinal") })
         }
         if (type.startsWith("session.tool.")) return next(properties.apply {
-            add("callID", data.get("id")); add("structured", data.get("metadata")); add("provider", data.get("state")); add("result", data.get("resultState"))
+            add("callID", data.get("id")); add("structured", data.get("metadata"))
+            val native = data.get("native")?.takeUnless { it.isJsonNull }
+            add("provider", if (type == "session.tool.called") native ?: data.get("state") else data.get("state"))
+            add("result", if (type == "session.tool.called") data.get("resultState") else native ?: data.get("resultState"))
             addProperty("name", OpenCodeV2Projection.legacyAction(data.str("name"))); addProperty("output", OpenCodeV2Projection.toolOutput(data.get("content")))
         })
         if (type.startsWith("session.step.")) return next(properties.apply {

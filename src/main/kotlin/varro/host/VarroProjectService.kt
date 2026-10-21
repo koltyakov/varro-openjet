@@ -92,10 +92,12 @@ class VarroProjectService(private val project: Project) : Disposable {
 
     val server: OpenCodeServer = OpenCodeServer(
         settings = settings,
+        initialSavedPermissions = store.serverMemoryPermissions,
+        persistSavedPermissions = { store.serverMemoryPermissions = it },
         workspaceCwd = { project.guessProjectDir()?.path ?: project.basePath },
     )
 
-    val context: ContextProvider = ContextProvider(project)
+    val context: ContextProvider = ContextProvider(project) { panels.isNotEmpty() || queue.hasPending() }
 
     private fun transferRoots(): List<String> = (listOfNotNull(project.basePath) +
         context.context.arr("workspaceFolders")?.mapNotNull { it.asObjectOrNull().text("path") }.orEmpty()).distinct()
@@ -246,6 +248,7 @@ class VarroProjectService(private val project: Project) : Disposable {
         viewId: String = surface.id,
         route: JsonObject? = null,
     ): WebviewHost {
+        context.refresh()
         route?.let { rememberRoute(viewId, it) }
         lateinit var host: WebviewHost
         host = WebviewHost(
@@ -287,9 +290,13 @@ class VarroProjectService(private val project: Project) : Disposable {
     }
 
     private fun broadcast(type: String, payload: Any? = Unit) =
-        panels.forEach { it.post(type, payload) }
+        broadcastEnvelope(Json.message(type, payload))
 
-    private fun broadcastEnvelope(message: JsonElement) = panels.forEach { it.post(message) }
+    private fun broadcastEnvelope(message: JsonElement) {
+        if (panels.isEmpty()) return
+        val encoded = WebviewMessage.encode(message)
+        panels.forEach { it.postEncoded(encoded) }
+    }
 
     private fun syncQueue() {
         store.queuedMessages = queue.messages()
@@ -546,8 +553,16 @@ class VarroProjectService(private val project: Project) : Disposable {
      * channel, because the webview has no way to recover a dead bridge short of a
      * reload.
      */
-    @Synchronized
     fun handleMessage(host: WebviewHost?, message: JsonObject) {
+        val type = message.str("type") ?: return
+        if (host != null && type in SLOW_MESSAGES) {
+            host.runTask(latest = type == "files/search") { cancelled ->
+                if (!project.isDisposed && !cancelled()) handleMessageNow(host, message, cancelled)
+            }
+        } else handleMessageNow(host, message)
+    }
+
+    private fun handleMessageNow(host: WebviewHost?, message: JsonObject, isCancelled: () -> Boolean = { false }) {
         val type = message.str("type") ?: return
         val payload = message.obj("payload")
 
@@ -577,7 +592,7 @@ class VarroProjectService(private val project: Project) : Disposable {
 
                 "api/request" -> payload?.let { request ->
                     val proxy = proxies[host] ?: return
-                    ApplicationManager.getApplication().executeOnPooledThread { proxy.handleRequest(request) }
+                    proxy.submitRequest(request, com.intellij.util.concurrency.AppExecutorUtil.getAppExecutorService())
                 }
                 "api/cancel" -> payload?.let { proxies[host]?.cancelRequest(it) }
 
@@ -612,13 +627,17 @@ class VarroProjectService(private val project: Project) : Disposable {
                     val requestId = payload.int("requestId") ?: return
                     val query = payload.str("query").orEmpty()
                     val limit = payload.int("limit") ?: 30
+                    val files = editor.searchFiles(query, limit, isCancelled)
+                    if (isCancelled()) return
+                    val tables = project.getService(DatabaseContextSource::class.java)?.searchTables(query, limit.coerceIn(1, 100)) ?: JsonArray()
+                    if (isCancelled()) return
                     host?.post(
                         "files/search-results",
                         Json.obj(
                             "requestId" to requestId,
                             "query" to query,
-                            "files" to editor.searchFiles(query, limit),
-                            "tables" to (project.getService(DatabaseContextSource::class.java)?.searchTables(query, limit) ?: JsonArray()),
+                            "files" to files,
+                            "tables" to tables,
                         ),
                     )
                 }
@@ -707,9 +726,11 @@ class VarroProjectService(private val project: Project) : Disposable {
                 "session-plan-state/update" -> {
                     val sessionId = payload.str("sessionId") ?: return
                     if (payload != null && payload.has("skippedAt")) {
-                        val state = store.sessionPlanState
-                        state.add(sessionId, payload.get("skippedAt"))
-                        store.sessionPlanState = state
+                        synchronized(store) {
+                            val state = store.sessionPlanState
+                            state.add(sessionId, payload.get("skippedAt"))
+                            store.sessionPlanState = state
+                        }
                     }
                     payload.text("agent")?.let { agent ->
                         selections.updateAgent(sessionId, agent, selectionDirectory(sessionId), payload.str("selectionId"))
@@ -718,17 +739,19 @@ class VarroProjectService(private val project: Project) : Disposable {
 
                 "session-unread-state/update" -> {
                     val sessionId = payload.str("sessionId") ?: return
-                    val unread = store.sessionUnreadState
-                    if (payload.bool("unread") == true) {
-                        unread.add(sessionId, Json.obj(
-                            "kind" to payload.str("kind"),
-                            "unread" to true,
-                            "markerAt" to payload.long("markerAt"),
-                        ))
-                    } else {
-                        unread.remove(sessionId)
+                    synchronized(store) {
+                        val unread = store.sessionUnreadState
+                        if (payload.bool("unread") == true) {
+                            unread.add(sessionId, Json.obj(
+                                "kind" to payload.str("kind"),
+                                "unread" to true,
+                                "markerAt" to payload.long("markerAt"),
+                            ))
+                        } else {
+                            unread.remove(sessionId)
+                        }
+                        store.sessionUnreadState = unread
                     }
-                    store.sessionUnreadState = unread
                 }
 
                 "session-unread-state/sync" -> {
@@ -776,9 +799,11 @@ class VarroProjectService(private val project: Project) : Disposable {
                     payload.str("sessionId") ?: return, payload.str("itemId") ?: return, payload.long("lease"))
 
                 "recovery/interrupted-sessions-ack" -> {
-                    val consumed = payload?.getAsJsonArray("consumedSessionIds")?.strings().orEmpty()
-                    interruptedSessionIds.updateAndGet { current -> current - consumed.toSet() }
-                    store.interruptedSessionIds = interruptedSessionIds.get()
+                    synchronized(store) {
+                        val consumed = payload?.getAsJsonArray("consumedSessionIds")?.strings().orEmpty()
+                        interruptedSessionIds.updateAndGet { current -> current - consumed.toSet() }
+                        store.interruptedSessionIds = interruptedSessionIds.get()
+                    }
                 }
 
                 // --- Host-side extras added by this port -------------------------
@@ -855,6 +880,7 @@ class VarroProjectService(private val project: Project) : Disposable {
                 else -> log.debug("Unhandled webview message: $type")
             }
         } catch (failure: Exception) {
+            if (isCancelled() || failure is java.util.concurrent.CancellationException || failure is com.intellij.openapi.progress.ProcessCanceledException) return
             log.warn("handleMessage($type) failed", failure)
             if (type in setOf("files/drop", "files/drop-content", "images/store", "pdfs/store")) {
                 notify("Could not attach file: ${failure.message}", NotificationType.ERROR)
@@ -1289,6 +1315,11 @@ class VarroProjectService(private val project: Project) : Disposable {
     }
 
     companion object {
+        private val SLOW_MESSAGES = setOf(
+            "files/pick", "files/drop", "files/drop-content", "pdfs/store", "images/store", "files/search",
+            "database/attach", "file/read", "vscode/open", "server/restart/check",
+            "permission-mode/update", "session-model/update", "session-plan-state/update",
+        )
         const val TOOL_WINDOW_ID = "Varro"
         const val NOTIFICATION_GROUP = "Varro Notifications"
 

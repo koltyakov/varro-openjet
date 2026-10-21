@@ -57,6 +57,31 @@
     ]]></description>
 
     <change-notes><![CDATA[
+        <h3>0.9.x</h3>
+        <ul>
+            <li>Archive and restore sessions across clients through native OpenCode V2 server support,
+                with local fallback for older servers.</li>
+            <li>Manage saved server allowances in Permissions, including editing when supported.
+                Keep management links after IDE restarts and follow changes made by other clients.</li>
+            <li>Preserve unrelated JSONC comments and formatting when saving project permissions.</li>
+            <li>Open Markdown file citations with line fragments at the referenced source line.</li>
+            <li>Preload and cache chat assets, batch browser updates and reduce repeated editor-context work.</li>
+            <li>Keep file searches and attachment actions off the chat message queue; include extensionless
+                files and path matches in search results.</li>
+            <li>Apply request cancellation and timeouts while reading server responses.</li>
+            <li>Align OpenCode V2 support with 2.1.1, retaining support for V2 2.0.5 and V1 1.16.0 or newer.</li>
+        </ul>
+        <h3>0.8.x</h3>
+        <ul>
+            <li>Ask V2 side questions with <code>/btw</code> without interrupting the running task.</li>
+            <li>Use native V2 commands and forms, navigate linked child tasks, and interrupt children
+                or let their parent continue in the background when supported.</li>
+            <li>Attach PDFs to models that support native PDF input, with validation before sending.</li>
+            <li>Control automatic active-file and problem attachments independently, while keeping manual attachments.</li>
+            <li>Track Handy dictation state and optionally show a usage histogram on the empty chat screen.</li>
+            <li>Read Codex quotas from an attached V2 server's active account and improve server-ownership recovery.</li>
+            <li>Fix excess scrolling space around summaries and diffs, and preserve queued-message retry identity.</li>
+        </ul>
         <h3>0.7.x</h3>
         <ul>
             <li>Inline prompt autocomplete with your chosen model; requires OpenCode V2 and an API key.</li>

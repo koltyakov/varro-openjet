@@ -1,5 +1,27 @@
 # Scrolling benchmark in IntelliJ
 
+## Production host bridge timings
+
+The scrolling fixture below measures rendering with a synthetic host. To measure the actual Kotlin/JCEF bridge, launch the sandbox with a fresh output directory:
+
+```sh
+./gradlew runIde -PhostBenchmarkDirectory=build/host-benchmark/run-1
+```
+
+Open Varro, then open the same conversation in several editor chat tabs. Exercise typing, `@` search, streaming, view reload, and closing a view during a history request. Close the views to flush their final reports. Use a test workspace and fixture server for repeatable runs.
+
+```sh
+python3 scripts/check-host-benchmark.py build/host-benchmark/run-1 --min-views 4
+```
+
+Each view writes a separate report. `startupMs` measures first construction or subsequent reload to the UI's ready handshake. `roundTripMs` measures native batch submission, browser event dispatch, and acknowledgement through the actual inbound message queue. It excludes time spent waiting in the outbound batch queue, model latency, and asynchronous browser paint. Samples retain the latest 512 observations; reports include total batch/acknowledgement counts and peak simultaneous instrumented views. No message content or credentials are recorded. Instrumentation adds acknowledgement traffic and is disabled unless the property is set.
+
+For a local regression budget, pass `--max-round-trip-p95-ms` and `--max-startup-ms` using thresholds established on the same machine and IDE. Keep cold and warm runs in separate directories. The checker rejects missing acknowledged samples and insufficient simultaneous views.
+
+CI exercises the production `WebviewOutbox` with four views and 10,000 ordered events per view, including startup overflow, reload, disposal, and concurrent readiness. Request tests cover cancellation before worker dispatch and after HTTP headers, plus stalled-body deadlines. These are deterministic regression checks, not substitutes for live JCEF timings.
+
+## Synthetic scrolling fixture
+
 The benchmark opens a separate **Varro Benchmark** tool window in the current IDE. It runs the vendored OpenJet UI with a synthetic, in-memory host served over loopback. It does not connect the fixture to OpenCode or modify existing chat sessions.
 
 It measures browser rendering in JCEF, including native wheel input and automatic bottom-follow. It does not measure the ordinary Kotlin chat bridge, server transport, model latency, or production persistence.

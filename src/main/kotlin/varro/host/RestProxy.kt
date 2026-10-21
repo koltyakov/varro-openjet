@@ -79,7 +79,7 @@ class RestProxy(
     } }
 
     /** In-flight requests, keyed by the webview's cancel key. */
-    private val activeRequests = ConcurrentHashMap<String, AtomicBoolean>()
+    private val activeRequests = RequestTasks()
     private val disposed = AtomicBoolean(false)
     private val trash = SessionTrash(store, request = { method, path, body, directory ->
         server.transport.request(method, path, body, RequestOptions(directory = directory)).data
@@ -113,12 +113,28 @@ class RestProxy(
         fun sessionDiffSummary(sessionId: String, directory: String?, revision: String?): JsonObject
     }
 
-    fun handleRequest(payload: JsonObject) {
+    fun submitRequest(payload: JsonObject, executor: java.util.concurrent.Executor) {
         val id = payload.int("id") ?: return
         val method = payload.str("method")?.uppercase() ?: return
         val path = payload.str("path") ?: return
-        val cancelKey = payload.text("cancelKey")
-        val cancelled = AtomicBoolean(false)
+        if (!ApiRoutes.isAllowed(method, path)) {
+            respond(id, error = "Unsupported API request")
+            return
+        }
+        try {
+            activeRequests.submit(payload.text("cancelKey"), executor) { ticket -> handleRequest(payload, ticket) }
+        } catch (failure: Exception) {
+            respond(id, error = failure.message ?: "Request could not be scheduled")
+        }
+    }
+
+    fun handleRequest(payload: JsonObject) = submitRequest(payload, java.util.concurrent.Executor { it.run() })
+
+    private fun handleRequest(payload: JsonObject, ticket: RequestTasks.Ticket) {
+        val id = payload.int("id") ?: return
+        val method = payload.str("method")?.uppercase() ?: return
+        val path = payload.str("path") ?: return
+        val cancelled = { ticket.isCancelled() || disposed.get() }
 
         if (disposed.get()) {
             respond(id, error = "REST proxy disposed")
@@ -131,17 +147,11 @@ class RestProxy(
             return
         }
 
-        cancelKey?.let { key ->
-            if (activeRequests.putIfAbsent(key, cancelled) != null) {
-                respond(id, error = "Duplicate API request cancellation key")
-                return
-            }
-        }
-
         var admitted = false
         var success = false
         var rejected = false
         try {
+            if (cancelled()) return
             fun checkPermissionLease() = PermissionAutomationLease.assertCurrent(payload, isPermissionAutomationLeaseCurrent)
             checkPermissionLease()
             if (skipNativeRecovery(method, path, payload.bool("interruptedRecovery") == true, server.transport.apiVersion)) {
@@ -161,25 +171,24 @@ class RestProxy(
             }
             admitted = payload.obj("queuedMessageDispatch") != null && method == "POST"
             val data = if (path.startsWith(ApiRoutes.NAMESPACE)) {
-                handleVarroRequest(method, path, payload.get("body"), transferDirectory) { cancelled.get() || disposed.get() }
+                handleVarroRequest(method, path, payload.get("body"), transferDirectory, cancelled)
             } else {
                 forward(method, forwardedPath, payload.get("body"), payload.obj("queuedMessageDispatch") != null, transferDirectory) {
                     checkPermissionLease()
-                    cancelled.get() || disposed.get()
+                    cancelled()
                 }
             }
             success = true
             if (admitted) completeQueuedDispatch(payload, true, false)
-            if (!cancelled.get() && !disposed.get()) respond(id, data = data)
+            if (!cancelled()) respond(id, data = data)
         } catch (failure: Exception) {
             rejected = Regex("^(400|401|403|404|405|413|415|422|429) ").containsMatchIn(failure.message.orEmpty())
             log.warn("api/request failed: $method ${path.substringBefore('?')}: ${failure.message}")
-            if (!cancelled.get() && !disposed.get()) {
+            if (!cancelled()) {
                 respond(id, error = failure.message ?: "Request failed")
             }
         } finally {
             if (admitted && !success) completeQueuedDispatch(payload, false, rejected)
-            cancelKey?.let { activeRequests.remove(it, cancelled) }
         }
     }
 
@@ -188,13 +197,12 @@ class RestProxy(
      */
     fun cancelRequest(payload: JsonObject) {
         val cancelKey = payload.text("cancelKey") ?: return
-        activeRequests.remove(cancelKey)?.set(true)
+        activeRequests.cancel(cancelKey)
     }
 
     fun dispose() {
         disposed.set(true)
-        activeRequests.values.forEach { it.set(true) }
-        activeRequests.clear()
+        activeRequests.close()
         remoteImages.close()
         settingsSubscription.disconnect()
     }
@@ -260,7 +268,7 @@ class RestProxy(
         // `GET /session?limit=` is a paginated read in the client's contract even
         // though OpenCode answers with a plain array, so the host builds the page.
         if (method == "GET" && request?.pathname == "/session" && request.query.containsKey("limit")) {
-            return sessionPage(path, request)
+            return sessionPage(path, request, isCancelled)
         }
 
         val result = server.transport.request(method = method, path = path, body = body, options = RequestOptions(isCancelled = isCancelled,
@@ -292,9 +300,9 @@ class RestProxy(
      * the page is cut — otherwise a page could be filled entirely with sessions
      * the user cannot see, and look empty.
      */
-    private fun sessionPage(path: String, request: ApiRoutes.Request): JsonElement {
+    private fun sessionPage(path: String, request: ApiRoutes.Request, isCancelled: () -> Boolean): JsonElement {
         val limit = request.query["limit"]?.firstOrNull()?.toIntOrNull()?.coerceIn(1, 1_000) ?: 100
-        val response = server.transport.request("GET", path, options = RequestOptions(captureNextCursor = true))
+        val response = server.transport.request("GET", path, options = RequestOptions(captureNextCursor = true, isCancelled = isCancelled))
         val sessions = mergeTransfers(response.data.asArrayOrNull() ?: JsonArray(), request)
 
         val recycled = store.recycleBin.flatMap {
@@ -417,13 +425,12 @@ class RestProxy(
                 handleTrashEntry(method, request)
 
             pathname.startsWith("${ApiRoutes.Endpoints.SESSION}/") ->
-                handleSessionEndpoint(method, request, body, transferDirectory ?: q("directory"))
+                handleSessionEndpoint(method, request, body, transferDirectory ?: q("directory"), isCancelled)
 
             // Server process memory is distinct from persisted session/project rules.
-            pathname == ApiRoutes.Endpoints.PERMISSION_SERVER_MEMORY -> Json.obj(
-                "supported" to false,
-                "rules" to JsonArray(),
-                "reason" to "Server-memory permissions are not implemented in Varro OpenJet.",
+            pathname == ApiRoutes.Endpoints.PERMISSION_SERVER_MEMORY -> server.transport.savedPermissions.handle(
+                method, q("sessionId") ?: body.asObjectOrNull().text("sessionId"), body,
+                RequestOptions(directory = q("directory"), isCancelled = isCancelled),
             )
 
             pathname == ApiRoutes.Endpoints.PERMISSION_SESSION_RULES -> services.permissionRules(
@@ -484,6 +491,7 @@ class RestProxy(
         request: ApiRoutes.Request,
         body: JsonElement?,
         directory: String?,
+        isCancelled: () -> Boolean,
     ): JsonElement {
         val sessionId = ApiRoutes.varroSessionId(request.pathname)
             ?: throw IllegalArgumentException("Malformed session endpoint")
@@ -500,7 +508,7 @@ class RestProxy(
                 server.activateDirectory(target)
                 // The client expects the Session itself, and reads it only after
                 // the scope switch, so it must be fetched against the new scope.
-                fetchSession(sessionId, target) ?: JsonNull.INSTANCE
+                fetchSession(sessionId, target, isCancelled) ?: JsonNull.INSTANCE
             }
 
             "diff-summary" ->
@@ -538,7 +546,7 @@ class RestProxy(
                 selections.updateMode(sessionId, body.asObjectOrNull() ?: error("Missing permission mode"), directory)
             }
 
-            "rename-if-untitled" -> renameIfUntitled(sessionId, body, directory)
+            "rename-if-untitled" -> renameIfUntitled(sessionId, body, directory, isCancelled)
 
             "delete" -> { trash.recycle(sessionId, directory); Json.toElement(true) }
 
@@ -551,13 +559,13 @@ class RestProxy(
      * session from its first exchange; this only fills the gap when it did not,
      * and never overwrites a title the user or OpenCode already set.
      */
-    private fun renameIfUntitled(sessionId: String, body: JsonElement?, directory: String?): JsonElement {
+    private fun renameIfUntitled(sessionId: String, body: JsonElement?, directory: String?, isCancelled: () -> Boolean): JsonElement {
         val title = body.asObjectOrNull().text("title") ?: return JsonNull.INSTANCE
         val current = runCatching {
             server.transport.request(
                 "GET",
                 "/session/${encode(sessionId)}",
-                options = RequestOptions(directory = directory),
+                options = RequestOptions(directory = directory, isCancelled = isCancelled),
             ).data.asObjectOrNull()
         }.getOrNull() ?: return JsonNull.INSTANCE
 
@@ -569,7 +577,7 @@ class RestProxy(
                 "PATCH",
                 "/session/${encode(sessionId)}",
                 body = Json.obj("title" to title),
-                options = RequestOptions(directory = directory),
+                options = RequestOptions(directory = directory, isCancelled = isCancelled),
             )
             Json.obj("id" to sessionId, "title" to title)
         }.getOrElse { JsonNull.INSTANCE }
@@ -600,11 +608,11 @@ class RestProxy(
     }
 
     /** Reads one session, scoped to [directory]. `null` when it cannot be read. */
-    private fun fetchSession(sessionId: String, directory: String?): JsonElement? = runCatching {
+    private fun fetchSession(sessionId: String, directory: String?, isCancelled: () -> Boolean): JsonElement? = runCatching {
         server.transport.request(
             "GET",
             "/session/${encode(sessionId)}",
-            options = RequestOptions(directory = directory),
+            options = RequestOptions(directory = directory, isCancelled = isCancelled),
         ).data
     }.getOrElse { failure ->
         if (WorkspaceDirectoryErrors.isMissing(failure.message)) throw IllegalStateException(WorkspaceDirectoryErrors.message(directory ?: server.workspaceDirectory().orEmpty()), failure)

@@ -25,10 +25,12 @@ import { client } from '../lib/client';
 import { getPermissionModeForSession, setShowPermissionSettings, state } from '../lib/state';
 import {
   checkIcon,
+  editPencilIcon,
   navArrowDownIcon,
   navArrowLeftIcon,
   plusIcon,
   trashIcon,
+  xmarkIcon,
 } from '../lib/ui-icons';
 import { Tooltip } from './Tooltip';
 import { UiIcon } from './UiIcon';
@@ -550,6 +552,12 @@ export function PermissionSettingsPanel() {
   );
   const [serverMemoryError, setServerMemoryError] = createSignal<string | null>(null);
   const [removingServerRule, setRemovingServerRule] = createSignal<string | null>(null);
+  const [editingServerRule, setEditingServerRule] = createSignal<{
+    id: string;
+    permission: string;
+    pattern: string;
+  } | null>(null);
+  const [savingServerRule, setSavingServerRule] = createSignal(false);
   let sessionLoadGeneration = 0;
   const defaultDirectRules = getSharedDirectPermissionRules();
   const dirty = createMemo(() => JSON.stringify(rules()) !== JSON.stringify(config().projectRules));
@@ -617,6 +625,8 @@ export function PermissionSettingsPanel() {
     const generation = ++sessionLoadGeneration;
     setSessionSaving(false);
     setRemovingServerRule(null);
+    setEditingServerRule(null);
+    setSavingServerRule(false);
     setSessionLoading(Boolean(session));
     setSessionError(null);
     setServerMemoryError(null);
@@ -704,7 +714,7 @@ export function PermissionSettingsPanel() {
     const generation = sessionLoadGeneration;
     const shouldApply = () =>
       generation === sessionLoadGeneration && (activeSession()?.id ?? null) === sessionId;
-    if (removingServerRule()) return;
+    if (removingServerRule() || savingServerRule()) return;
     setRemovingServerRule(id);
     setServerMemoryError(null);
     try {
@@ -719,6 +729,42 @@ export function PermissionSettingsPanel() {
       );
     } finally {
       if (shouldApply()) setRemovingServerRule(null);
+    }
+  }
+
+  async function saveServerMemoryPermission() {
+    const draft = editingServerRule();
+    if (!draft || savingServerRule() || removingServerRule()) return;
+    if (!draft.permission.trim() || !draft.pattern.trim()) {
+      setServerMemoryError('Every saved rule needs a permission name and pattern.');
+      return;
+    }
+    const session = activeSession();
+    const generation = sessionLoadGeneration;
+    const shouldApply = () => generation === sessionLoadGeneration;
+    setSavingServerRule(true);
+    setServerMemoryError(null);
+    try {
+      const next = await client.varro.updateServerMemoryPermission(
+        session?.id ?? null,
+        draft.id,
+        {
+          permission: draft.permission,
+          pattern: draft.pattern,
+        },
+        { directory: session?.directory }
+      );
+      if (shouldApply()) {
+        setServerMemory(next);
+        setEditingServerRule(null);
+      }
+    } catch (cause) {
+      if (shouldApply())
+        setServerMemoryError(
+          cause instanceof Error ? cause.message : 'Could not update the saved server permission'
+        );
+    } finally {
+      if (shouldApply()) setSavingServerRule(false);
     }
   }
 
@@ -885,10 +931,93 @@ export function PermissionSettingsPanel() {
                       <For each={memory().rules}>
                         {(rule) => (
                           <div class="permission-memory-rule">
-                            <code>{rule.permission}</code>
-                            <code title={rule.pattern}>{rule.pattern}</code>
+                            <Show
+                              when={editingServerRule()?.id === rule.id}
+                              fallback={
+                                <>
+                                  <code>{rule.permission}</code>
+                                  <code title={rule.pattern}>{rule.pattern}</code>
+                                </>
+                              }
+                            >
+                              <input
+                                aria-label="Saved permission name"
+                                value={editingServerRule()?.permission ?? ''}
+                                disabled={savingServerRule()}
+                                onInput={(event) =>
+                                  setEditingServerRule(
+                                    (draft) =>
+                                      draft && { ...draft, permission: event.currentTarget.value }
+                                  )
+                                }
+                              />
+                              <input
+                                aria-label="Saved resource pattern"
+                                value={editingServerRule()?.pattern ?? ''}
+                                disabled={savingServerRule()}
+                                onInput={(event) =>
+                                  setEditingServerRule(
+                                    (draft) =>
+                                      draft && { ...draft, pattern: event.currentTarget.value }
+                                  )
+                                }
+                              />
+                            </Show>
                             <span class="permission-memory-actions">
-                              <span>Allow</span>
+                              <Show
+                                when={editingServerRule()?.id === rule.id}
+                                fallback={
+                                  <>
+                                    <span>Allow</span>
+                                    <Show when={rule.editable && rule.retractable !== false}>
+                                      <Tooltip content="Edit server allowance">
+                                        <button
+                                          type="button"
+                                          class="permission-config-remove"
+                                          aria-label="Edit server allowance"
+                                          disabled={
+                                            removingServerRule() !== null ||
+                                            savingServerRule() ||
+                                            editingServerRule() !== null
+                                          }
+                                          onClick={() => {
+                                            setServerMemoryError(null);
+                                            setEditingServerRule({
+                                              id: rule.id,
+                                              permission: rule.permission,
+                                              pattern: rule.pattern,
+                                            });
+                                          }}
+                                        >
+                                          <UiIcon source={editPencilIcon} width={14} height={14} />
+                                        </button>
+                                      </Tooltip>
+                                    </Show>
+                                  </>
+                                }
+                              >
+                                <button
+                                  type="button"
+                                  class="permission-config-remove"
+                                  aria-label="Save server allowance"
+                                  disabled={savingServerRule()}
+                                  onClick={() => void saveServerMemoryPermission()}
+                                >
+                                  <UiIcon source={checkIcon} width={14} height={14} />
+                                </button>
+                                <button
+                                  type="button"
+                                  class="permission-config-remove"
+                                  aria-label="Cancel server allowance edit"
+                                  disabled={savingServerRule()}
+                                  onClick={() => {
+                                    setEditingServerRule(null);
+                                    setServerMemoryError(null);
+                                  }}
+                                >
+                                  <UiIcon source={xmarkIcon} width={14} height={14} />
+                                </button>
+                              </Show>
                               <Show
                                 when={rule.retractable !== false}
                                 fallback={
@@ -902,7 +1031,11 @@ export function PermissionSettingsPanel() {
                                     type="button"
                                     class="permission-config-remove"
                                     aria-label="Retract server allowance"
-                                    disabled={removingServerRule() !== null}
+                                    disabled={
+                                      removingServerRule() !== null ||
+                                      savingServerRule() ||
+                                      editingServerRule() !== null
+                                    }
                                     onClick={() => void removeServerMemoryPermission(rule.id)}
                                   >
                                     <UiIcon source={trashIcon} width={14} height={14} />

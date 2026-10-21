@@ -270,7 +270,12 @@ export const client = {
     },
     async update(
       id: string,
-      body: { title?: string; permission?: PermissionRule[]; metadata?: UnknownRecord },
+      body: {
+        title?: string;
+        permission?: PermissionRule[];
+        metadata?: UnknownRecord;
+        time?: { archived?: number | null };
+      },
       options?: { directory?: string }
     ): Promise<Session> {
       return apiCall(
@@ -870,6 +875,18 @@ export const client = {
         'DELETE',
         withDirectory(VARRO_API_ENDPOINTS.permissionServerMemory, options?.directory),
         sessionId ? { sessionId, id } : { id }
+      );
+    },
+    async updateServerMemoryPermission(
+      sessionId: string | null,
+      id: string,
+      rule: { permission: string; pattern: string },
+      options?: { directory?: string }
+    ): Promise<OpenCodeServerMemoryPermissions> {
+      return apiCall(
+        'PATCH',
+        withDirectory(VARRO_API_ENDPOINTS.permissionServerMemory, options?.directory),
+        { sessionId, id, ...rule }
       );
     },
     async saveModelRouting(body: {

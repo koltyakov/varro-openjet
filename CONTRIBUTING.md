@@ -63,7 +63,7 @@ npm run typecheck
 npm run build
 ```
 
-Host tests cover project storage, editor context, session permission modes, and quota events. Type checking is a separate command; Gradle's `check` task does not invoke it.
+Host tests cover project storage, editor context, session permission modes, quota events, and native bridge batching. Gradle's `check` also runs TypeScript checking and vendor integrity. Packaging verifies vendor integrity before bundling.
 
 For Docker build-script changes, run `python3 scripts/test-build.py`. It checks cleanup scope, builder selection, argument forwarding and failure handling with a fake Docker executable. Also run `./scripts/build.sh clean` to verify the image build and Gradle cache-cleanup configuration against Docker.
 
@@ -81,6 +81,8 @@ This skips browser dependency installation, bundling, and host tests. `clean` re
 
 Run `./gradlew verifyPlugin` locally when checking IntelliJ API compatibility. Do not run Plugin Verifier in Docker.
 
+CI runs the isolated published V2 compatibility suites on pull requests and pushes. Main, tag, manual, and weekly runs also verify every configured IDE branch on host runners. Release publishing requires the build, compatibility suites, and verifier matrix to pass. To check one IDE locally, use `./gradlew verifyPlugin -PverificationIde=2025.2.6.3`.
+
 The verification matrix in `build.gradle.kts` must include the exact EAP build checked by Marketplace, not just an earlier build of the same branch. Database grid APIs and plugin dependencies can move between EAP builds. Keep the older branches in the matrix when adding a compatibility adapter. Plugin Verifier cannot validate reflective lookups, so test those against the actual IDE APIs and exercise database context capture in the target IDE before publishing.
 
 ## Verify in the IDE
@@ -95,6 +97,8 @@ Use `./gradlew runIde` and exercise the flow you changed. For bridge or persiste
 Use **Open Varro Developer Tools** from Find Action to inspect browser errors. The [troubleshooting guide](docs/troubleshooting.md#logs-and-bug-reports) explains how to collect host logs.
 
 For large-transcript rendering measurements inside the IDE, use the [JCEF scrolling benchmark](docs/scrolling-benchmark.md). It supports manual scrolling, automatic bottom-follow, and native-input trace capture against synthetic fixtures.
+
+The same guide documents opt-in production bridge timing with `-PhostBenchmarkDirectory=build/host-benchmark/run-1`. It measures real browser startup and native batch round trips across multiple chat views. Ordinary builds collect no timing samples.
 
 `npm run watch` from `webview/` rebuilds browser assets as files change. It does not reload the sandbox or copy assets into an already-running plugin. Relaunch through Gradle to package the current resources.
 
@@ -135,7 +139,7 @@ Before reporting a sync complete:
 4. Run the Kotlin adapter and managed-service tests against the exact published V2 version. The helper installs a pinned CLI under ignored build output, verifies its version, runs the tests with isolated fixture state, rejects skipped/missing tests, and writes `build/opencode-compatibility/<version>/verification.json`:
 
    ```sh
-    python3 scripts/check-opencode-compatibility.py --version 2.0.32
+    python3 scripts/check-opencode-compatibility.py --version 2.1.1
    ```
 
    An existing matching executable can be supplied with `--binary /absolute/path/to/opencode2`. Never point fixture tests at production sessions, databases, credentials, or service registrations. Upstream's TypeScript compatibility results are useful review evidence, not a substitute for Kotlin tests. When the V1 SDK changes, also review its released contract and run the affected Kotlin V1 tests; do not infer V1 parity from a V2 run.

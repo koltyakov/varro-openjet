@@ -394,7 +394,10 @@ class OpenCodeV2Test {
     @Test fun `metadata and archive times survive adapter recreation without server patches`() {
         val root = temporary.newFolder().toPath()
         val value = Json.obj("id" to "ses_test", "title" to "test", "location" to Json.obj("directory" to "/project"), "time" to Json.obj("created" to 1, "updated" to 2))
-        fun create() = OpenCodeV2Adapter({ method, _, _, _ -> assertEquals("GET", method); OpenCodeResponse(Json.obj("data" to value)) }, OpenCodeV2SessionState(root))
+        fun create() = OpenCodeV2Adapter({ method, path, _, _ ->
+            assertEquals("GET", method)
+            OpenCodeResponse(if (path == "/openapi.json") Json.obj("paths" to Json.obj()) else Json.obj("data" to value))
+        }, OpenCodeV2SessionState(root))
         create().request("PATCH", "/session/ses_test", Json.obj("metadata" to Json.obj("varro" to Json.obj("permissionMode" to "auto",
             "pauses" to listOf(Json.obj("messageId" to "msg_paused", "pausedAt" to 1000)))), "time" to Json.obj("archived" to 3)), RequestOptions())
         val restored = create().request("GET", "/session/ses_test", null, RequestOptions()).data.asObjectOrNull()

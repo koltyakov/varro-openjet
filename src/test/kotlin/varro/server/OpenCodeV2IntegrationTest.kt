@@ -112,9 +112,13 @@ class OpenCodeV2IntegrationTest {
             }
         }.apply { isDaemon = true; start() }
         val events = CopyOnWriteArrayList<com.google.gson.JsonElement>()
-        val transport = OpenCodeTransport({ "http://127.0.0.1:$port" }, { workspace.toString() },
+        val permissionStore = varro.store.VarroStore()
+        fun newTransport() = OpenCodeTransport({ "http://127.0.0.1:$port" }, { workspace.toString() },
             { ServerStatus.Running("http://127.0.0.1:$port", EventStreamState.HEALTHY) }, { false }, {}, events::add,
-            { password.get()?.let(OpenCodeConnection::authorization) }, root.resolve("annotations"))
+            { password.get()?.let(OpenCodeConnection::authorization) }, root.resolve("annotations"),
+            initialSavedPermissions = permissionStore.serverMemoryPermissions,
+            persistSavedPermissions = { permissionStore.serverMemoryPermissions = it })
+        val transport = newTransport()
         try {
             val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30)
             while (!transport.checkHealth() && process.isAlive && System.nanoTime() < deadline) Thread.sleep(100)
@@ -123,6 +127,11 @@ class OpenCodeV2IntegrationTest {
             val version = transport.readHealthInfo().version ?: error("Released server did not report its version")
             assertEquals(installedVersion, version)
             System.getenv("VARRO_OPENCODE_TEST_VERSION")?.let { assertEquals(it, version) }
+            if (OpenCodeCli.compareVersions(version, "2.1.1") >= 0) {
+                val capabilities = OpenCodeApiCapabilities.read(transport.request("GET", "/openapi.json").data)
+                assertTrue(capabilities.sessionArchiving)
+                assertTrue(capabilities.savedPermissionEditing)
+            }
             assertNotNull(password.get())
             if (OpenCodeCli.compareVersions(version, "2.0.29") >= 0) {
                 val config = transport.request("GET", "/config").data.asObjectOrNull()
@@ -168,6 +177,7 @@ class OpenCodeV2IntegrationTest {
             assertEquals(32000, fixture.obj("limit").int("context"))
             transport.request("PATCH", "/session/$id", Json.obj("title" to "Renamed", "permission" to listOf(Json.obj("permission" to "bash", "pattern" to "*", "action" to "ask"))))
             assertEquals("Renamed", transport.request("GET", "/session/$id").data.asObjectOrNull().str("title"))
+            verifyArchive(transport, root, events, id)
             transport.request("POST", "/session/$id/prompt_async", Json.obj("noReply" to true, "parts" to listOf(Json.obj("type" to "text", "text" to "Pending input only; no provider request"))))
             val messages = transport.request("GET", "/session/$id/message?limit=10", options = RequestOptions(captureNextCursor = true)).data!!.asJsonArray
             assertTrue(messages.any { it.asObjectOrNull().arr("parts")?.any { it.asObjectOrNull().str("text") == "Pending input only; no provider request" } == true })
@@ -243,9 +253,10 @@ class OpenCodeV2IntegrationTest {
                 if (permission == null) Thread.sleep(20)
             }
             assertEquals("bash", permission.str("permission"))
-            transport.request("POST", "/permission/${permission.str("id")}/reply", Json.obj("reply" to "once"))
+            transport.request("POST", "/permission/${permission.str("id")}/reply", Json.obj("reply" to "always"))
             waiting.get(5, TimeUnit.SECONDS)
             assertEquals(0, transport.request("GET", "/permission").data!!.asJsonArray.size())
+            verifySavedPermission(transport, id, ::newTransport)
             val form = transport.request("POST", "/api/session/$id/form", Json.obj("title" to "Fixture question", "fields" to listOf(Json.obj("key" to "choice", "type" to "string", "title" to "Choose",
                 "options" to listOf(Json.obj("value" to "accepted", "label" to "Accept")))))).data.asObjectOrNull().obj("data")!!
             val pendingForm = transport.request("GET", "/question").data!!.asJsonArray.single().asJsonObject
@@ -294,6 +305,66 @@ class OpenCodeV2IntegrationTest {
             provider.stop(0)
             providerExecutor.shutdownNow()
         }
+    }
+
+    private fun verifyArchive(transport: OpenCodeTransport, root: java.nio.file.Path, events: List<com.google.gson.JsonElement>, id: String) {
+        val native = OpenCodeApiCapabilities.read(transport.request("GET", "/openapi.json").data).sessionArchiving
+        val state = OpenCodeV2SessionState(root.resolve("annotations"))
+        state.update(id, Json.obj("time" to Json.obj("archived" to 10)))
+        val before = transport.request("GET", "/session/$id").data.asObjectOrNull()
+        assertEquals(if (native) null else 10.0, before.obj("time").num("archived"))
+        val archived = transport.request("PATCH", "/session/$id", Json.obj("time" to Json.obj("archived" to 100))).data.asObjectOrNull()
+        assertNotNull(archived.obj("time").num("archived"))
+        if (native) {
+            assertTrue(archived.obj("time").num("archived")!! > 100)
+            waitFor { events.any { it.asObjectOrNull().str("type") == "session.archived" && it.asObjectOrNull().obj("properties").str("sessionID") == id } }
+            assertTrue(transport.request("GET", "/session?archived=true").data!!.asJsonArray.any { it.asObjectOrNull().str("id") == id })
+            // Another client restores native state. Old annotations must not hide it.
+            transport.request("PATCH", "/api/session/$id", Json.obj("archived" to false))
+            assertNull(transport.request("GET", "/session/$id").data.asObjectOrNull().obj("time").num("archived"))
+            assertEquals(10.0, state.read(id).obj("time").num("archived"))
+        }
+        transport.request("PATCH", "/session/$id", Json.obj("time" to Json.obj("archived" to null)))
+        assertNull(transport.request("GET", "/session/$id").data.asObjectOrNull().obj("time").num("archived"))
+        if (native) waitFor { events.any { it.asObjectOrNull().str("type") == "session.unarchived" && it.asObjectOrNull().obj("properties").str("sessionID") == id } }
+    }
+
+    private fun verifySavedPermission(transport: OpenCodeTransport, sessionID: String, reload: () -> OpenCodeTransport) {
+        // Recreate the host before ever listing managed rules. Approval must already have saved native IDs.
+        val restored = reload()
+        try {
+            assertTrue(restored.checkHealth())
+            val native = OpenCodeApiCapabilities.read(transport.request("GET", "/openapi.json").data).savedPermissionEditing
+            if (native) {
+                assertEquals(1, restored.savedPermissions.handle("GET", sessionID, null, RequestOptions()).arr("rules")!!.size())
+            }
+            verifySavedPermission(if (native) restored else transport, sessionID)
+        } finally { restored.dispose() }
+    }
+
+    private fun verifySavedPermission(transport: OpenCodeTransport, sessionID: String) {
+        val options = RequestOptions()
+        val before = transport.savedPermissions.handle("GET", sessionID, null, options)
+        assertTrue(before.bool("supported") == true)
+        val rule = before.arr("rules")!!.single().asJsonObject
+        assertEquals("bash", rule.str("permission"))
+        assertEquals("fixture permission only", rule.str("pattern"))
+        if (rule.str("id")!!.startsWith("legacy:")) {
+            assertEquals(false, rule.bool("retractable"))
+            return
+        }
+        if (rule.bool("editable") == true) {
+            val changed = transport.savedPermissions.handle("PATCH", sessionID,
+                Json.obj("id" to rule.str("id"), "permission" to "bash", "pattern" to "fixture edited only"), options)
+            assertEquals("fixture edited only", changed.arr("rules")!!.single().asJsonObject.str("pattern"))
+            val native = transport.request("GET", "/api/permission/saved?projectID=${rule.str("projectID")}").data.asObjectOrNull().arr("data")!!
+            assertEquals("fixture edited only", native.single().asJsonObject.str("resource"))
+            // Track a second client's edit by native ID, not the old scope.
+            transport.request("PATCH", "/api/permission/saved/${rule.str("id")}", Json.obj("resource" to "fixture external edit only"))
+            assertEquals("fixture external edit only", transport.savedPermissions.handle("GET", sessionID, null, options).arr("rules")!!.single().asJsonObject.str("pattern"))
+        }
+        transport.savedPermissions.handle("DELETE", sessionID, Json.obj("id" to rule.str("id")), options)
+        assertEquals(0, transport.savedPermissions.handle("GET", sessionID, null, options).arr("rules")!!.size())
     }
 
     private fun verifyAttachedQuotaCredentials(transport: OpenCodeTransport, root: java.nio.file.Path) {

@@ -28,11 +28,13 @@ internal class OpenCodeV2Adapter(
     private val oauth = ConcurrentHashMap<String, OAuthAttempt>()
     private val backgroundWork = OpenCodeV2BackgroundWork()
     private val backgroundServices = OpenCodeV2BackgroundServices(annotations, backgroundWork, classifyBackgroundProcess, backgroundChanged)
+    @Volatile private var apiCapabilities: OpenCodeApiCapabilities? = null
 
-    fun reset() { childTasks.reset(); backgroundServices.reset(); permissions.clear(); forms.clear(); contexts.clear(); inputTypes.clear(); failures.clear(); parents.clear(); oauth.clear(); backgroundWork.reset() }
+    fun reset() { apiCapabilities = null; childTasks.reset(); backgroundServices.reset(); permissions.clear(); forms.clear(); contexts.clear(); inputTypes.clear(); failures.clear(); parents.clear(); oauth.clear(); backgroundWork.reset() }
 
     fun events(event: JsonObject): List<JsonObject> {
         val type = event.str("type").orEmpty()
+        if (type == "server.connected") apiCapabilities = null
         val data = event.obj("data") ?: return emptyList()
         childTasks.observe(type, data)
         if (type in setOf("shell.exited", "shell.deleted")) data.str("id")?.let(backgroundServices::cancel)
@@ -166,7 +168,7 @@ internal class OpenCodeV2Adapter(
                 if (route == "/session" && directory != null) params["directory"] = directory
                 if (query["roots"] == "true") params["parentID"] = "null"
                 val response = raw("GET", withQuery("/api/session", params)).asObjectOrNull() ?: error("Invalid OpenCode v2 session list")
-                return OpenCodeResponse(Json.array(objects(response.get("data")).map(::session)), if (options.captureNextCursor) response.obj("cursor").str("next") else null)
+                return OpenCodeResponse(Json.array(objects(response.get("data")).map { session(it, options) }), if (options.captureNextCursor) response.obj("cursor").str("next") else null)
             } else if (method == "POST") {
                 val payload = Json.obj("title" to input.get("title"), "id" to input.get("id"), "metadata" to input.get("metadata"),
                     "model" to OpenCodeV2Projection.modelRef(input.get("model")), "agent" to input.get("agent"),
@@ -174,7 +176,7 @@ internal class OpenCodeV2Adapter(
                 if (input.hasNonNull("permission")) payload.add("permissions", OpenCodeV2Projection.rules(input.get("permission")))
                 val created = data("POST", "/api/session", payload).asJsonObject
                 input.str("parentID")?.let { annotations.update(created.str("id")!!, Json.obj("parentID" to it), checkCancelled = options::checkCancelled) }
-                return result(session(created))
+                return result(session(created, options))
             }
             "/permission" -> {
                 val pending = objects(data("GET", scoped("/api/permission/request")))
@@ -292,20 +294,31 @@ internal class OpenCodeV2Adapter(
                 return result(outputAt(start.toString(), 64 * 1024).apply { addProperty("truncated", start > 0 || bool("truncated") == true) })
             }
             if (action.isEmpty()) when (method) {
-                "GET" -> return result(session(data("GET", endpoint).asJsonObject))
+                "GET" -> return result(session(data("GET", endpoint).asJsonObject, options))
                 "DELETE" -> { raw("DELETE", endpoint); annotations.remove(id); return result(true) }
                 "PATCH" -> {
-                    if (input.has("title") || input.has("permission")) raw("PATCH", endpoint, Json.obj("title" to input.get("title")).apply {
+                    val time = input.obj("time")
+                    val changesArchive = time?.has("archived") == true
+                    require(!changesArchive || !time.hasNonNull("archived") ||
+                        time.num("archived")?.isFinite() == true) { "Invalid session archive timestamp" }
+                    val nativeArchive = changesArchive && capabilities(options).sessionArchiving
+                    if (input.has("title") || input.has("permission") || nativeArchive) raw("PATCH", endpoint, Json.obj().apply {
+                        if (input.has("title")) add("title", input.get("title"))
                         if (input.has("permission")) add("permissions", OpenCodeV2Projection.rules(input.get("permission")))
+                        if (nativeArchive) addProperty("archived", time.hasNonNull("archived"))
                     })
                     val patch = Json.obj()
-                    for (key in listOf("metadata", "time")) if (input.has(key)) patch.add(key, input.get(key))
+                    if (input.has("metadata")) patch.add("metadata", input.get("metadata"))
+                    time?.deepCopy()?.let {
+                        if (nativeArchive) it.remove("archived")
+                        if (it.size() > 0) patch.add("time", it)
+                    }
                     if (patch.size() > 0) annotations.update(id, patch, checkCancelled = options::checkCancelled)
-                    return result(session(data("GET", endpoint).asJsonObject))
+                    return result(session(data("GET", endpoint).asJsonObject, options))
                 }
             }
             when (action) {
-                "children" -> return result(objects(data("GET", "/api/session?parentID=${encode(id)}&limit=1000")).map(::session))
+                "children" -> return result(objects(data("GET", "/api/session?parentID=${encode(id)}&limit=1000")).map { session(it, options) })
                 "message" -> if (method == "GET") return messages(id, directory, query, options)
                 "abort", "summarize" -> {
                     if (action == "abort" && backgroundWork.isWaiting(id)) {
@@ -323,9 +336,9 @@ internal class OpenCodeV2Adapter(
                     raw("POST", "$endpoint/interrupt?resume=true", Json.obj())
                     return result(true)
                 }
-                "fork" -> return result(session(data("POST", "$endpoint/fork", Json.obj("before" to input.get("messageID"))).asJsonObject))
-                "revert" -> { raw("POST", "$endpoint/revert/stage", Json.obj("messageID" to input.get("messageID"), "files" to true)); return result(session(data("GET", endpoint).asJsonObject)) }
-                "unrevert" -> { raw("DELETE", "$endpoint/revert"); return result(session(data("GET", endpoint).asJsonObject)) }
+                "fork" -> return result(session(data("POST", "$endpoint/fork", Json.obj("before" to input.get("messageID"))).asJsonObject, options))
+                "revert" -> { raw("POST", "$endpoint/revert/stage", Json.obj("messageID" to input.get("messageID"), "files" to true)); return result(session(data("GET", endpoint).asJsonObject, options)) }
+                "unrevert" -> { raw("DELETE", "$endpoint/revert"); return result(session(data("GET", endpoint).asJsonObject, options)) }
                 "diff" -> return result(data("GET", endpoint + "/diff" + (query["messageID"]?.let { "?from=${encode(it)}" } ?: "")))
                 "todo" -> {
                     objects(data("GET", "$endpoint/message?limit=100&order=desc")).forEach { message ->
@@ -414,11 +427,26 @@ internal class OpenCodeV2Adapter(
         error("OpenCode v2 does not support this Varro operation: $method $route")
     }
 
-    private fun session(value: JsonObject): JsonObject {
+    @Synchronized private fun capabilities(options: RequestOptions): OpenCodeApiCapabilities {
+        apiCapabilities?.let { return it }
+        val spec = try { wire("GET", "/openapi.json", null, options.copy(unscoped = true, captureNextCursor = false)).data }
+        catch (failure: Exception) {
+            if (!failure.message.orEmpty().startsWith("404 ")) throw failure
+            return OpenCodeApiCapabilities.read(null).also { apiCapabilities = it }
+        }
+        require(spec.asObjectOrNull().obj("paths") != null) { "Invalid OpenCode API capability response" }
+        return OpenCodeApiCapabilities.read(spec).also { apiCapabilities = it }
+    }
+
+    private fun session(value: JsonObject, options: RequestOptions): JsonObject {
         val result = OpenCodeV2Projection.session(value)
         val state = annotations.read(value.str("id") ?: error("Invalid OpenCode session"))
         val time = (result.obj("time") ?: Json.obj()).deepCopy()
         state.obj("time")?.entrySet()?.forEach { time.add(it.key, it.value) }
+        if (state.obj("time")?.has("archived") == true && capabilities(options).sessionArchiving) {
+            time.remove("archived")
+            value.obj("time")?.get("archived")?.let { time.add("archived", it) }
+        }
         state.entrySet().forEach { result.add(it.key, it.value) }
         value.str("parentID")?.let { result.addProperty("parentID", it) }
         result.add("time", time)

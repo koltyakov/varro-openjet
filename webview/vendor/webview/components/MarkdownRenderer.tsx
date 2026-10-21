@@ -348,6 +348,15 @@ function splitPathReference(
     };
   }
 
+  const fragmentMatch = trimmed.match(/^(.+)#L([1-9]\d*)(?:-L?([1-9]\d*))?$/i);
+  if (fragmentMatch) {
+    return {
+      path: fragmentMatch[1]!,
+      line: parseInt(fragmentMatch[2]!, 10),
+      lineSuffix: ` (line ${fragmentMatch[2]}${fragmentMatch[3] ? `-${fragmentMatch[3]}` : ''})`,
+    };
+  }
+
   const colonMatch = trimmed.match(/^(.*):(\d+(?:-\d+)?)$/);
   if (!colonMatch) return { path: trimmed };
 
@@ -607,6 +616,13 @@ function isLocalFileHref(href: string | null): boolean {
 
 function getLocalFilePath(href: string | null): string | null {
   if (!href || href.startsWith('#') || href.startsWith('//')) return null;
+  const fragmentIndex = href.indexOf('#');
+  if (fragmentIndex !== -1) {
+    const parsed = splitPathReference(href);
+    if (parsed?.line == null || parsed.path.includes('#')) return null;
+    const path = getLocalFilePath(parsed.path);
+    return path ? `${path}${href.slice(fragmentIndex)}` : null;
+  }
   if (/^file:\/\//i.test(href)) {
     try {
       const url = new URL(href);

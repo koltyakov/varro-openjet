@@ -68,6 +68,9 @@ class VarroStore : PersistentStateComponent<VarroStore.StoreState> {
         /** Server-bound links to conversations moved out of this project. */
         @JvmField var sessionTransfers: String = "[]"
 
+        /** Native saved-permission IDs observed after approval, scoped by server and project. */
+        @JvmField var serverMemoryPermissions: String = "[]"
+
         /** `directory` | `descendants` | `project` */
         @JvmField var sessionHistoryScope: String = "directory"
 
@@ -243,6 +246,10 @@ class VarroStore : PersistentStateComponent<VarroStore.StoreState> {
     var sessionTransfers: JsonArray
         @Synchronized get() = readArray(state.sessionTransfers)
         @Synchronized set(value) { state.sessionTransfers = Json.stringify(value) }
+
+    var serverMemoryPermissions: JsonArray
+        @Synchronized get() = readArray(state.serverMemoryPermissions)
+        @Synchronized set(value) { state.serverMemoryPermissions = Json.stringify(value) }
 
     // --- Scalars --------------------------------------------------------------
 

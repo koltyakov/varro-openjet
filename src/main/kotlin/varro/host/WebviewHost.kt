@@ -21,6 +21,9 @@ import com.intellij.ui.jcef.JBCefBrowser
 import com.intellij.ui.jcef.JBCefJSQuery
 import varro.protocol.Json
 import varro.protocol.int
+import varro.protocol.long
+import varro.protocol.obj
+import varro.protocol.str
 import varro.settings.VarroSettings
 import org.cef.browser.CefBrowser
 import org.cef.browser.CefFrame
@@ -32,7 +35,6 @@ import org.cef.handler.CefResourceRequestHandler
 import org.cef.handler.CefResourceRequestHandlerAdapter
 import org.cef.misc.BoolRef
 import org.cef.network.CefRequest
-import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicBoolean
 import java.awt.Point
 import java.awt.datatransfer.StringSelection
@@ -67,6 +69,7 @@ class WebviewHost(
     enum class Surface(val id: String) { SIDEBAR("sidebar"), EDITOR("editor") }
 
     private val log = logger<WebviewHost>()
+    private val metrics = HostBridgeMetrics.configured(surface.id)
 
     private val browser: JBCefBrowser = JcefBrowserFactory.create()
 
@@ -78,7 +81,12 @@ class WebviewHost(
      * dropped, and the host starts pushing status and context the moment the
      * server comes up - which is routinely before the first paint.
      */
-    private val pendingOutbound = ConcurrentLinkedQueue<String>()
+    private val outbound = WebviewOutbox(
+        schedule = { task -> com.intellij.util.concurrency.AppExecutorUtil.getAppScheduledExecutorService()
+            .schedule(task, 8, java.util.concurrent.TimeUnit.MILLISECONDS) },
+        send = ::sendNow,
+        resynchronize = { ApplicationManager.getApplication().invokeLater { if (!disposed.get()) reload() } },
+    )
 
     private val ready = AtomicBoolean(false)
     private val disposed = AtomicBoolean(false)
@@ -86,6 +94,9 @@ class WebviewHost(
     private val messages = java.util.concurrent.Executors.newSingleThreadExecutor { task ->
         Thread(task, "Varro messages $viewId").apply { isDaemon = true }
     }
+    private val tasks = ViewTasks()
+
+    fun runTask(latest: Boolean = false, work: (() -> Boolean) -> Unit) = tasks.submit(latest, work)
 
     val component: JComponent get() = browser.component
     val isReady: Boolean get() = ready.get() && !disposed.get()
@@ -135,10 +146,16 @@ class WebviewHost(
 
     private fun dispatchMessage(message: JsonObject) {
         if (disposed.get()) return
-        messages.execute {
-            runCatching { onMessage(message) }
-                .onFailure { log.warn("Webview message handler failed", it) }
-        }
+        try {
+            messages.execute {
+                if (!disposed.get()) runCatching {
+                    if (message.str("type") == "host/benchmark-ack") {
+                        message.obj("payload").long("id")?.let { metrics?.acknowledge(it) }
+                    } else onMessage(message)
+                }
+                    .onFailure { log.warn("Webview message handler failed", it) }
+            }
+        } catch (_: java.util.concurrent.RejectedExecutionException) { /* View closed. */ }
     }
 
     /** JS statements that hand `message` to [jsQuery]; embedded in the page shell. */
@@ -149,9 +166,10 @@ class WebviewHost(
     /** Queues an extension message for the webview, flushing once the page is live. */
     fun post(message: JsonElement) {
         if (disposed.get()) return
-        val json = Json.stringifyMessage(message)
-        if (ready.get()) sendNow(json) else pendingOutbound.add(json)
+        postEncoded(WebviewMessage.encode(message))
     }
+
+    internal fun postEncoded(message: WebviewMessage) { if (!disposed.get()) outbound.post(message) }
 
     fun post(type: String, payload: Any? = Unit) = post(Json.message(type, payload))
 
@@ -160,22 +178,19 @@ class WebviewHost(
         val cefBrowser = browser.cefBrowser
         // The payload is JSON, so embedding it as a literal is safe; `__varroReceive`
         // re-dispatches it as a MessageEvent with this object as `event.data`.
-        val script = "if (window.__varroReceive) { window.__varroReceive($json); }"
+        val acknowledgement = metrics?.sent(json.length)?.let { id ->
+            "window.__varroHostSend(JSON.stringify({type:'host/benchmark-ack',payload:{id:$id}}));"
+        }.orEmpty()
+        val script = "if (window.__varroReceiveBatch) { window.__varroReceiveBatch($json); $acknowledgement }"
         runCatching { cefBrowser.executeJavaScript(script, cefBrowser.url ?: WebviewAssets.INDEX_URL, 0) }
             .onFailure { log.warn("Failed to post message to the Varro webview", it) }
-    }
-
-    private fun flushPending() {
-        while (true) {
-            val next = pendingOutbound.poll() ?: break
-            sendNow(next)
-        }
     }
 
     fun markReady() {
         if (disposed.get()) return
         val changed = !ready.getAndSet(true)
-        flushPending()
+        if (changed) metrics?.ready()
+        outbound.markReady()
         if (changed) onReadinessChanged()
     }
 
@@ -262,6 +277,7 @@ class WebviewHost(
 
     /** Builds the page shell; invoked by the asset handler on every document load. */
     private fun renderDocument(): String {
+        outbound.documentLoading()
         if (ready.getAndSet(false)) onReadinessChanged()
         return runCatching {
             WebviewHtml.render(
@@ -276,6 +292,7 @@ class WebviewHost(
                 viewState = viewStateProvider(),
                 hostSendSnippet = hostSendSnippet(),
                 assetVersion = WebviewAssets.assetVersion,
+                staticImports = WebviewAssets.staticImports,
             )
         }.getOrElse { failure ->
             log.error("Failed to render the Varro webview document", failure)
@@ -286,8 +303,9 @@ class WebviewHost(
     /** Rebuilds the document from current state. Used after a theme or config change. */
     fun reload() {
         if (disposed.get()) return
+        metrics?.loading()
         if (ready.getAndSet(false)) onReadinessChanged()
-        pendingOutbound.clear()
+        outbound.reset()
         browser.loadURL(WebviewAssets.INDEX_URL)
     }
 
@@ -377,8 +395,10 @@ class WebviewHost(
 
     override fun dispose() {
         if (!disposed.compareAndSet(false, true)) return
-        pendingOutbound.clear()
-        messages.shutdown()
+        outbound.close()
+        messages.shutdownNow()
+        tasks.close()
+        metrics?.close()
         runCatching { Disposer.dispose(jsQuery) }
     }
 }

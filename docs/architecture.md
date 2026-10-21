@@ -176,7 +176,11 @@ read does not fall back to a local account.
 
 The synthetic origin gives dynamic `import()` a resolvable base URL. `webview.version` contains a bundle hash used for cache invalidation after updates. Browser cache storage is not the persistence backend. The bridge replaces `localStorage` with a project-backed implementation, and drafts use the separate per-view state channel.
 
-**Messaging.** Webview to host is a `JBCefJSQuery`, injected as `window.__varroHostSend`. Host to webview is `executeJavaScript` calling `window.__varroReceive`, which the shim re-dispatches as a `MessageEvent`. Outbound messages produced before the document finishes loading are queued and flushed on `onLoadEnd`.
+**Messaging.** Webview to host is a `JBCefJSQuery`, injected as `window.__varroHostSend`. Host to webview uses `executeJavaScript` with ordered `window.__varroReceiveBatch` calls. The shim preserves the upstream individual `MessageEvent` contract. Shared broadcasts serialize once for all views. Drains use an eight-millisecond scheduling window, at most 64 messages and a 256 KiB character target per batch. Adjacent complete context, configuration, and editor-tab snapshots may replace each other. Events, commands, and acknowledgements retain their order.
+
+Readiness and queue transitions share one lock. Before the UI's `ready` handshake, buffering is limited to 2,048 messages and four million characters. Overflow discards the incomplete stream and reloads from host/server state after the handshake. A ready view drains immediately under pressure; a single oversized response bypasses the queue. Reload and disposal invalidate pending drains.
+
+Versioned entry assets and hashed chunks use immutable browser caching; HTML uses `no-store`. The build emits `webview.imports.json` for static entry dependencies. The host validates those paths and emits module-preload hints without modifying their hashed URLs. Dynamic diagram and highlighter imports remain lazy.
 
 `link-integration.ts` handles unclaimed anchor clicks at window-bubble phase, after Solid's delegated document handlers. This prevents duplicate external opens. It translates upstream's `data-vscode-context` link and file metadata into `host/link-context-menu`; `WebviewHost` shows a native copy popup and writes the selected URL or full path to the IDE clipboard. Both layers validate the context, and copying never opens its target.
 
@@ -229,6 +233,10 @@ Legacy browser session selections migrate into the project store before boot sna
 
 `SessionSelections` persists access mode, agent, model and reasoning under OpenCode's `metadata.varro` object. Writes set `schemaVersion: 1` and merge `permissionMode`, `agent` and `model`, preserving workspace scope and unrelated metadata at both levels. The stored model uses `provider`, `model` and an optional reasoning `variant`. The bridge and local stores still use `providerID` and `modelID`. Replacing a model without a variant clears the previous reasoning selection.
 
+`OpenCodeApiCapabilities` reads optional archive and saved-permission PATCH fields from the connected server's OpenAPI schemas. `OpenCodeV2Adapter` uses native boolean archive writes when available and keeps local fallback annotations intact. Native archive state, including an absent timestamp after restore, overrides stale local archives. Reads never migrate sessions. `ServerEvents` forwards archive/restore events for the webview's guarded header refresh.
+
+`OpenCodeSavedPermissions` tracks server-memory allowances only after acknowledged Always replies. Its project-checked list, remove and edit operations expose only approved legacy scopes or their verified native IDs, not arbitrary saved server permissions. `ServerMemoryPermissionStore` records native IDs immediately after approval in `VarroStore`, scoped by server URL, API version and project. Host reloads retain those links, including other clients' edits. Reconciliation discards removed IDs and never adopts a replacement just because its scope matches. Edits require advertised support and a matching acknowledgement. Legacy restart-only observations stay in memory and clear on protocol reset. These links are shared by project views and remain separate from session and project permission rules; storage failures do not turn successful approvals into failed replies.
+
 ```json
 {
   "metadata": {
@@ -261,7 +269,7 @@ Prompt completion uses V2 provider/config catalogs and credentials read through 
 
 `SessionTransfers` persists at most 512 server-bound summaries in the originating project's store. A verified move updates the local link and publishes `session/transferred`, without patching the server session. Stale durable move events are acknowledged but cannot reopen an obsolete destination. Older catalog snapshots cannot undo a confirmed move. Links authorize only history reads when the destination is outside the project's open roots; prompts, metadata changes and other session actions are rejected. Reads use the destination scope without activating that folder. Opening the destination requires an explicit `session/open-transferred` action, a fresh location check, and a locally available folder. The folder opens in a new IDE window; attach-only connections do not translate server paths into local projects.
 
-`PermissionService` applies session rules to OpenCode before acknowledging a save. `ProjectPermissionConfig` writes project rules to an existing `opencode.jsonc`, otherwise `opencode.json`. It preserves other configuration fields but rewrites the document as JSON, so JSONC comments and formatting are not retained.
+`PermissionService` applies session rules to OpenCode before acknowledging a save. `ProjectPermissionConfig` writes project rules to an existing `opencode.jsonc`, otherwise `opencode.json`. It edits only the effective permission property, preserving unrelated JSONC comments and formatting. Permission and provider-policy writers share per-path locks, prepare an atomic replacement, and reject a file changed externally before replacement.
 
 Scoped Always Allow approvals resolve the owning session before reading pending permissions. An explicit directory must match the session's directory, and the pending permission must belong to that session. Session rules and project configuration writes use that owning directory, including sessions in other content roots or repository subdirectories. Attach-only connections support session approvals but cannot write project configuration files.
 
@@ -343,7 +351,8 @@ The IntelliJ Platform's threading rules do not match Node's single-threaded host
 
 - `JBCefJSQuery` callbacks enqueue inbound messages on a per-view single-thread executor, preserving their order.
 - The SSE stream owns a dedicated daemon thread, because reads block.
-- `api/request` work moves to the IDE pooled executor so REST calls do not block the view's ordered message queue.
+- `api/request` admission registers cancellation before dispatch to the IDE pooled executor. Requests share a monotonic deadline across adapter HTTP operations and check cancellation through response-body reads. Body readers use virtual threads and close their streams on cancellation.
+- Slow file and selection actions use a view-owned ordered worker, separate from the inbound message queue. File searches use latest-only cancellable workers and non-blocking project read actions, including during indexing. The router locks individual shared-state mutations rather than whole operations.
 - Editor and UI work is marshalled with `invokeLater`/`invokeAndWait`; context snapshots are built inside a `ReadAction`.
-- Editor context refreshes are coalesced because caret and selection listeners can fire per keystroke.
+- Editor context refreshes coalesce at 75 ms and skip idle projects without views or pending dispatches. Document changes are filtered to the tracked editor. Bounded text slices avoid copying a whole large unsaved buffer. Root hierarchy and diagnostic snapshots have independent caches; document/selection changes and daemon completion invalidate diagnostics. Editor state reads stay on the EDT.
 - Quota polling uses virtual threads; Ralph orchestration uses its own executor.

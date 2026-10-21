@@ -560,6 +560,10 @@
   padding-right: 32px;
 }
 
+.model-picker-row:not(.pinned):not(:hover):not(:focus-within) .model-picker-item {
+  padding-right: 12px;
+}
+
 .model-picker-item .dropdown-name {
   flex: 1 1 auto;
 }

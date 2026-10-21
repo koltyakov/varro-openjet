@@ -12,6 +12,23 @@ import org.junit.Test
  */
 class ApiRoutesTest {
 
+    @Test fun `saved permission editing uses only the project checked host endpoint`() {
+        val path = ApiRoutes.Endpoints.PERMISSION_SERVER_MEMORY
+        for (method in listOf("GET", "PATCH", "DELETE")) {
+            assertTrue(ApiRoutes.isAllowed(method, path))
+            assertTrue(ApiRoutes.isAllowed(method, "$path?directory=%2Ffixture"))
+            if (method != "GET") {
+                assertFalse(ApiRoutes.isAllowed(method, "$path?directory="))
+                assertFalse(ApiRoutes.isAllowed(method, "$path?directory=/a&directory=/b"))
+            }
+            assertFalse(ApiRoutes.isAllowed(method, "$path?projectID=other"))
+        }
+        assertTrue(ApiRoutes.isAllowed("GET", "$path?sessionId=ses_fixture"))
+        assertFalse(ApiRoutes.isAllowed("PATCH", "$path?sessionId=ses_fixture"))
+        assertFalse(ApiRoutes.isAllowed("POST", path))
+        assertFalse(ApiRoutes.isAllowed("PATCH", "/api/permission/saved/arbitrary"))
+    }
+
     @Test fun `side questions allow only the scoped V2 facade and never native generation`() {
         val path = "/session/ses_one/side-question"
         assertTrue(ApiRoutes.isAllowed("POST", path))

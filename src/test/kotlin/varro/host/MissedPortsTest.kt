@@ -476,7 +476,9 @@ class MissedPortsTest {
         val config = ProjectPermissionConfig(file.parent)
         assertEquals("allow", config.read()[0].asJsonObject.str("action"))
         config.write(JsonArray())
-        val written = Json.parse(java.nio.file.Files.readString(file)).asJsonObject
+        val raw = java.nio.file.Files.readString(file)
+        assertTrue(raw.contains("// Keep the provider setting"))
+        val written = Json.parse(ProjectPermissionConfig.stripJsonComments(raw)).asJsonObject
         assertEquals("https://example.com/*path*/", written.obj("provider").str("endpoint"))
         assertEquals(0, written.obj("permission")!!.size())
         assertEquals(0, config.read().size())

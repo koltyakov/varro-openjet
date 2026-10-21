@@ -36,6 +36,8 @@ import java.util.concurrent.atomic.AtomicReference
 class OpenCodeServer(
     private val settings: VarroSettings,
     serverStateDirectory: java.nio.file.Path? = null,
+    initialSavedPermissions: com.google.gson.JsonArray = com.google.gson.JsonArray(),
+    persistSavedPermissions: (com.google.gson.JsonArray) -> Unit = {},
     private val workspaceCwd: () -> String?,
 ) : Disposable {
 
@@ -98,6 +100,8 @@ class OpenCodeServer(
         emitEvent = { event -> eventListeners.forEach { runCatching { it(event) } } },
         getAuthorization = { authentication.authorization(url()) ?: process.authorization() },
         verifyConnection = process::verifyConnection,
+        initialSavedPermissions = initialSavedPermissions,
+        persistSavedPermissions = persistSavedPermissions,
     )
 
     fun url(): String = "http://127.0.0.1:${process.port}"

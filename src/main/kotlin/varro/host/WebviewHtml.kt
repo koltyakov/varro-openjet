@@ -109,10 +109,14 @@ object WebviewHtml {
         viewState: JsonObject,
         hostSendSnippet: String,
         assetVersion: String,
+        staticImports: List<String> = emptyList(),
     ): String {
         val serializedState = serializeForInlineScript(initialState)
         val serializedViewState = serializeForInlineScript(viewState)
         val cacheKey = if (assetVersion.isBlank()) "" else "?v=$assetVersion"
+        val preloads = WebviewAssets.validatedImports(Json.toElement(staticImports)).joinToString("\n") {
+            "<link rel=\"modulepreload\" href=\"/$it\" crossorigin />"
+        }
 
         return """
         <!DOCTYPE html>
@@ -128,6 +132,7 @@ object WebviewHtml {
         $LOADING_STYLES
           </style>
           <link rel="stylesheet" href="/webview.css$cacheKey" />
+          $preloads
         </head>
         <body class="${theme.kind.bodyClass}" data-vscode-theme-kind="${theme.kind.id}">
           <div id="root">$LOADING_MARKUP</div>

@@ -1,6 +1,9 @@
 name: CI and release
 
 on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 4 * * 1'
   pull_request:
   push:
     branches: [main]
@@ -23,6 +26,9 @@ jobs:
 
       - name: Test Docker build cleanup
         run: python3 scripts/test-build.py
+
+      - name: Test native bridge benchmark gate
+        run: python3 scripts/test-host-benchmark.py
 
       - name: Set up JDK 21
         uses: actions/setup-java@v6
@@ -82,10 +88,76 @@ jobs:
           compression-level: 0
           retention-days: 14
 
+  compatibility:
+    name: Released OpenCode compatibility
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: webview/package.json
+      - name: Use pinned npm version
+        run: npm install --global "npm@$(node -p 'require("./webview/package.json").volta.npm')"
+      - uses: gradle/actions/setup-gradle@v6
+      - name: Verify the pinned published V2 release in isolated fixtures
+        shell: bash
+        run: |
+          version=$(node -p 'require("./webview/vendor/UPSTREAM.json").opencodeDependencies.client.replace(/^\^/, "")')
+          python3 scripts/check-opencode-compatibility.py --version "$version"
+      - name: Upload compatibility evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: opencode-compatibility
+          path: |
+            build/opencode-compatibility/*/verification.json
+            build/test-results/
+            build/reports/tests/
+          retention-days: 14
+
+  verify:
+    name: Verify IDE ${{ matrix.ide }}
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        ide: ['2025.2.6.3', '2025.3.6.1', '2026.1.5', '2026.2.3', '263.6800.24']
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: webview/package.json
+          cache: npm
+          cache-dependency-path: webview/package-lock.json
+      - name: Use pinned npm version
+        run: npm install --global "npm@$(node -p 'require("./webview/package.json").volta.npm')"
+      - uses: gradle/actions/setup-gradle@v6
+      - name: Verify plugin on the host runner
+        run: ./gradlew --no-daemon verifyPlugin -PverificationIde=${{ matrix.ide }}
+      - name: Upload verifier reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: plugin-verifier-${{ matrix.ide }}
+          path: build/reports/pluginVerifier/
+          retention-days: 14
+
   release:
     name: Publish GitHub release
     if: startsWith(github.ref, 'refs/tags/')
-    needs: build
+    needs: [build, compatibility, verify]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:

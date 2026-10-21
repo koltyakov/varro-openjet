@@ -41,12 +41,17 @@ data class RequestOptions(
     /** Override the directory this request is scoped to. */
     val directory: String? = null,
     val timeoutMs: Long? = null,
-    /** Check the caller's cancellation/deadline while waiting for a response body. */
-    val cancellableBody: Boolean = false,
+    /** Retained for existing callers; all response bodies now honor cancellation and deadlines. */
+    val cancellableBody: Boolean = true,
     val isCancelled: () -> Boolean = { false },
+    /** Shared by every HTTP operation in an adapter request, using a monotonic clock. */
+    val deadlineNanos: Long? = null,
 ) {
     fun checkCancelled() {
         if (isCancelled()) throw java.util.concurrent.CancellationException("OpenCode request cancelled")
+        if (deadlineNanos != null && System.nanoTime() - deadlineNanos >= 0) {
+            throw HttpTimeoutException("OpenCode request timed out")
+        }
     }
 }
 
@@ -78,6 +83,8 @@ class OpenCodeTransport(
     private val getAuthorization: () -> String? = { null },
     sessionStateDirectory: java.nio.file.Path? = null,
     private val verifyConnection: (Boolean) -> Unit = {},
+    initialSavedPermissions: com.google.gson.JsonArray = com.google.gson.JsonArray(),
+    persistSavedPermissions: (com.google.gson.JsonArray) -> Unit = {},
 ) {
     private val log = logger<OpenCodeTransport>()
     @Volatile var apiVersion: Int = 1
@@ -87,6 +94,7 @@ class OpenCodeTransport(
     private val v2 = OpenCodeV2Adapter(::performRequest,
         sessionStateDirectory?.let(::OpenCodeV2SessionState) ?: OpenCodeV2SessionState(),
         BackgroundProcessJudge(::request)::classify, ::publishBackgroundStatus)
+    internal val savedPermissions = OpenCodeSavedPermissions({ apiVersion }, initialSavedPermissions, persistSavedPermissions, getUrl, ::request)
 
     private fun publishBackgroundStatus(sessionID: String, directory: String?) {
         if (disposed.get() || isDisposing() || apiVersion != 2) return
@@ -101,7 +109,7 @@ class OpenCodeTransport(
         emitEvent(event)
     }
 
-    fun resetProtocol() { apiVersion = 1; v2.reset() }
+    fun resetProtocol() { apiVersion = 1; v2.reset(); savedPermissions.reset() }
 
     private val client: HttpClient = HttpClient.newBuilder()
         .connectTimeout(Duration.ofSeconds(10))
@@ -120,6 +128,7 @@ class OpenCodeTransport(
     private val streamExecutor = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "varro-opencode-events").apply { isDaemon = true }
     }
+    private val bodyExecutor = Executors.newVirtualThreadPerTaskExecutor()
 
     private val requestWorkspaceDirectory = AtomicReference<String?>(getWorkspaceCwd())
     private val eventStreamDirectory = AtomicReference<String?>(null)
@@ -170,12 +179,18 @@ class OpenCodeTransport(
         body: JsonElement? = null,
         options: RequestOptions = RequestOptions(),
     ): OpenCodeResponse {
+        val requestedDeadline = System.nanoTime() + java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(
+            options.timeoutMs ?: requestTimeoutMs(method.uppercase(), path))
+        val bounded = options.copy(deadlineNanos = minOf(options.deadlineNanos ?: requestedDeadline, requestedDeadline))
+        bounded.checkCancelled()
         activeRequestCount.incrementAndGet()
         if (method.uppercase() !in setOf("GET", "HEAD")) lastMutationAt.set(System.currentTimeMillis())
         try {
+            val allowances = savedPermissions.prepare(method.uppercase(), path, body, bounded)
             val response = if (apiVersion == 2) v2.request(method.uppercase(), path, body,
-                options.copy(directory = options.directory ?: if (options.unscoped) null else workspaceDirectoryForRequest(method, path)))
-            else performRequest(method, path, body, options)
+                bounded.copy(directory = bounded.directory ?: if (bounded.unscoped) null else workspaceDirectoryForRequest(method, path)))
+            else performRequest(method, path, body, bounded)
+            if (allowances.isNotEmpty()) savedPermissions.approved(allowances, bounded)
             if (apiVersion == 2) observeSessions(method, path, response.data)
             runCatching { onRequestSucceeded(method, path) }
                 .onFailure { log.warn("Request observer failed", it) }
@@ -185,8 +200,17 @@ class OpenCodeTransport(
     }
 
     private fun performRequest(method: String, path: String, body: JsonElement?, options: RequestOptions): OpenCodeResponse {
-        options.checkCancelled()
+        val requestedDeadline = System.nanoTime() + java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(
+            options.timeoutMs ?: requestTimeoutMs(method, path))
+        val deadline = minOf(options.deadlineNanos ?: requestedDeadline, requestedDeadline)
+        fun checkActive() {
+            if (disposed.get() || isDisposing()) throw java.util.concurrent.CancellationException("OpenCode transport disposed")
+            options.checkCancelled()
+            if (System.nanoTime() - deadline >= 0) throw HttpTimeoutException("OpenCode request timed out")
+        }
+        checkActive()
         verifyConnection(false)
+        checkActive()
         val directory = if (options.unscoped) {
             null
         } else {
@@ -214,12 +238,15 @@ class OpenCodeTransport(
         val response = try {
             var received: HttpResponse<InputStream>? = null
             while (received == null) {
-                options.checkCancelled()
+                checkActive()
                 try { received = future.get(100, java.util.concurrent.TimeUnit.MILLISECONDS) }
                 catch (_: java.util.concurrent.TimeoutException) { /* Check cancellation while waiting for headers. */ }
             }
             received
         } catch (failure: Exception) {
+            // Headers may have arrived just as cancellation won. A completed future cannot
+            // be cancelled, but its streaming body still needs to be closed.
+            future.whenComplete { received, _ -> runCatching { received?.body()?.close() } }
             future.cancel(true)
             if (failure is java.util.concurrent.CancellationException) throw failure
             val cause = failure.cause ?: failure
@@ -233,14 +260,13 @@ class OpenCodeTransport(
         }
 
         val text = response.body().use { stream ->
-            if (!options.cancellableBody) readBounded(stream, options.maxResponseBytes)
-            else {
-                val read = CompletableFuture.supplyAsync { readBounded(stream, options.maxResponseBytes) }
+            run {
+                val read = CompletableFuture.supplyAsync({ readBounded(stream, options.maxResponseBytes) }, bodyExecutor)
                 inFlight.add(read)
                 try {
                     var text: String? = null
                     while (text == null) {
-                        options.checkCancelled()
+                        checkActive()
                         try { text = read.get(100, java.util.concurrent.TimeUnit.MILLISECONDS) }
                         catch (_: java.util.concurrent.TimeoutException) { /* Recheck the caller's deadline. */ }
                     }
@@ -253,6 +279,7 @@ class OpenCodeTransport(
                 }
             }
         }
+        checkActive()
         val data = Json.parseOrNull(text)
 
         if (response.statusCode() !in 200..299) {
@@ -653,6 +680,7 @@ class OpenCodeTransport(
         stopEventStream()
         abortRequests()
         streamExecutor.shutdownNow()
+        bodyExecutor.shutdownNow()
     }
 
     private fun readBounded(stream: InputStream, maxBytes: Long): String {

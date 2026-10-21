@@ -32,6 +32,7 @@ import { adaptHostContext, databaseProvider } from './database-extension';
 import pluginMetadata from './plugin-metadata';
 import { supportsDetachedEditors } from './host-capabilities';
 import { installLinkIntegration } from './link-integration';
+import { installReceiveChannel as installNativeReceiveChannel } from './receive-channel';
 
 type HostWindow = Window & {
   __varroHostSend?: (json: string) => void;
@@ -75,9 +76,9 @@ function installSendChannel() {
  * event upstream's bridge is already listening for.
  */
 function installReceiveChannel() {
-  hostWindow.__varroReceive = (payload: unknown) => {
+  installNativeReceiveChannel(hostWindow, (payload: unknown) => {
     window.dispatchEvent(new MessageEvent('message', { data: adaptHostContext(payload) }));
-  };
+  });
 }
 
 /**

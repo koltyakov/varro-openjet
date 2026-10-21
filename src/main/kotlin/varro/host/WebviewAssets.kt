@@ -41,12 +41,27 @@ object WebviewAssets {
     val assetVersion: String by lazy {
         readResource("$RESOURCE_ROOT/webview.version")?.decodeToString()?.trim().orEmpty()
     }
+    val staticImports: List<String> by lazy {
+        runCatching {
+            val raw = readResource("$RESOURCE_ROOT/webview.imports.json")?.decodeToString() ?: "[]"
+            validatedImports(varro.protocol.Json.parse(raw))
+        }.getOrDefault(emptyList())
+    }
+
+    internal fun validatedImports(value: com.google.gson.JsonElement): List<String> =
+        value.takeIf { it.isJsonArray }?.asJsonArray?.mapNotNull { item ->
+            item.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isString }?.asString
+                ?.takeIf { Regex("chunks/[A-Za-z0-9_-]+-[A-Za-z0-9_-]+\\.js").matches(it) }
+        }?.distinct()?.take(128).orEmpty()
 
     /** True when the bundle is present, i.e. the npm build actually ran. */
     fun isBundlePresent(): Boolean =
         WebviewAssets::class.java.getResource("$RESOURCE_ROOT/webview.mjs") != null
 
-    fun isOwnedUrl(url: String?): Boolean = url != null && url.startsWith(ORIGIN)
+    fun isOwnedUrl(url: String?): Boolean = runCatching {
+        val uri = URI(url ?: return false)
+        uri.scheme == "http" && uri.host == "varro.localhost" && uri.port == -1 && uri.rawUserInfo == null
+    }.getOrDefault(false)
 
     /**
      * Resolves a request URL to a response.
@@ -55,6 +70,7 @@ object WebviewAssets {
      *   inline a fresh boot snapshot on every (re)load.
      */
     fun resolve(url: String, generateIndex: () -> String): Resolved? {
+        if (!isOwnedUrl(url)) return null
         val path = runCatching { URI(url).path }.getOrNull()?.ifEmpty { "/" } ?: return null
 
         if (path == "/" || path == "/index.html") {
@@ -71,10 +87,18 @@ object WebviewAssets {
             "$RESOURCE_ROOT/$normalized"
         }
         val bytes = readResource(resource) ?: return null
-        return Resolved(bytes, mimeType(normalized))
+        return Resolved(bytes, mimeType(normalized), assetCacheControl(url))
     }
 
-    data class Resolved(val bytes: ByteArray, val mimeType: String)
+    data class Resolved(val bytes: ByteArray, val mimeType: String, val cacheControl: String = "no-store")
+
+    internal fun assetCacheControl(url: String): String {
+        val uri = URI(url)
+        val versioned = uri.path in setOf("/webview.mjs", "/webview.css") &&
+            uri.rawQuery?.matches(Regex("v=[a-f0-9]{16}")) == true
+        val hashed = uri.path.matches(Regex("/(chunks|assets)/[A-Za-z0-9_.-]+-[A-Za-z0-9_-]{8,}\\.[A-Za-z0-9]+"))
+        return if (versioned || hashed) "public, max-age=31536000, immutable" else "no-cache"
+    }
 
     /**
      * Collapses `.` and rejects any segment that escapes the bundle root or looks
@@ -162,7 +186,7 @@ object WebviewAssets {
                 status = 200
                 // The page shell already carries a `?v=` cache key, so assets can
                 // be cached hard; the shell itself must never be.
-                setHeaderByName("Cache-Control", "no-cache", true)
+                setHeaderByName("Cache-Control", payload.cacheControl, true)
                 // Module scripts and fonts are fetched as CORS requests from the
                 // synthetic origin, which CEF treats as cross-origin unless the
                 // response opts in.

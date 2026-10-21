@@ -7,6 +7,21 @@ import org.junit.Test
 
 @Suppress("DEPRECATION")
 class WebviewAssetsHandlerTest {
+    @Test fun `only versioned assets are immutable and HTML is never cached`() {
+        assertTrue(WebviewAssets.assetCacheControl("${WebviewAssets.ORIGIN}/webview.mjs?v=abcdef1234567890").contains("immutable"))
+        assertTrue(WebviewAssets.assetCacheControl("${WebviewAssets.ORIGIN}/chunks/app-abc12345.js").contains("immutable"))
+        assertEquals("no-cache", WebviewAssets.assetCacheControl("${WebviewAssets.ORIGIN}/webview.mjs"))
+        assertEquals("no-store", WebviewAssets.resolve(WebviewAssets.INDEX_URL) { "shell" }!!.cacheControl)
+        assertFalse(WebviewAssets.isOwnedUrl("${WebviewAssets.ORIGIN}.evil.test/index.html"))
+        assertFalse(WebviewAssets.isOwnedUrl("${WebviewAssets.ORIGIN}:1234/index.html"))
+    }
+
+    @Test fun `preload hints reject external URLs traversal and markup`() {
+        assertEquals(listOf("chunks/app-abc12345.js"), WebviewAssets.validatedImports(varro.protocol.Json.array(listOf(
+            "chunks/app-abc12345.js", "chunks/app-abc12345.js", "../secret.js", "https://evil.test/a.js", "chunks/a\"-bad.js",
+        ))))
+    }
+
     @Test fun `legacy callbacks stream the entire asset in chunks then signal EOF`() {
         val bytes = "export default 'webview';".toByteArray()
         val handler = WebviewAssets.Handler(WebviewAssets.Resolved(bytes, "text/javascript"))

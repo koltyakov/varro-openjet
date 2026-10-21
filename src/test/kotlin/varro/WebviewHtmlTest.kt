@@ -35,6 +35,15 @@ class WebviewHtmlTest {
             assetVersion = "abc123",
         )
 
+    @Test fun `preloads preserve hashed import URLs before executing the entry`() {
+        val html = WebviewHtml.render(theme, JsonObject(), JsonObject(), "send(message)", "0123456789abcdef",
+            listOf("chunks/entry-abcdefgh.js", "../invalid.js"))
+        assertTrue(html.contains("<link rel=\"modulepreload\" href=\"/chunks/entry-abcdefgh.js\" crossorigin />"))
+        assertTrue(html.indexOf("modulepreload") < html.indexOf("<script type=\"module\""))
+        assertFalse(html.contains("invalid.js"))
+        assertFalse(html.contains("entry-abcdefgh.js?v="))
+    }
+
     @Test
     fun `installs every global the webview bridge reads`() {
         val html = render()

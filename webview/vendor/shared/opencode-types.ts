@@ -75,6 +75,7 @@ export type OpenCodeServerMemoryPermission = {
   permission: string;
   pattern: string;
   retractable?: boolean;
+  editable?: boolean;
 };
 
 export type OpenCodeServerMemoryPermissions =
@@ -884,6 +885,8 @@ export type ServerEventPropertiesByName = {
   'project.updated': ProjectUpdatedProperties;
   'session.created': { sessionID?: string; info: SessionEventInfo };
   'session.updated': { sessionID?: string; info: SessionEventInfo };
+  'session.archived': { sessionID: string };
+  'session.unarchived': { sessionID: string };
   'session.deleted': { sessionID?: string; info: { id: string } };
   'session.status': { sessionID: string; status: SessionStatus };
   'session.error': SessionErrorProperties;
