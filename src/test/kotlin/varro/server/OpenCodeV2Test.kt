@@ -108,6 +108,38 @@ class OpenCodeV2Test {
         }
     }
 
+    @Test fun `native OpenCode model exclusions respect the server version without losing custom fallback or overrides`() {
+        val ids = listOf("opencode", "opencode-go", "custom")
+        for (version in listOf(null, "unknown", "2.0.5", "2.1.1", "opencode v2.1.1", "2.1.2-beta.1", "2.1.2", "opencode v2.1.2", "2.1.2+build-test", "2.2.0-beta.1")) {
+            val excludes = version in listOf("2.1.2", "opencode v2.1.2", "2.1.2+build-test", "2.2.0-beta.1")
+            val native = adapter { _, path, _ -> when (path) {
+                "/api/model" -> Json.obj("data" to ids.map { id -> Json.obj("id" to "available", "providerID" to id,
+                    "capabilities" to Json.obj("tools" to true, "input" to listOf("text"), "output" to listOf("text")),
+                    "limit" to Json.obj("context" to 32000, "output" to 1000)) })
+                "/api/provider" -> Json.obj("data" to ids.map { Json.obj("id" to it, "name" to it) })
+                "/api/integration" -> Json.obj("data" to emptyList<Any>())
+                "/api/config" -> Json.obj("data" to listOf(Json.obj("info" to Json.obj("providers" to Json.obj(*ids.map { id ->
+                    id to Json.obj("models" to Json.obj("hidden" to Json.obj("cost" to Json.obj("input" to 0, "output" to 0)),
+                        "available" to Json.obj("limit" to Json.obj("context" to 64000))))
+                }.toTypedArray())))))
+                else -> error(path)
+            } }
+            native.setServerVersion(version)
+            for (route in listOf("/provider", "/config/providers")) {
+                val catalog = native.request("GET", route, null, RequestOptions()).data.asObjectOrNull()
+                val providers = catalog.arr(if (route == "/provider") "all" else "providers")!!.map { it.asJsonObject }
+                for (id in ids) {
+                    val models = providers.single { it.str("id") == id }.obj("models")!!
+                    assertEquals("$version $route $id", id == "custom" || !excludes, models.has("hidden"))
+                    assertEquals(Json.obj("context" to 64000, "output" to 1000), models.obj("available").obj("limit"))
+                }
+            }
+            native.reset()
+            val providers = native.request("GET", "/config/providers", null, RequestOptions()).data.asObjectOrNull().arr("providers")!!
+            assertTrue(providers.all { it.asObjectOrNull().obj("models")!!.has("hidden") })
+        }
+    }
+
     @Test fun `startup credentials are redacted across every chunk boundary`() {
         val text = "server listening on http://127.0.0.1:1234\nserver password secret-value\nready\n"
         for (split in 0..text.length) {

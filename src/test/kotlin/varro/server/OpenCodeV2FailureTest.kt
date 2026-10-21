@@ -29,6 +29,19 @@ class OpenCodeV2FailureTest {
         assertEquals(503, projected.obj("info").obj("error").obj("data").int("statusCode"))
     }
 
+    @Test fun `free limit errors preserve usage guidance and status in history and live events`() {
+        val message = "Free usage limit reached. Connect a provider or subscribe to OpenCode Go to keep going, or switch models."
+        val failure = Json.obj("type" to "provider.free-limit", "message" to message, "status" to 429, "retryAfterMs" to 60000)
+        val history = OpenCodeV2Projection.message(idle(failure), "ses_fixture", context = context).obj("info").obj("error").obj("data")
+        val live = OpenCodeV2Events.project(Json.obj("id" to "evt_free_limit", "type" to "session.execution.failed", "created" to 1000,
+            "data" to Json.obj("sessionID" to "ses_fixture", "error" to failure)), context)
+            .single { it.str("type") == "session.error" }.obj("properties").obj("error").obj("data")
+        for (error in listOf(history, live)) {
+            assertEquals(message, error.str("message"))
+            assertEquals(429, error.int("statusCode"))
+        }
+    }
+
     @Test fun `malformed persisted errors fall back to valid live context or an actionable default`() {
         val projected = OpenCodeV2Projection.message(idle(Json.obj("message" to 42)), "ses_fixture", context = context)
         assertEquals("stale error", projected.obj("info").obj("error").obj("data").str("message"))

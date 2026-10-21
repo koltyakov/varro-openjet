@@ -1,6 +1,6 @@
 # OpenCode V2 support
 
-OpenJet supports V1 from 1.16.0 and V2 from 2.0.5. The webview and shared sources were synced from Varro's `main` branch at `b14dc601414e`, version 0.33.15. Tested baselines are V1 1.19.3 and V2 2.1.1. The Kotlin adapter handles released-server contracts, including generated skill, shell and synthetic transcript records. Synthetic text appears as automatic-action notices; canonical subagent completion metadata produces linked subagent activities. Pending and running V2 patch calls render as active edits. Assistant history preserves automatic retry metadata for recovery notices. History attachments use deferred references with Kotlin-generated thumbnails and on-demand original reads.
+OpenJet supports V1 from 1.16.0 and V2 from 2.0.5. The webview and shared sources were synced from Varro's `main` branch at `1a79bb1eb0ca`, version 0.33.16. Tested baselines are V1 1.19.3 and V2 2.1.2. The Kotlin adapter handles released-server contracts, including generated skill, shell and synthetic transcript records. Synthetic text appears as automatic-action notices; canonical subagent completion metadata produces linked subagent activities. Pending and running V2 patch calls render as active edits. Assistant history preserves automatic retry metadata for recovery notices. History attachments use deferred references with Kotlin-generated thumbnails and on-demand original reads.
 
 V2 sessions support `/pause` and a Resume action in the transcript. Pausing parks queued messages and interrupts with `resume=false`. Pause markers persist in the shared Varro session annotations, and session summaries and usage reports exclude paused time. Commit-message generation uses the stateless endpoint when the server advertises it, falling back to a helper session when the endpoint or selected model is unavailable before generation starts.
 
@@ -52,6 +52,11 @@ Text and reasoning use separate type-local part ordinals so streamed content rec
 
 Authentication forms preserve prompt conditions, defaults and hidden fields. The UI hides those fields, while the adapter submits applicable defaults and converts boolean and numeric answers for OAuth and API keys. OAuth callbacks identify attempts by ID and workspace. Cancellation stops polling and attempts server-side cleanup. Configured model costs use the same pricing shape as catalog models, and partial limits preserve catalog values. Local provider-disable policies and permission overrides target the workspace's `.opencode` directory when an ancestor has a `.opencode` config.
 
+On V2 2.1.2 and newer, native catalog exclusions for `opencode` and `opencode-go`
+are authoritative. Configured-model fallback cannot restore excluded free models.
+Returned models still receive configured overrides; custom providers and older
+servers retain fallback. The policy uses validated health and clears on protocol reset.
+
 OpenCode 2.0.25 external credential methods retain their catalog position alongside key and OAuth methods. The adapter posts the chosen method ID and typed form answers to `/api/integration/:id/connect/external`, then reports completion only after acknowledgement. It does not start or poll an OAuth attempt. Custom string fields remain text inputs even when the server supplies suggested options. Older servers keep their existing key and OAuth flows.
 
 Ordinary sends in Default mode preserve session-scoped Always approvals; explicit mode changes can still reset rules.
@@ -64,6 +69,10 @@ owning `sessionID` and a keyed `answer`. Positional answers from stale views are
 rejected without acknowledging the form. Unknown or malformed fields remain
 visible but cannot be answered here. Concurrent replies are rejected, and failed
 native validation leaves the form pending. Settled events exclude answer payloads.
+
+Location-owned MCP forms use `sessionID: global`. They stay out of session-question
+snapshots, events and reply state without being answered or cancelled. Use an
+OpenCode client with location-scoped form UI to answer them.
 
 Child-only Stop and parent background handoff require native child identities,
 matching workspace directories and advertised OpenAPI support. Stop uses the
@@ -797,9 +806,89 @@ The staged static-module-preload implementation in `webview/vite.config.mts` and
 `WebviewHtml.kt` supersedes the historical missing-preload entries above. Actual
 JCEF startup performance has not been measured during this sync.
 
+## Upstream sync review, 2026-10-21
+
+Reviewed Varro `b14dc601414e43ce0f41a33029b18814260007eb` through
+`1a79bb1eb0ca90efab329d6765c58c7d90bce754`, version 0.33.16. The review includes
+every changed extension source and test, shared protocol, package configuration,
+documentation and browser source. Shared protocol and contributed settings did not
+change. Vite moves to 8.3.5 and the V2 client to 2.1.2; no new browser dependency
+is needed. The lockfile uses pinned Node 24.22.0 and npm 12.2.1. The user's
+OpenJet 0.9.1 version selection is unchanged.
+
+| Upstream change | OpenJet alignment and coverage |
+| --- | --- |
+| `opencode-v2-adapter.ts`, `opencode-v2-events.ts`; `/api/form` and form events | `OpenCodeV2Adapter.kt` and `OpenCodeV2Events.kt` exclude the location-owned `global` sentinel before session projection or reply caching. `OpenCodeV2SyncTest` covers mixed snapshots, all three events, unchanged session forms and rejection of session-scoped replies/cancellations without native mutations. Global forms remain pending for a location-aware client, matching Varro. |
+| `open-code-transport.ts`, `opencode-v2-adapter.ts`; `/api/model`, `/provider`, `/config/providers` | `OpenCodeTransport.kt` passes validated health versions to `OpenCodeV2Adapter.kt`. From 2.1.2, configured fallback cannot restore excluded OpenCode/Go models. Tests cover unknown, old, prerelease, current and newer versions, custom fallback, returned-model overrides and reset. The published 2.1.2 fixture independently checks native free-model omission and both projected catalog routes with `OPENCODE_DISABLE_FREE_MODELS=true`. |
+| `provider-limits/adapters/opencode-go.ts`; Go usage endpoint | `QuotaAdapters.kt` now uses `https://opencode.ai/inference/go/v1/usage`. `QuotaAdaptersTest` and `ProviderQuotaMatrixTest` verify the new URL, bearer authentication and usage projection through fixture HTTP clients. |
+| `MessageList.tsx`, `session-list.css` | Copied unchanged. Native touch ownership survives pointer cancellation until touch end/cancel; upward reading remains detached during streaming. Taps and horizontal swipes retain follow. Composer feedback accounts for its border when positioning above the input. Upstream scroll unit and Chromium regressions passed. |
+
+The released OpenCode review covers 2.1.1 through 2.1.2, `133b1ebf` through
+`4b50f5cc`, including the `a517687f` release tag and subsequent package-version
+synchronization. Complete diffs and comparison metadata are retained under
+`build/opencode-compatibility/review-2.1.2/`. The 174-file comparison includes
+HTTP/OpenAPI, generated clients, schemas, SSE, configuration, provider/model
+metadata, permissions/forms, session/history/inbox, and serve/upgrade behavior.
+No consumed route, method or event envelope was removed. The only OpenAPI field
+addition is optional `experimental.location_idle_timeout`, preserved by native
+configuration reads. Structured errors add optional `retryAfterMs` and
+`provider.free-limit`; `OpenCodeV2FailureTest` verifies that history and live errors
+retain usage guidance and HTTP status. Countdown and prompt-recall differences
+are listed below rather than treated as implemented.
+
+Location retention during active sessions/background jobs, Code Mode job ordering,
+lower-reasoning titles, provider decoding/realtime fixes and legacy Console
+credential rewriting remain server-owned. App, TUI, Electron, Console, website,
+installer and retired hosted-sharing changes do not require JetBrains host ports.
+Local V2 sharing remains unavailable; no production credentials were rewritten.
+V1's SDK stays at 1.19.3; both support floors are unchanged.
+
+The exact published native macOS ARM64 2.1.2 binary passed the Kotlin adapter and
+managed-service suites without skips through `scripts/check-opencode-compatibility.py`.
+Fixtures use isolated HOME, XDG, database and service-state roots with a local
+deterministic provider. Evidence is
+`build/opencode-compatibility/2.1.2/verification.json` and
+`build/upstream-sync-1a79bb1-compatibility.log`.
+Both suites also passed again without skips on published 2.1.1, checking the
+older-server path after the version-gated change. Its log is
+`build/upstream-sync-1a79bb1-older-compatibility.log`.
+
+Vendor integrity, all 97 browser host tests, TypeScript checking and browser build
+passed. npm reports no unreviewed install scripts. All 549 selected upstream unit
+tests and 24 Chromium cases passed, covering touch, composer feedback and the
+histogram. These are upstream browser fixtures, not JCEF sandbox verification.
+The four compatibility-helper, seven build-script, three benchmark-checker and
+one vendor-integrity script tests passed. Logs use the `build/upstream-sync-1a79bb1-`
+prefix.
+
+`./gradlew check buildPlugin verifyPlugin` passed with published V2 2.1.2 and
+V1 1.19.3 fixture binaries enabled. All 617 enabled Kotlin tests passed; only the
+opt-in existing-database usage benchmark was skipped. All three released suites
+passed without skips. Plugin Verifier reported compatibility with all five
+configured IDE builds, including IU-263.6800.24, with the existing deprecated/
+experimental API warnings and unresolved optional-dependency notices. Source
+hashes confirmed no build/test source changed during verification. The final log
+is `build/upstream-sync-1a79bb1-final.log`; the package is
+`build/distributions/varro-openjet-0.9.1.zip`.
+
+Remaining differences and verification limits:
+
+| Status | Upstream and OpenJet code | User-visible impact |
+| --- | --- | --- |
+| Optional OpenCode UI parity, also absent in Varro | OpenCode `packages/schema/src/session-error.ts` and `packages/session-ui/src/timeline/projection.ts`; Varro `opencode-v2-projection.ts`; OpenJet `OpenCodeV2Projection.kt`, `OpenCodeV2Events.kt` and vendored `lib/usage-limit.ts`. | Free-limit guidance and HTTP status remain visible, but the server's new `retryAfterMs` is not retained for a countdown and the OpenCode app/TUI prompt-recall flow is not mirrored. |
+| Pre-existing pending-snapshot completeness difference | Upstream `rest-proxy.ts` and the expanded `rest-proxy.test.ts` reject unresolved real-session ownership before reconciliation. OpenJet `RestProxy.kt` forwards current-directory snapshots; `ProjectNotifications.kt` reconciles before asynchronous metadata loading. | Kotlin does not implement the same all-directory, all-session resolution barrier. Incomplete snapshots across content roots or unresolved session owners can differ in pending-question/permission visibility. This delta adds no upstream runtime change to that barrier; the global-form fix above does not establish parity for it. |
+| Pre-existing state-root selection difference | Upstream `src/extension/varro-state-paths.ts`; OpenJet `OpenCodeV2SessionState.kt`. | Separate native roots without legacy links can separate annotations, pauses and background-service choices across editors. No state was migrated. |
+| Accepted AVIF limitation | Upstream `src/extension/remote-images.ts`; OpenJet `RemoteImages.kt` and `ImageThumbnails.kt`. | AVIF can show an unsupported-image error instead of a preview. |
+| Pre-existing Windows inspector difference | Upstream `process-inspection.ts` and `extension.ts`; OpenJet `ProcessIdentity` in `ServerOwnership.kt`. | OpenJet inspects on demand rather than warming a persistent helper. Windows startup performance can differ. Static module preloads are already implemented in OpenJet. |
+| Other pre-existing quota differences | Upstream provider-limit service/adapters; OpenJet `QuotaAdapters.kt` and `ProviderQuotaBackend.kt`, detailed in [architecture](architecture.md#remaining-quota-parity-differences). | Claude validation, custom probe URLs, partial xAI failures and cross-host polling still differ. This sync changes only the Go URL. |
+| Native UI and external behavior not verified | Upstream touch/composer changes; OpenJet `WebviewHost.kt` and its vendored UI, plus `QuotaAdapters.kt`. | Actual JCEF touch/momentum and feedback layout, native Windows/Linux behavior, live Go quotas, OAuth and Handy were not exercised. No production session, credential, database or service registration was used for tests. |
+
+No new required backend or consumed-contract gap remains in the reviewed delta.
+The historical differences and optional UI parity work above remain.
+
 ## Verification
 
-The opt-in integration test launches a released CLI with isolated HOME, XDG directories and database. Its provider is a local deterministic HTTP fixture. It checks authenticated health and SSE, catalogs, pending input, prompt streaming, reopened history, helper and stateless generation, archive/restore, saved-permission editing when supported, permission and form acknowledgement, fork, tail deletion, session deletion, and read-only V1 import. Steering checks interrupt a stalled turn, resume pending steering, and verify after completion and 0, 75 and 250 ms sampling delays that queued input stays parked. It has been run against OpenCode 2.0.6, 2.0.25, 2.0.26, 2.0.28, 2.0.29, 2.0.32 and 2.1.1; the steering regression has been run against 2.0.26, 2.0.28, 2.0.29, 2.0.32 and 2.1.1.
+The opt-in integration test launches a released CLI with isolated HOME, XDG directories and database. Its provider is a local deterministic HTTP fixture. It checks authenticated health and SSE, catalogs, pending input, prompt streaming, reopened history, helper and stateless generation, archive/restore, saved-permission editing when supported, permission and form acknowledgement, fork, tail deletion, session deletion, and read-only V1 import. Steering checks interrupt a stalled turn, resume pending steering, and verify after completion and 0, 75 and 250 ms sampling delays that queued input stays parked. It has been run against OpenCode 2.0.6, 2.0.25, 2.0.26, 2.0.28, 2.0.29, 2.0.32, 2.1.1 and 2.1.2; the steering regression has been run against 2.0.26, 2.0.28, 2.0.29, 2.0.32, 2.1.1 and 2.1.2. The 2.1.2 fixture also verifies that native free-model exclusions survive both projected provider catalogs.
 
 ```sh
 VARRO_OPENCODE_TEST_BINARY=/absolute/path/to/opencode2 \
@@ -809,7 +898,7 @@ VARRO_OPENCODE_TEST_BINARY=/absolute/path/to/opencode2 \
 For a sync or version bump, use the pinned-release helper instead:
 
 ```sh
-python3 scripts/check-opencode-compatibility.py --version 2.1.1
+python3 scripts/check-opencode-compatibility.py --version 2.1.2
 ```
 
 It runs both released suites, verifies the installed and served version, rejects
@@ -834,7 +923,7 @@ Unit tests cover 2.0.5 health discovery, V1 fallback, HTML and authentication fa
 
 `OpenCodeManagedServiceIntegrationTest` checks private registration, coexistence with an isolated
 global-service fixture, second-host restoration and managed restart. It has been run against
-OpenCode 2.0.26, 2.0.28, 2.0.29, 2.0.32 and 2.1.1. Both services use fixture-only HOME, XDG roots and database. Set
+OpenCode 2.0.26, 2.0.28, 2.0.29, 2.0.32, 2.1.1 and 2.1.2. Both services use fixture-only HOME, XDG roots and database. Set
 `VARRO_OPENCODE_DESKTOP_TEST_BINARY` to another released V2 binary to check version coexistence.
 It also retires a fixture listener, launches a moved-port replacement with the same private
 service password, and checks recovered ownership, follower restoration and lifecycle stop
@@ -845,7 +934,7 @@ publication ordering and cancellation. Ownership fixtures cover retired-process 
 recovery, unknown and foreign accounts, credential and HTTP PID mismatches, conflicting claims,
 changed records and listener reinspection. These are not released V1 or V2-floor CLI runs, nor
 Windows/Linux or real-IDE verification. Status update hints track upstream's tested SDK/client
-baselines, V1 1.19.3 and V2 2.1.1; that does not claim every Kotlin flow was tested on both releases.
+baselines, V1 1.19.3 and V2 2.1.2; that does not claim every Kotlin flow was tested on both releases.
 
 ```sh
 VARRO_OPENCODE_TEST_BINARY=/absolute/path/to/opencode2 \

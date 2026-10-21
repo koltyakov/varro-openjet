@@ -145,7 +145,7 @@ internal class QuotaAdapters(
                     if (payload.bool("is_free_tier") == true) "Free" else null)
             }
             "opencode-go" -> {
-                val usage = json("https://opencode.ai/zen/go/v1/usage", token()).obj("usage")
+                val usage = json("https://opencode.ai/inference/go/v1/usage", token()).obj("usage")
                 available(listOf("rolling" to "five_hour", "weekly" to "weekly", "monthly" to "monthly").mapNotNull { (key, name) ->
                     val row = usage.obj(key)
                     window(name, periodLabel(name), null, null, row.reset(now, "resetsAt"), row.number("percent"))

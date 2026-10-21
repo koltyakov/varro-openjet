@@ -38,6 +38,33 @@ class OpenCodeV2SyncTest {
         assertEquals(Json.obj("sessionID" to "child", "requestID" to "frm"), settled.obj("properties"))
     }
 
+    @Test fun `global MCP forms never enter session snapshots events or reply state`() {
+        val global = form().apply { addProperty("id", "frm_global"); addProperty("sessionID", "global") }
+        val requests = mutableListOf<String>()
+        val native = adapter { method, path, _ ->
+            requests += "$method $path"
+            assertEquals("GET", method)
+            assertEquals("/api/form?location%5Bdirectory%5D=%2Frepo", path)
+            Json.obj("data" to listOf(global, form()))
+        }
+        assertTrue(native.events(Json.obj("type" to "form.created", "data" to Json.obj("form" to global))).isEmpty())
+        assertEquals(Json.array(listOf(OpenCodeV2Projection.form(form()))),
+            native.request("GET", "/question", null, RequestOptions(directory = "/repo")).data)
+        for (type in listOf("form.replied", "form.cancelled")) {
+            assertTrue(native.events(Json.obj("type" to type, "data" to Json.obj("id" to "frm_global", "sessionID" to "global"))).isEmpty())
+        }
+        // A fresh creation must not make either session-scoped mutation available.
+        native.events(Json.obj("type" to "form.created", "data" to Json.obj("form" to global)))
+        for (action in listOf("reject", "reply")) {
+            val failure = assertThrows(IllegalStateException::class.java) {
+                native.request("POST", "/question/frm_global/$action", null, RequestOptions(directory = "/repo"))
+            }
+            assertTrue(failure.message!!.contains("no longer pending"))
+        }
+        assertEquals(3, requests.size)
+        assertEquals("question.asked", native.events(Json.obj("type" to "form.created", "data" to Json.obj("form" to form()))).single().str("type"))
+    }
+
     @Test fun `unsupported malformed and duplicate native fields remain visible and non-answerable`() {
         for (field in listOf(Json.obj("key" to "secret", "type" to "password"), Json.obj("key" to "n", "type" to "number", "default" to "NaN"),
             Json.obj("key" to "secret", "type" to "string", "format" to "password"), Json.obj("key" to "choices", "type" to "multiselect", "options" to "broken"))) {

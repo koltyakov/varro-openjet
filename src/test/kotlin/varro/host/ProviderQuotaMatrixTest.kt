@@ -21,7 +21,7 @@ class ProviderQuotaMatrixTest {
         Fixture("google", true, "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota", """{"buckets":[{"modelId":"gemini-pro","remainingFraction":0.8}]}""", 80),
         Fixture("gemini", true, "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota", """{"buckets":[{"modelId":"gemini-flash","remainingFraction":0}]}""", 0),
         Fixture("ollama-cloud", false, "https://ollama.com/api/usage", """{"limits":{"session":{"usage":0.25}}}""", 75),
-        Fixture("opencode-go", false, "https://opencode.ai/zen/go/v1/usage", """{"usage":{"rolling":{"percent":70}}}""", 30),
+        Fixture("opencode-go", false, "https://opencode.ai/inference/go/v1/usage", """{"usage":{"rolling":{"percent":70}}}""", 30),
         Fixture("openrouter", false, "https://openrouter.ai/api/v1/auth/key", """{"data":{"limit":100,"usage":35}}""", 65),
         Fixture("zai", false, "https://api.z.ai/api/monitor/usage/quota/limit", """{"success":true,"data":{"limits":[{"type":"TOKENS_LIMIT","unit":3,"number":5,"percentage":45}]}}""", 55),
         Fixture("zai-coding-plan", false, "https://api.z.ai/api/monitor/usage/quota/limit", """{"success":true,"data":{"limits":[{"type":"TOKENS_LIMIT","unit":6,"percentage":60}]}}""", 40),

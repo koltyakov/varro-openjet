@@ -69,7 +69,10 @@
             <li>Keep file searches and attachment actions off the chat message queue; include extensionless
                 files and path matches in search results.</li>
             <li>Apply request cancellation and timeouts while reading server responses.</li>
-            <li>Align OpenCode V2 support with 2.1.1, retaining support for V2 2.0.5 and V1 1.16.0 or newer.</li>
+            <li>Preserve native model exclusions, keep global MCP forms out of session questions,
+                and update OpenCode Go quota polling.</li>
+            <li>Fix touch scrolling during streaming and composer feedback positioning.</li>
+            <li>Align OpenCode V2 support with 2.1.2, retaining support for V2 2.0.5 and V1 1.16.0 or newer.</li>
         </ul>
         <h3>0.8.x</h3>
         <ul>

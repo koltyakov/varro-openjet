@@ -820,6 +820,7 @@ export function MessageList() {
     observer: MutationObserver | null;
   } | null = null;
   let pointerScrollOwnershipActive = false;
+  let scrollTouch: { identifier: number; x: number; y: number } | null = null;
   let pointerScrollRange = 0;
   let wheelListenerPassive = true;
   let diffFocusPauseActive = false;
@@ -6581,10 +6582,20 @@ export function MessageList() {
   }
 
   function nestedScrollerWillConsumeWheel(event: WheelEvent) {
-    if (!containerRef || !(event.target instanceof Element)) return false;
-    const deltaY = getWheelDeltaPixels(event);
-    const deltaX = getHorizontalWheelDeltaPixels(event);
-    for (let element: Element | null = event.target; element && element !== containerRef;) {
+    return nestedScrollerWillConsumeMovement(
+      event.target,
+      getWheelDeltaPixels(event),
+      getHorizontalWheelDeltaPixels(event)
+    );
+  }
+
+  function nestedScrollerWillConsumeMovement(
+    target: EventTarget | null,
+    deltaY: number,
+    deltaX: number
+  ) {
+    if (!containerRef || !(target instanceof Element)) return false;
+    for (let element: Element | null = target; element && element !== containerRef;) {
       // Most ancestors cannot scroll at all. Checking overflowing geometry first keeps
       // getComputedStyle - which forces a style recalculation - off the wheel hot path.
       if (element instanceof HTMLElement && element.scrollHeight > element.clientHeight + 1) {
@@ -6818,7 +6829,50 @@ export function MessageList() {
     virtualPlaceholderReleaseBlockedUntil = lastScrollInputAt + USER_SCROLL_IDLE_MS;
   }
 
-  function releasePointerScrollOwnership() {
+  function handleTouchStart(event: TouchEvent) {
+    if (!pointerScrollOwnershipActive || event.touches.length !== 1) return;
+    const touch = event.touches[0];
+    if (!touch) return;
+    scrollTouch = { identifier: touch.identifier, x: touch.clientX, y: touch.clientY };
+  }
+
+  function handleTouchMove(event: TouchEvent) {
+    if (!scrollTouch || event.touches.length !== 1) return;
+    const touch = event.touches[0];
+    if (!touch || touch.identifier !== scrollTouch.identifier) return;
+    const deltaX = scrollTouch.x - touch.clientX;
+    const deltaY = scrollTouch.y - touch.clientY;
+    scrollTouch.x = touch.clientX;
+    scrollTouch.y = touch.clientY;
+    if (
+      Math.abs(deltaY) <= Math.abs(deltaX) ||
+      nestedScrollerWillConsumeMovement(event.target, deltaY, deltaX)
+    )
+      return;
+    lastScrollInputAt = performance.now();
+    directScrollInputEpoch += 1;
+    virtualPlaceholderReleaseBlockedUntil = lastScrollInputAt + USER_SCROLL_IDLE_MS;
+    // Release follow before the browser delivers movement, including after pointercancel
+    // hands the gesture to native scrolling. Momentum must remain detached after touchend.
+    if (deltaY < 0) {
+      resumeAutoScrollAfterDiffFocus = false;
+      disengageBottomFollow();
+    }
+  }
+
+  function handleTouchEnd(event: TouchEvent) {
+    if (!scrollTouch) return;
+    for (const touch of Array.from(event.touches)) {
+      if (touch.identifier === scrollTouch.identifier) return;
+    }
+    scrollTouch = null;
+    releasePointerScrollOwnership();
+  }
+
+  function releasePointerScrollOwnership(event?: PointerEvent) {
+    // Native panning cancels the pointer, not the touch. Keep the gesture's range
+    // and scroll ownership until touchend/touchcancel, even during a long swipe.
+    if (event?.pointerType === 'touch' && scrollTouch) return;
     const ownedScroll = pointerScrollOwnershipActive;
     releaseEmptyPointerScrollRange();
     pointerScrollOwnershipActive = false;
@@ -7351,6 +7405,10 @@ export function MessageList() {
     containerRef.addEventListener('focusin', handleFocusIn);
     containerRef.addEventListener('focusout', handleFocusOut);
     containerRef.addEventListener('pointerdown', handlePointerDown);
+    containerRef.addEventListener('touchstart', handleTouchStart, { passive: true });
+    containerRef.addEventListener('touchmove', handleTouchMove, { passive: true });
+    document.addEventListener('touchend', handleTouchEnd, { passive: true });
+    document.addEventListener('touchcancel', handleTouchEnd, { passive: true });
     document.addEventListener('click', handleExternalLayoutClickCapture, true);
     document.addEventListener('keydown', handleKeyDown);
     document.addEventListener('keydown', handleKeyDownCapture, true);
@@ -7554,6 +7612,11 @@ export function MessageList() {
       if (diffFocusResumeRafId) cancelAnimationFrame(diffFocusResumeRafId);
       diffFocusResumeRafId = 0;
       containerRef?.removeEventListener('pointerdown', handlePointerDown);
+      containerRef?.removeEventListener('touchstart', handleTouchStart);
+      containerRef?.removeEventListener('touchmove', handleTouchMove);
+      document.removeEventListener('touchend', handleTouchEnd);
+      document.removeEventListener('touchcancel', handleTouchEnd);
+      scrollTouch = null;
       document.removeEventListener('click', handleExternalLayoutClickCapture, true);
       document.removeEventListener('keydown', handleKeyDown);
       document.removeEventListener('keydown', handleKeyDownCapture, true);

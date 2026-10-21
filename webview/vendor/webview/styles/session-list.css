@@ -760,6 +760,11 @@ body:not(.vscode-light):not(.vscode-high-contrast):not(.vscode-high-contrast-lig
   max-width: min(280px, calc(100% - 16px));
 }
 
+:where(.chat-input-container) .session-action-feedback.is-input-anchored {
+  /* Absolute offsets start inside the composer's 1px border. */
+  bottom: calc(100% + 25px);
+}
+
 .session-action-feedback.is-error {
   padding-right: 3px;
   border-color: color-mix(in srgb, var(--color-vscode-error) 45%, var(--color-vscode-widget-bg));

@@ -29,8 +29,15 @@ internal class OpenCodeV2Adapter(
     private val backgroundWork = OpenCodeV2BackgroundWork()
     private val backgroundServices = OpenCodeV2BackgroundServices(annotations, backgroundWork, classifyBackgroundProcess, backgroundChanged)
     @Volatile private var apiCapabilities: OpenCodeApiCapabilities? = null
+    @Volatile private var nativeModelExclusions = false
 
-    fun reset() { apiCapabilities = null; childTasks.reset(); backgroundServices.reset(); permissions.clear(); forms.clear(); contexts.clear(); inputTypes.clear(); failures.clear(); parents.clear(); oauth.clear(); backgroundWork.reset() }
+    fun setServerVersion(version: String?) {
+        val release = version?.let { Regex("\\d+\\.\\d+\\.\\d+(?:-[0-9A-Za-z.-]+)?").find(it)?.value }
+        val comparison = release?.let { OpenCodeCli.compareVersions(it, "2.1.2") }
+        nativeModelExclusions = comparison != null && (comparison > 0 || (comparison == 0 && '-' !in release))
+    }
+
+    fun reset() { nativeModelExclusions = false; apiCapabilities = null; childTasks.reset(); backgroundServices.reset(); permissions.clear(); forms.clear(); contexts.clear(); inputTypes.clear(); failures.clear(); parents.clear(); oauth.clear(); backgroundWork.reset() }
 
     fun events(event: JsonObject): List<JsonObject> {
         val type = event.str("type").orEmpty()
@@ -53,7 +60,7 @@ internal class OpenCodeV2Adapter(
         } } } ?: Json.obj()
         if (type == "permission.asked" && sessionID != null) data.str("id")?.let { permissions[it] = sessionID }
         if (type == "permission.replied") data.str("requestID")?.let(permissions::remove)
-        if (type == "form.created") data.obj("form")?.let { form -> form.str("id")?.let { forms[it] = form } }
+        if (type == "form.created") data.obj("form")?.takeIf { it.str("sessionID") != "global" }?.let { form -> form.str("id")?.let { forms[it] = form } }
         if (type in setOf("form.replied", "form.cancelled")) data.str("id")?.let(forms::remove)
         for (map in listOf(contexts, failures)) while (map.size > 4096) map.keys.firstOrNull()?.let(map::remove)
         while (inputTypes.size > 4096) inputTypes.keys.firstOrNull()?.let(inputTypes::remove)
@@ -184,7 +191,8 @@ internal class OpenCodeV2Adapter(
                 return result(pending.map(OpenCodeV2Projection::permission))
             }
             "/question" -> {
-                val pending = objects(data("GET", scoped("/api/form")))
+                // MCP forms belong to a location, not a session. Leave them for a location-aware client.
+                val pending = objects(data("GET", scoped("/api/form"))).filter { it.str("sessionID") != "global" }
                 pending.forEach { forms[it.str("id")!!] = it }
                 return result(pending.map(OpenCodeV2Projection::form))
             }
@@ -573,14 +581,16 @@ internal class OpenCodeV2Adapter(
                     all.add(it)
                 }
             if (target.str("source") == "custom") target.addProperty("source", "config")
-            provider.obj("models")?.entrySet()?.forEach { (modelID, definition) -> definition.asObjectOrNull()?.let { model ->
+            provider.obj("models")?.entrySet()?.forEach models@ { (modelID, definition) -> definition.asObjectOrNull()?.let { model ->
+                val existing = target.obj("models").obj(modelID)
+                // Newer native OpenCode catalogs own free-model and other exclusions.
+                if (existing == null && id in setOf("opencode", "opencode-go") && nativeModelExclusions) return@models
                 val normalized = Json.obj("id" to modelID, "providerID" to id, "name" to (model.str("name") ?: modelID),
                     "api" to Json.obj("id" to (model.str("modelID") ?: modelID), "npm" to provider.str("package").orEmpty(), "url" to ""),
                     "cost" to Json.obj("input" to 0, "output" to 0, "cache_read" to 0, "cache_write" to 0),
                     "capabilities" to Json.obj("tools" to true, "input" to listOf("text"), "output" to listOf("text")), "limit" to Json.obj("context" to 0, "output" to 0))
-                target.obj("models").obj(modelID)?.entrySet()?.forEach { normalized.add(it.key, it.value) }
+                existing?.entrySet()?.forEach { normalized.add(it.key, it.value) }
                 model.entrySet().forEach { normalized.add(it.key, it.value) }
-                val existing = target.obj("models").obj(modelID)
                 normalized.add("cost", if (model.hasNonNull("cost")) OpenCodeV2Projection.modelCost(model.get("cost"))
                     else existing?.get("cost") ?: OpenCodeV2Projection.modelCost(null))
                 normalized.add("limit", Json.obj("context" to 0, "output" to 0).apply {

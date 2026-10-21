@@ -28,7 +28,7 @@ class QuotaAdaptersTest {
             Fixture("google", "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota", """{"buckets":[{"modelId":"gemini-pro","remainingFraction":0.8}]}""", 80, "gemini-pro"),
             Fixture("gemini", "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota", """{"buckets":[{"modelId":"gemini-flash","remainingFraction":0}]}""", 0, "gemini-flash"),
             Fixture("ollama-cloud", "https://ollama.com/api/usage", """{"limits":{"session":{"usage":0.25},"weekly":{"usage":0.5}}}""", 75, "five_hour"),
-            Fixture("opencode-go", "https://opencode.ai/zen/go/v1/usage", """{"usage":{"rolling":{"percent":70,"resetsAt":"2027-01-01T00:00:00Z"}}}""", 30, "five_hour"),
+            Fixture("opencode-go", "https://opencode.ai/inference/go/v1/usage", """{"usage":{"rolling":{"percent":70,"resetsAt":"2027-01-01T00:00:00Z"}}}""", 30, "five_hour"),
             Fixture("openrouter", "https://openrouter.ai/api/v1/auth/key", """{"data":{"limit":100,"usage":35}}""", 65, "spend"),
             Fixture("zai-coding-plan", "https://api.z.ai/api/monitor/usage/quota/limit", """{"success":true,"data":{"limits":[{"type":"TOKENS_LIMIT","unit":3,"number":5,"percentage":45}]}}""", 55, "five_hour"),
             Fixture("minimax", "https://api.minimax.io/v1/api/openplatform/coding_plan/remains", """{"base_resp":{"status_code":0},"model_remains":[{"current_interval_total_count":100,"current_interval_usage_count":30,"remains_time":60000}]}""", 30, "requests"),

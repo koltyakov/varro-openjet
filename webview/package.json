@@ -26,14 +26,14 @@
     "solid-js": "^1.9.17"
   },
   "devDependencies": {
-    "@opencode/client": "^2.1.1",
+    "@opencode/client": "^2.1.2",
     "@types/node": "26.6.5",
     "@tailwindcss/vite": "4.3.3",
     "iconoir": "7.12.1",
     "material-icon-theme": "5.39.0",
     "tailwindcss": "4.3.3",
     "typescript": "7.0.2",
-    "vite": "8.3.4",
+    "vite": "8.3.5",
     "vite-plugin-solid": "2.11.14",
     "vitest": "5.0.5"
   },

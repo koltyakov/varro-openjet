@@ -420,7 +420,7 @@ class OpenCodeTransport(
                 }
                 null
             }
-            if (health != null) { healthFailure = null; return health }
+            if (health != null) { v2.setServerVersion(if (apiVersion == 2) health.version else null); healthFailure = null; return health }
             // Never bypass explicit credential rejection with another health route.
             if (failure != null) break
         }

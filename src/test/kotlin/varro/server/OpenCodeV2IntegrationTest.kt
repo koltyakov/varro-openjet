@@ -65,6 +65,7 @@ class OpenCodeV2IntegrationTest {
             "XDG_CONFIG_HOME" to root.resolve("config").toString(), "XDG_DATA_HOME" to root.resolve("data").toString(),
             "XDG_STATE_HOME" to root.resolve("state").toString(), "XDG_CACHE_HOME" to root.resolve("cache").toString(),
             "OPENCODE_DB" to root.resolve("test.db").toString(), "VARRO_TEST_STATE_ROOT" to root.toString(),
+            "OPENCODE_DISABLE_FREE_MODELS" to "true",
         )
         val installedVersion = OpenCodeCli({ binary!! }, { workspace.toString() }, environment).readInstalledVersion()
             ?: error("Could not verify the released fixture CLI version")
@@ -133,6 +134,7 @@ class OpenCodeV2IntegrationTest {
                 assertTrue(capabilities.savedPermissionEditing)
             }
             assertNotNull(password.get())
+            if (OpenCodeCli.compareVersions(version, "2.1.2") >= 0) verifyFreeModelExclusions(transport, root)
             if (OpenCodeCli.compareVersions(version, "2.0.29") >= 0) {
                 val config = transport.request("GET", "/config").data.asObjectOrNull()
                 assertTrue(config.arr("policies")!!.any { it.asObjectOrNull().str("resource") == "openai" })
@@ -304,6 +306,28 @@ class OpenCodeV2IntegrationTest {
             reader.join(1000)
             provider.stop(0)
             providerExecutor.shutdownNow()
+        }
+    }
+
+    private fun verifyFreeModelExclusions(transport: OpenCodeTransport, root: java.nio.file.Path) {
+        val directory = Files.createDirectory(root.resolve("native-free-models")).toString()
+        val ids = listOf("opencode", "opencode-go")
+        Files.writeString(java.nio.file.Path.of(directory, "opencode.json"), Json.stringify(Json.obj(
+            "providers" to Json.obj(*ids.map { id -> id to Json.obj(
+                "package" to "@opencode/ai/providers/openai-compatible",
+                "settings" to Json.obj("baseURL" to "http://127.0.0.1:1/v1", "apiKey" to "fixture-only"),
+                "models" to Json.obj("free-fixture" to Json.obj("cost" to Json.obj("input" to 0, "output" to 0))),
+            ) }.toTypedArray()),
+        )))
+        val options = RequestOptions(directory = directory)
+        val models = transport.request("GET", "/api/model", options = options).data.asObjectOrNull().arr("data")!!
+        assertTrue(models.any { it.asObjectOrNull().str("providerID") == "fixture" && it.asObjectOrNull().str("id") == "fixture" })
+        assertFalse(models.any { it.asObjectOrNull().str("providerID") in ids && it.asObjectOrNull().str("id") == "free-fixture" })
+        for (route in listOf("/provider", "/config/providers")) {
+            val providers = transport.request("GET", route, options = options).data.asObjectOrNull()
+                .arr(if (route == "/provider") "all" else "providers")!!
+            for (id in ids) assertFalse("$route restored $id/free-fixture",
+                providers.map { it.asJsonObject }.firstOrNull { it.str("id") == id }.obj("models")?.has("free-fixture") == true)
         }
     }
 
