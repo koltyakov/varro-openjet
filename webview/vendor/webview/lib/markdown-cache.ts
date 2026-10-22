@@ -2,7 +2,9 @@ type CacheEntry = { cache: MarkdownStringCache; key: string; value: string; byte
 export type MarkdownStringCache = Map<string, CacheEntry>;
 
 const BYTE_BUDGET = 2 * 1024 * 1024;
-const ENTRY_LIMIT = 100;
+// A history page has 200 messages. Keep its small entries from evicting an expensive
+// rendered response while most of the shared byte budget is still available.
+const ENTRY_LIMIT = 256;
 const lru = new Map<CacheEntry, true>();
 let bytes = 0;
 

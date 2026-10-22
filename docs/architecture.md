@@ -182,6 +182,8 @@ Readiness and queue transitions share one lock. Before the UI's `ready` handshak
 
 Versioned entry assets and hashed chunks use immutable browser caching; HTML uses `no-store`. The build emits `webview.imports.json` for static entry dependencies. The host validates those paths and emits module-preload hints without modifying their hashed URLs. Dynamic diagram and highlighter imports remain lazy.
 
+Markdown math uses bundled KaTeX and local fonts, without a CDN. CSS splitting is disabled so the shell's `webview.css` includes chat and math styles together. `WebviewAssets` serves the emitted WOFF2, WOFF and TTF assets with font MIME types and hashed-asset caching. Its MIT notice ships at `META-INF/licenses/katex.txt`. The upstream screen-reader-dependent MathML optimization requires VS Code's theme identity attribute, which OpenJet does not set; JCEF retains the complete semantic math tree.
+
 `link-integration.ts` handles unclaimed anchor clicks at window-bubble phase, after Solid's delegated document handlers. This prevents duplicate external opens. It translates upstream's `data-vscode-context` link and file metadata into `host/link-context-menu`; `WebviewHost` shows a native copy popup and writes the selected URL or full path to the IDE clipboard. Both layers validate the context, and copying never opens its target.
 
 **Theme.** `ThemeBridge` derives `--vscode-*` custom properties from IntelliJ UI keys, the editor color scheme and the console ANSI palette. Theme changes update variables without reloading the page.

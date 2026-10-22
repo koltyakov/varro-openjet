@@ -2,6 +2,7 @@ import { Show, createSignal, createEffect, createMemo, onMount, onCleanup } from
 import type { JSX } from 'solid-js';
 import { Portal, render } from 'solid-js/web';
 import DOMPurify from 'dompurify';
+import { renderToString as renderKatex } from 'katex';
 import { marked, Tokenizer } from 'marked';
 import type { Token, Tokens } from 'marked';
 import type { Mermaid, MermaidConfig } from 'mermaid';
@@ -77,9 +78,11 @@ type StreamingMarkdownScanState = {
   lastBoundary: number | null;
   safeBoundary: number;
   openFence: MarkdownFenceState | null;
+  openMath: boolean;
   resumeIndex: number;
   resumeLastBoundary: number | null;
   resumeOpenFence: MarkdownFenceState | null;
+  resumeOpenMath: boolean;
 };
 
 type MarkdownRenderSegments = StreamingMarkdownSegments & {
@@ -92,6 +95,8 @@ type IncompleteStreamingMarkdown = {
   marker: string | null;
   pendingText: string | null;
   hidePendingText: boolean;
+  showIndicator?: boolean;
+  pendingBullet?: boolean;
 };
 
 type MarkdownHydrationFlags = {
@@ -188,6 +193,84 @@ const ALLOWED_HTML_ATTRIBUTES = [
   'y1',
   'y2',
 ];
+const KATEX_HTML_TAGS = [
+  'annotation',
+  'annotation-xml',
+  'math',
+  'menclose',
+  'merror',
+  'mfrac',
+  'mi',
+  'mmultiscripts',
+  'mn',
+  'mo',
+  'mover',
+  'mpadded',
+  'mphantom',
+  'mprescripts',
+  'mrow',
+  'mroot',
+  'ms',
+  'mspace',
+  'msqrt',
+  'mstyle',
+  'msub',
+  'msubsup',
+  'msup',
+  'mtable',
+  'mtd',
+  'mtext',
+  'mtr',
+  'munder',
+  'munderover',
+  'none',
+  'semantics',
+];
+const KATEX_HTML_ATTRIBUTES = [
+  'accent',
+  'accentunder',
+  'align',
+  'bevelled',
+  'columnlines',
+  'columnalign',
+  'columnspacing',
+  'columnspan',
+  'display',
+  'displaystyle',
+  'encoding',
+  'equalcolumns',
+  'equalrows',
+  'frame',
+  'framespacing',
+  'linethickness',
+  'lspace',
+  'mathvariant',
+  'maxsize',
+  'minsize',
+  'movablelimits',
+  'notation',
+  'preserveAspectRatio',
+  'rowalign',
+  'rowlines',
+  'rowspacing',
+  'rowspan',
+  'rspace',
+  'scriptlevel',
+  'separator',
+  'stretchy',
+  'symmetric',
+  'voffset',
+  'xmlns',
+];
+const KATEX_RENDER_OPTIONS = {
+  throwOnError: false,
+  strict: 'ignore',
+  trust: false,
+  output: 'htmlAndMathml',
+} as const;
+// Models also put the formula on the same lines as its display delimiters.
+const DISPLAY_MATH_BLOCK_RE = /^\$\$((?:\\[\s\S]|[^\\])+?)\$\$(?=\n|$)/;
+const INLINE_MATH_RE = /^(\${1,2})(?!\$)((?:\\.|[^\\\n$])+)\1(?=[\s?!.,:;？！。，：；)\]}]|$)/;
 const MAX_COPY_TEXT_LENGTH = 20_000;
 const MAX_MERMAID_SOURCE_LENGTH = 100_000;
 const MERMAID_SVG_CACHE_LIMIT = 20;
@@ -572,6 +655,65 @@ marked.setOptions({
   gfm: true,
   breaks: false,
 });
+marked.use({
+  extensions: [
+    {
+      name: 'inlineKatex',
+      level: 'inline',
+      start(src) {
+        for (let index = src.indexOf('$'); index !== -1; index = src.indexOf('$', index + 1)) {
+          if (
+            (index === 0 || /[\s([{]/.test(src[index - 1]!)) &&
+            INLINE_MATH_RE.test(src.slice(index))
+          ) {
+            return index;
+          }
+        }
+        return undefined;
+      },
+      tokenizer(src) {
+        const match = INLINE_MATH_RE.exec(src);
+        const text = match?.[2]?.trim();
+        if (!match || !text) return undefined;
+        return {
+          type: 'inlineKatex',
+          raw: match[0],
+          text,
+          displayMode: match[1] === '$$',
+        };
+      },
+      renderer(token) {
+        return renderKatex(getString(token.text), {
+          ...KATEX_RENDER_OPTIONS,
+          displayMode: token.displayMode === true,
+        });
+      },
+    },
+    {
+      name: 'displayKatexBlock',
+      level: 'block',
+      start(src) {
+        const index = src.indexOf('\n$$');
+        return index === -1 ? undefined : index + 1;
+      },
+      tokenizer(src) {
+        const match = DISPLAY_MATH_BLOCK_RE.exec(src);
+        if (!match) return undefined;
+        const text = match[1]?.trim();
+        if (!text) return undefined;
+        return {
+          type: 'displayKatexBlock',
+          raw: match[0],
+          text,
+        };
+      },
+      renderer(token) {
+        const text = getString(token.text);
+        return text ? `${renderKatex(text, { ...KATEX_RENDER_OPTIONS, displayMode: true })}\n` : '';
+      },
+    },
+  ],
+});
 
 const PATH_SEPARATOR_SOURCE = String.raw`[\\/]`;
 const PATH_SEGMENT_CHARS_SOURCE = String.raw`[\w.@+-]`;
@@ -746,7 +888,7 @@ function linkifySessionReferences(fragment: DocumentFragment) {
     // SAFETY: The surrounding shape or discriminator check establishes the Text contract used below.
     const node = walker.currentNode as Text;
     const parent = node.parentElement;
-    if (!parent || parent.closest('a, button, code, pre')) continue;
+    if (!parent || parent.closest('a, button, code, pre, .katex')) continue;
     textNodes.push(node);
   }
 
@@ -793,6 +935,27 @@ function linkifySessionReferences(fragment: DocumentFragment) {
   }
 }
 
+function rehydrateKatexMath(fragment: DocumentFragment) {
+  for (const element of Array.from(fragment.querySelectorAll<HTMLElement>('.katex'))) {
+    const annotation = element.querySelector('annotation[encoding="application/x-tex"]');
+    const tex = annotation?.textContent;
+    if (!tex) continue;
+
+    const displayMode =
+      element.closest('.katex-display') !== null ||
+      element.querySelector('math[display="block"]') !== null;
+    const rendered = renderKatex(tex, { ...KATEX_RENDER_OPTIONS, displayMode });
+    const template = document.createElement('template');
+    template.innerHTML = rendered;
+    const wrapper = template.content.firstElementChild;
+    const replacement =
+      displayMode && wrapper?.classList.contains('katex-display')
+        ? wrapper.querySelector('.katex')
+        : wrapper;
+    if (replacement) element.replaceWith(replacement);
+  }
+}
+
 function sanitizeHtml(
   html: string,
   disableCache: boolean,
@@ -810,12 +973,16 @@ function sanitizeHtml(
   // second time, which is where mutation-XSS lives. Mutating the fragment
   // DOMPurify vetted keeps a single parse/serialize round trip.
   const fragment = DOMPurify.sanitize(html, {
-    ALLOWED_TAGS: ALLOWED_HTML_TAGS,
-    ALLOWED_ATTR: ALLOWED_HTML_ATTRIBUTES,
+    ALLOWED_TAGS: [...ALLOWED_HTML_TAGS, ...KATEX_HTML_TAGS],
+    ALLOWED_ATTR: [...ALLOWED_HTML_ATTRIBUTES, ...KATEX_HTML_ATTRIBUTES],
     ALLOW_DATA_ATTR: false,
     FORBID_ATTR: ['style'],
     RETURN_DOM_FRAGMENT: true,
   });
+
+  // Restore KaTeX's layout styles from TeX after sanitization, without allowing
+  // model-authored style attributes through the general Markdown sanitizer.
+  rehydrateKatexMath(fragment);
 
   const privateSelector = PRIVATE_RENDERER_ATTRIBUTES.map((name) => `[${name}]`).join(',');
   for (const element of Array.from(fragment.querySelectorAll<HTMLElement>(privateSelector))) {
@@ -884,6 +1051,13 @@ function cloneFenceState(fence: MarkdownFenceState | null): MarkdownFenceState |
   return fence ? { ...fence } : null;
 }
 
+function scanMathBlockLine(line: string, openMath: boolean): boolean {
+  if (openMath) {
+    return !line.endsWith('$$') || isEscapedMarkdownDelimiter(line, line.length - 2, 0);
+  }
+  return line.startsWith('$$') && !DISPLAY_MATH_BLOCK_RE.test(line);
+}
+
 function scanLastSafeMarkdownBoundary(
   content: string,
   previousState?: StreamingMarkdownScanState | null
@@ -896,21 +1070,25 @@ function scanLastSafeMarkdownBoundary(
   let lastBoundary: number | null = null;
   // SAFETY: The surrounding shape or discriminator check establishes the MarkdownFenceState contract used below.
   let openFence = null as MarkdownFenceState | null;
+  let openMath = false;
   if (previousState && content.startsWith(previousState.content)) {
     index = previousState.resumeIndex;
     lastBoundary = previousState.resumeLastBoundary;
     openFence = cloneFenceState(previousState.resumeOpenFence);
+    openMath = previousState.resumeOpenMath;
   }
 
   let resumeIndex = 0;
   let resumeLastBoundary: number | null = null;
   // SAFETY: The surrounding shape or discriminator check establishes the MarkdownFenceState contract used below.
   let resumeOpenFence = null as MarkdownFenceState | null;
+  let resumeOpenMath = false;
 
   while (index < content.length) {
     resumeIndex = index;
     resumeLastBoundary = lastBoundary;
     resumeOpenFence = cloneFenceState(openFence);
+    resumeOpenMath = openMath;
 
     const nextBreak = content.indexOf('\n', index);
     const lineEnd = nextBreak === -1 ? content.length : nextBreak;
@@ -919,7 +1097,9 @@ function scanLastSafeMarkdownBoundary(
     const fenceMatch = line.match(MARKDOWN_FENCE_RE);
     const wasInsideFence = openFence !== null;
 
-    if (fenceMatch) {
+    if (!openFence && (openMath || line.startsWith('$$'))) {
+      openMath = scanMathBlockLine(line, openMath);
+    } else if (fenceMatch) {
       const marker = fenceMatch[1]!;
       if (!openFence) {
         openFence = { char: marker[0]!, length: marker.length };
@@ -933,7 +1113,7 @@ function scanLastSafeMarkdownBoundary(
     if (closedFence && nextIndex < content.length) {
       lastBoundary = nextIndex;
     }
-    if (!openFence && line.trim().length === 0 && nextIndex < content.length) {
+    if (!openFence && !openMath && line.trim().length === 0 && nextIndex < content.length) {
       lastBoundary = nextIndex;
     }
 
@@ -945,9 +1125,11 @@ function scanLastSafeMarkdownBoundary(
     lastBoundary,
     safeBoundary: 0,
     openFence: cloneFenceState(openFence),
+    openMath,
     resumeIndex,
     resumeLastBoundary,
     resumeOpenFence,
+    resumeOpenMath,
   };
 }
 
@@ -1044,12 +1226,31 @@ function isEscapedMarkdownDelimiter(content: string, index: number, lineStart: n
   return backslashCount % 2 === 1;
 }
 
+function isIncompleteInlineMath(source: string): boolean {
+  const display = source.startsWith('$$');
+  // A dollar amount is ambiguous until it contains math syntax. Keep ordinary
+  // prices visible rather than hiding the rest of a sentence after "$5".
+  if (!display && /^\$\d/.test(source) && !/[\\^_{}=+*]/.test(source)) return false;
+
+  for (let index = display ? 2 : 1; index < source.length; index += 1) {
+    if (source[index] === '\\') {
+      index += 1;
+    } else if (source[index] === '$') {
+      // A display closer can arrive one dollar sign at a time.
+      return display && index === source.length - 1;
+    }
+  }
+  return true;
+}
+
 function renderIncompleteStreamingMarkdown(
   content: string,
   escapeRawHtml: boolean
 ): IncompleteStreamingMarkdown {
   let index = 0;
   let openFence: MarkdownFenceState | null = null;
+  let openMath = false;
+  let mathStart: number | null = null;
   let inlineStart: number | null = null;
   let htmlTagStart: number | null = null;
   let inlineDelimiterLength = 0;
@@ -1065,7 +1266,16 @@ function renderIncompleteStreamingMarkdown(
     const fenceMatch =
       inlineStart === null && linkDestinationStart === null ? line.match(MARKDOWN_FENCE_RE) : null;
 
-    if (fenceMatch) {
+    if (
+      !openFence &&
+      inlineStart === null &&
+      linkDestinationStart === null &&
+      (openMath || line.startsWith('$$'))
+    ) {
+      if (!openMath) mathStart = index;
+      openMath = scanMathBlockLine(line, openMath);
+      if (!openMath) mathStart = null;
+    } else if (fenceMatch) {
       const marker = fenceMatch[1]!;
       if (!openFence) {
         openFence = { char: marker[0]!, length: marker.length };
@@ -1109,6 +1319,22 @@ function renderIncompleteStreamingMarkdown(
         }
 
         if (inlineStart === null && !isEscapedMarkdownDelimiter(content, cursor, index)) {
+          if (character === '$') {
+            // TeX brackets and backticks are not unfinished Markdown links or code.
+            const math = INLINE_MATH_RE.exec(content.slice(cursor, lineEnd));
+            if (math) {
+              cursor += math[0].length;
+              continue;
+            }
+            if (
+              nextBreak === -1 &&
+              (cursor === index || /[\s([{*~]/.test(content[cursor - 1]!)) &&
+              isIncompleteInlineMath(content.slice(cursor, lineEnd))
+            ) {
+              mathStart = cursor;
+              break;
+            }
+          }
           if (
             !escapeRawHtml &&
             character === '<' &&
@@ -1140,9 +1366,13 @@ function renderIncompleteStreamingMarkdown(
     index = nextBreak === -1 ? content.length : nextBreak + 1;
   }
 
-  const hiddenStarts = [inlineStart, htmlTagStart, linkDestinationStart, ...linkLabelStarts].filter(
-    (start): start is number => start !== null
-  );
+  const hiddenStarts = [
+    mathStart,
+    inlineStart,
+    htmlTagStart,
+    linkDestinationStart,
+    ...linkLabelStarts,
+  ].filter((start): start is number => start !== null);
   let suppressedFenceSuffixStart: number | null = null;
   if (openFence) {
     const trailingLineStart = Math.max(content.lastIndexOf('\n') + 1, 0);
@@ -1230,6 +1460,16 @@ function renderIncompleteStreamingMarkdown(
     marker,
     pendingText: content.slice(pendingStart),
     hidePendingText: pendingStart !== visiblePendingStart,
+    pendingBullet: !!trailingBulletMarker,
+    showIndicator:
+      mathStart !== null ||
+      inlineStart !== null ||
+      linkDestinationStart !== null ||
+      linkLabelStarts.length > 0 ||
+      !!trailingPath ||
+      !!trailingFile ||
+      !!trailingUrl ||
+      !!trailingAngleUrl,
   };
 }
 
@@ -1359,7 +1599,7 @@ function isAppendOnlySafeMarkdown(content: string) {
   for (const line of content.split(/\r?\n/)) {
     if (!line) continue;
     if (/^\s/.test(line)) return false;
-    if (/[\\`*_~<>[\]|]/.test(line)) return false;
+    if (/[\\`*_~<>[\]|$]/.test(line)) return false;
     if (/^(?:#{1,6}(?:\s|$)|>|[-+]\s|\d+[.)]\s|(?:=+|-+)\s*$)/.test(line)) return false;
   }
   return true;
@@ -1370,6 +1610,23 @@ function parseIncompleteStreamingMarkdown(content: string, options: ParseMarkdow
   const html = parseMarkdown(prepared.content, options);
   if (!prepared.marker || prepared.pendingText === null) return html;
 
+  if (prepared.hidePendingText && prepared.showIndicator) {
+    // Keep the HTML identical while only hidden source grows, so each delta
+    // preserves the indicator's DOM nodes and animation progress.
+    // A hidden leading bullet still owns list spacing. Keep its dots marker-free
+    // and use the eventual list gap before the token closes.
+    const indicatorHtml = prepared.pendingBullet
+      ? html.replace(
+          `<p>${prepared.marker}</p>`,
+          `<p class="streaming-markdown-pending-list">${prepared.marker}</p>`
+        )
+      : html;
+    return indicatorHtml.replace(
+      prepared.marker,
+      '<span class="streaming-markdown-pending streaming-markdown-indicator" role="img" aria-label="Streaming content"><span aria-hidden="true"></span><span aria-hidden="true"></span><span aria-hidden="true"></span></span>'
+    );
+  }
+
   const blockHtml = prepared.hidePendingText
     ? hidePendingOnlyListItem(
         html.replace(
@@ -1379,10 +1636,9 @@ function parseIncompleteStreamingMarkdown(content: string, options: ParseMarkdow
         prepared.marker
       )
     : html;
-  return blockHtml.replace(
-    prepared.marker,
-    `<span class="streaming-markdown-pending${prepared.hidePendingText ? ' streaming-markdown-pending-hidden' : ''}"${prepared.hidePendingText ? ' aria-hidden="true"' : ''}>${escapeHtml(prepared.pendingText)}</span>`
-  );
+  const pendingHtml = `<span class="streaming-markdown-pending${prepared.hidePendingText ? ' streaming-markdown-pending-hidden' : ''}"${prepared.hidePendingText ? ' aria-hidden="true"' : ''}>${escapeHtml(prepared.pendingText)}</span>`;
+  // Dollar signs in pending TeX are literal, not String.replace substitutions.
+  return blockHtml.replace(prepared.marker, () => pendingHtml);
 }
 
 // A list item holding only hidden pending text has no line box, but its marker still paints
@@ -1405,11 +1661,27 @@ class StableMarkdownAppend {
   private lastToken: Token | undefined;
   private contextual = false;
 
+  private isContextual(tokens: ReturnType<typeof marked.lexer>): boolean {
+    if (Object.keys(tokens.links).length > 0) return true;
+    let contextual = false;
+    void marked.walkTokens(tokens, (token) => {
+      // Brackets inside code, math, and quote markers cannot open HTML across
+      // blocks. Retain the fallback for HTML and unfinished tags in text leaves.
+      if (
+        token.type === 'html' ||
+        (token.type === 'text' && !token.tokens?.length && /[<>]/.test(token.raw))
+      ) {
+        contextual = true;
+      }
+    });
+    return contextual;
+  }
+
   private remember(content: string) {
     const tokens = marked.lexer(content);
     this.content = content;
     this.lastToken = tokens.findLast((token) => token.type !== 'space');
-    this.contextual = /[<>]/.test(content) || Object.keys(tokens.links).length > 0;
+    this.contextual = this.isContextual(tokens);
   }
 
   getDelta(previousContent: string, nextContent: string, previousContentWasSafe: boolean) {
@@ -1429,9 +1701,9 @@ class StableMarkdownAppend {
     // Only the final block can merge across a blank-line append. Retain its token rather than
     // lexing the growing settled prefix twice. HTML and reference definitions remain contextual.
     if (this.content !== previousContent) this.remember(previousContent);
-    if (this.contextual || /[<>]/.test(delta)) return null;
+    if (this.contextual) return null;
     const deltaTokens = marked.lexer(delta);
-    if (Object.keys(deltaTokens.links).length > 0) {
+    if (this.isContextual(deltaTokens)) {
       return null;
     }
     const previousToken = this.lastToken;
@@ -1518,7 +1790,7 @@ function linkifyPaths(fragment: DocumentFragment) {
     if (
       !parent ||
       parent.closest(
-        'a, button, code, pre, svg, .interactive-result-code-block, .mermaid-diagram, .markdown-task-checkbox, .markdown-inline-slot'
+        'a, button, code, pre, svg, .katex, .interactive-result-code-block, .mermaid-diagram, .markdown-task-checkbox, .markdown-inline-slot'
       )
     ) {
       continue;
@@ -2163,7 +2435,9 @@ export function MarkdownRenderer(props: MarkdownProps) {
     const firstTailBlock = tailRef?.firstElementChild;
     const tag = firstTailBlock?.classList.contains('streaming-markdown-pending-block')
       ? ''
-      : (firstTailBlock?.localName ?? '');
+      : firstTailBlock?.classList.contains('streaming-markdown-pending-list')
+        ? 'ul'
+        : (firstTailBlock?.localName ?? '');
     if (stableRef && stableRef.dataset.markdownTailTag !== tag) {
       stableRef.dataset.markdownTailTag = tag;
     }
@@ -2186,8 +2460,12 @@ export function MarkdownRenderer(props: MarkdownProps) {
         ? false
         : lastAppliedCacheByContent || !!props.cacheByContent;
       const renderModeChanged =
-        cacheByContent !== lastAppliedCacheByContent ||
-        isLightweight !== lastAppliedLightweight ||
+        // Lightweight mode changes code/diagram rendering, not prose, tables, or math.
+        (isLightweight !== lastAppliedLightweight &&
+          (lastAppliedStableHydrationFlags.copyButtons ||
+            lastAppliedStableHydrationFlags.mermaid ||
+            lastAppliedTailHydrationFlags.copyButtons ||
+            lastAppliedTailHydrationFlags.mermaid)) ||
         disablePathLinkify !== lastAppliedDisablePathLinkify ||
         escapeRawHtml !== lastAppliedEscapeHtml;
       const preserveStreamingSegments = cacheByContent && lastAppliedScanState !== null;
@@ -2205,6 +2483,8 @@ export function MarkdownRenderer(props: MarkdownProps) {
         workspacePath !== lastAppliedWorkspacePath ||
         sessionContextKey !== lastAppliedSessionContextKey ||
         segments.tailContent !== lastAppliedTailContent ||
+        // Completion reveals unfinished tail syntax; settled blocks are already final.
+        cacheByContent !== lastAppliedCacheByContent ||
         renderModeChanged;
       const appendOnlyStableDelta =
         !renderModeChanged &&
@@ -2251,6 +2531,22 @@ export function MarkdownRenderer(props: MarkdownProps) {
           ? parseMarkdown(segments.tailContent, tailParseOptions)
           : parseIncompleteStreamingMarkdown(segments.tailContent, tailParseOptions)
         : lastAppliedTailHtml;
+
+      if (
+        preserveStreamingSegments &&
+        segments.stableContent &&
+        !segments.hasUnclosedFence &&
+        (stableContentChanged || tailContentChanged) &&
+        stableMarkdownAppend.getDelta(segments.stableContent, content, false) !== null
+      ) {
+        // Reuse the already-sanitized segments on a virtual remount. The append guard
+        // proves their boundary is independent; HTML and references keep full parsing.
+        setCachedValue(
+          renderedMarkdownCache,
+          getRenderedMarkdownCacheKey(content, tailParseOptions),
+          `${nextStableHtml}${nextTailHtml}`
+        );
+      }
 
       const stableChanged = nextStableHtml !== lastAppliedStableHtml;
       const tailChanged = nextTailHtml !== lastAppliedTailHtml;

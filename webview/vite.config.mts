@@ -46,6 +46,9 @@ export default defineConfig({
     // packages it like any other static asset.
     outDir: resolve(projectRoot, '../src/main/resources/webview'),
     emptyOutDir: true,
+    // The Kotlin shell loads one stable stylesheet. Dynamic entry imports and
+    // KaTeX must not split the chat styles into an unreferenced webview2.css.
+    cssCodeSplit: false,
     rollupOptions: {
       input: resolve(projectRoot, 'src/host-bridge.ts'),
       output: {

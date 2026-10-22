@@ -955,6 +955,8 @@ export function MessageList() {
   const mountedMessageRows = new Map<string, HTMLDivElement>();
   const pendingMountedRowMeasurements = new Map<string, HTMLDivElement>();
   let mountedRowMeasurementScheduled = false;
+  let batchingScrollMounts = false;
+  let mountedStickyPreviewCheckPending = false;
   onCleanup(() => pendingMountedRowMeasurements.clear());
   let previousVisibleStructureSessionId: string | null = null;
   let previousVisibleStructureMessageIds: readonly string[] | null = null;
@@ -4323,6 +4325,35 @@ export function MessageList() {
     });
   }
 
+  function reconcileMountedStickyPreview() {
+    const currentStickyPreview = untrack(stickyUserMessagePreview);
+    if (
+      currentStickyPreview &&
+      shouldHideStickyUserMessagePreviewAfterLayout(currentStickyPreview)
+    ) {
+      setStickyUserMessagePreview(null);
+      previousStickyPreviewId = currentStickyPreview.id;
+    }
+  }
+
+  function flushPendingMountedRowMeasurements() {
+    if (disposed || !shouldMeasureRows()) {
+      pendingMountedRowMeasurements.clear();
+      return;
+    }
+    const rows = [...pendingMountedRowMeasurements].flatMap(([messageId, element]) =>
+      element.isConnected &&
+      mountedMessageRows.get(messageId) === element &&
+      !element.classList.contains('interactive-item-virtual-placeholder')
+        ? [{ element, messageId }]
+        : []
+    );
+    pendingMountedRowMeasurements.clear();
+    if (rows.length === 0) return;
+    measureMountedRows(rows);
+    restorePendingHistoryAnchorIfMounted();
+  }
+
   function observeMeasuredRow(element: HTMLDivElement, messageId: string, active: boolean) {
     if (!active) {
       if (mountedMessageRows.get(messageId) === element) mountedMessageRows.delete(messageId);
@@ -4338,21 +4369,15 @@ export function MessageList() {
     if (inlineDiffHeight > 0) element.style.minHeight = `${inlineDiffHeight}px`;
     if (widthResizeActive) widthResizeNewlyMountedRows.add(element);
     if (element.classList.contains('interactive-request')) {
-      const currentStickyPreview = untrack(stickyUserMessagePreview);
-      if (
-        currentStickyPreview &&
-        shouldHideStickyUserMessagePreviewAfterLayout(currentStickyPreview)
-      ) {
-        setStickyUserMessagePreview(null);
-        previousStickyPreviewId = currentStickyPreview.id;
-      }
+      if (batchingScrollMounts) mountedStickyPreviewCheckPending = true;
+      else reconcileMountedStickyPreview();
     }
     if (!shouldMeasureRows() && element.classList.contains('interactive-request')) {
       scheduleStickyPreviewGeometryRefresh();
     }
     if (!shouldMeasureRows()) return;
 
-    if (shouldVirtualize() && userScrollRecentlyActive()) {
+    if (shouldVirtualize() && userScrollRecentlyActive() && !batchingScrollMounts) {
       // A direct gesture's newly mounted overscan can correct height above its painted destination.
       // Apply that bounded correction before the scroll event remembers the destination anchor.
       measureMountedRows([{ element, messageId }]);
@@ -4371,20 +4396,7 @@ export function MessageList() {
       mountedRowMeasurementScheduled = true;
       queueMicrotask(() => {
         mountedRowMeasurementScheduled = false;
-        if (disposed || !shouldMeasureRows()) {
-          pendingMountedRowMeasurements.clear();
-          return;
-        }
-        const rows = [...pendingMountedRowMeasurements].flatMap(([pendingId, pendingElement]) =>
-          pendingElement.isConnected &&
-          mountedMessageRows.get(pendingId) === pendingElement &&
-          !pendingElement.classList.contains('interactive-item-virtual-placeholder')
-            ? [{ element: pendingElement, messageId: pendingId }]
-            : []
-        );
-        pendingMountedRowMeasurements.clear();
-        measureMountedRows(rows);
-        restorePendingHistoryAnchorIfMounted();
+        flushPendingMountedRowMeasurements();
       });
     }
     if (element.isConnected && mountedMessageRows.get(messageId) === element) {
@@ -6230,10 +6242,22 @@ export function MessageList() {
       lastUserScrollAt = now;
     }
     if (!suppressSyncScrollTop) {
-      batch(() => {
-        setScrollTop(top);
-        setViewportHeight(currentViewportHeight);
-      });
+      // Mount the whole range before reading its geometry, but apply corrections
+      // within this scroll event, before remembering the user's destination.
+      batchingScrollMounts = true;
+      try {
+        batch(() => {
+          setScrollTop(top);
+          setViewportHeight(currentViewportHeight);
+        });
+      } finally {
+        batchingScrollMounts = false;
+      }
+      if (mountedStickyPreviewCheckPending) {
+        mountedStickyPreviewCheckPending = false;
+        reconcileMountedStickyPreview();
+      }
+      flushPendingMountedRowMeasurements();
     }
     scheduleStickyPreviewViewportState(top, currentViewportHeight);
     const pendingStickyHandoff = upwardStickyHandoff;

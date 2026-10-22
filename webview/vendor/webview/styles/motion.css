@@ -20,6 +20,10 @@
     content: '…';
   }
 
+  .streaming-markdown-indicator > span {
+    animation: none;
+  }
+
   /* Running-session rings retain rotation as an explicit reduced-motion
      exception. The header's count is outside the animated ring. */
   .session-item-indicator.is-running,

@@ -2089,6 +2089,9 @@ body:is(.vscode-light, .vscode-high-contrast-light) .chat-empty-logo {
 }
 
 .rendered-markdown {
+  /* Row rounding belongs to the row spacer and activity guides. Stop its inherited
+     updates here so remount corrections do not restyle every Markdown descendant. */
+  --interactive-item-block-correction: 0px;
   line-height: 1.65;
   /* Linux uses the configured chat size directly; other platforms retain the
      half-pixel increase over UI chrome. */
@@ -2114,6 +2117,49 @@ body:is(.vscode-light, .vscode-high-contrast-light) .chat-empty-logo {
   visibility: hidden;
 }
 
+.rendered-markdown .streaming-markdown-indicator {
+  display: inline-block;
+  position: relative;
+  width: 1.4em;
+  height: 1em;
+  vertical-align: -0.1em;
+  color: var(--color-vscode-muted);
+  white-space: nowrap;
+  user-select: none;
+}
+
+.streaming-markdown-indicator > span {
+  position: absolute;
+  bottom: 0.39em;
+  left: 0.17em;
+  width: 0.22em;
+  height: 0.22em;
+  border-radius: 50%;
+  background: currentColor;
+  animation: streaming-content-dot 900ms ease-in-out infinite;
+}
+
+.streaming-markdown-indicator > span:nth-child(2) {
+  left: 0.59em;
+  animation-delay: -600ms;
+}
+
+.streaming-markdown-indicator > span:nth-child(3) {
+  left: 1.01em;
+  animation-delay: -300ms;
+}
+
+@keyframes streaming-content-dot {
+  0%,
+  60%,
+  100% {
+    transform: translateY(0);
+  }
+  30% {
+    transform: translateY(-0.25em);
+  }
+}
+
 .rendered-markdown p {
   margin: 0 0 14px 0;
   /* Rebalancing an unfinished block moves words that were already painted.
@@ -2128,7 +2174,7 @@ body:is(.vscode-light, .vscode-high-contrast-light) .chat-empty-logo {
   margin-bottom: 12px;
 }
 
-.rendered-markdown p:has(+ :is(ul, ol)),
+.rendered-markdown p:has(+ :is(ul, ol, .streaming-markdown-pending-list)),
 .rendered-markdown
   > [data-markdown-segment='stable']:is(
     [data-markdown-tail-tag='ul'],

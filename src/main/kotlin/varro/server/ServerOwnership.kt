@@ -21,6 +21,7 @@ internal class ServerOwnership(
     private val inspect: ProcessIdentity = ProcessIdentity(),
     private val verifyCredentials: (Connection) -> Boolean = RegisteredConnectionVerifier()::verify,
     private val verifyReplacement: (Connection, Long, () -> Boolean) -> Boolean = RegisteredConnectionVerifier()::verify,
+    private val processHandle: (Long) -> ProcessHandle? = { ProcessHandle.of(it).orElse(null) },
 ) {
     internal data class Connection(val port: Int, val password: String?, val username: String = "opencode")
     private val host = UUID.randomUUID().toString()
@@ -317,13 +318,20 @@ internal class ServerOwnership(
         if (credentialOnly) return@coordinated false
         val lease = record(path) ?: return@coordinated false
         if (lease.str("host") != host || lease.str("state") != "active" || !matches(lease)) return@coordinated false
-        val process = ProcessHandle.of(lease.get("pid").asLong).orElse(null) ?: return@coordinated false
+        val process = processHandle(lease.get("pid").asLong) ?: return@coordinated false
         process.destroy()
         try { process.onExit().get(graceMs, TimeUnit.MILLISECONDS) } catch (_: java.util.concurrent.TimeoutException) {
-            if (!matches(lease)) return@coordinated false
-            process.descendants().use { children -> children.forEach { it.destroyForcibly() } }
-            process.destroyForcibly()
-            process.onExit().get(2, TimeUnit.SECONDS)
+            // Exit can race the timeout and OS identity reads after the graceful signal.
+            // A live, unverifiable process still cannot authorize escalation or cleanup.
+            val stillOwned = try { process.isAlive && matches(lease) } catch (failure: Exception) {
+                if (process.isAlive) throw failure
+                false
+            }
+            if (stillOwned) {
+                process.descendants().use { children -> children.forEach { it.destroyForcibly() } }
+                process.destroyForcibly()
+                process.onExit().get(2, TimeUnit.SECONDS)
+            } else if (process.isAlive) return@coordinated false
         }
         Files.deleteIfExists(path)
         if (record(marker, false)?.str("owner") == lease.str("owner")) Files.deleteIfExists(marker)

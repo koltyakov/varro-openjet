@@ -113,6 +113,21 @@ class WebviewAssetsTest {
 
     private fun resolve(url: String) = WebviewAssets.resolve(url) { "<html></html>" }
 
+    @Test fun `bundled math fonts resolve offline with font MIME types and immutable caching`() {
+        val css = resolve("${WebviewAssets.ORIGIN}/webview.css")!!.bytes.decodeToString()
+        assertTrue("The shell stylesheet must include chat styles", css.contains(".rendered-markdown"))
+        val fonts = Regex("""url\(([^)]+)\)""").findAll(css).map { it.groupValues[1].trim('\'', '"') }
+            .filter { it.contains("KaTeX_") && !it.startsWith("data:") }.toList()
+        assertTrue("Expected bundled KaTeX font URLs", fonts.isNotEmpty())
+        for (font in fonts) {
+            val asset = resolve("${WebviewAssets.ORIGIN}/${font.removePrefix("./")}")!!
+            assertTrue(asset.bytes.isNotEmpty())
+            assertTrue(asset.mimeType.startsWith("font/"))
+            assertTrue(asset.cacheControl.contains("immutable"))
+        }
+        assertNotNull(WebviewAssets::class.java.getResource("/META-INF/licenses/katex.txt"))
+    }
+
     @Test
     fun `serves the generated shell for the index`() {
         assertNotNull(resolve("${WebviewAssets.ORIGIN}/index.html"))

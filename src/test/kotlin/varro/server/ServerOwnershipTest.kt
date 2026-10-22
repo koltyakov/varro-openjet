@@ -16,13 +16,18 @@ class ServerOwnershipTest {
         var dead = setOf(999L)
         var accountValue: Account? = null
         var onListeners: (() -> Unit)? = null
+        var onExecutable: (() -> Unit)? = null
+        var onBirth: (() -> Unit)? = null
         override fun listeners(port: Int): Set<Long> {
             check(!fail) { "inspection failed" }
             onListeners?.invoke()
             return listening
         }
-        override fun executable(pid: Long) = "/usr/bin/opencode"
-        override fun birth(pid: Long) = if (pid == 123L) serverBirth else "darwin:host-start"
+        override fun executable(pid: Long): String { onExecutable?.invoke(); return "/usr/bin/opencode" }
+        override fun birth(pid: Long): String {
+            if (pid == 123L) onBirth?.invoke()
+            return if (pid == 123L) serverBirth else "darwin:host-start"
+        }
         override fun alive(pid: Long) = pid !in dead
         override fun account(pid: Long) = accountValue ?: Account(true, "$pid:${birth(pid)}:fixture-user")
     }
@@ -118,6 +123,117 @@ class ServerOwnershipTest {
         addProperty("version", 1); addProperty("host", "vscode-host"); addProperty("hostPid", 999)
         addProperty("hostBirthIdentity", "darwin:dead-host"); addProperty("state", "active")
         addProperty("password", "secret"); addProperty("username", "varro-user")
+    }
+
+    private class StoppingProcess : ProcessHandle {
+        var alive = true
+        var signals = 0
+        var forced = 0
+        override fun pid() = 123L
+        override fun isAlive() = alive
+        override fun destroy(): Boolean { signals++; return true }
+        override fun destroyForcibly(): Boolean { forced++; alive = false; return true }
+        override fun onExit() = if (alive) java.util.concurrent.CompletableFuture<ProcessHandle>()
+            else java.util.concurrent.CompletableFuture.completedFuture<ProcessHandle>(this)
+        override fun descendants(): java.util.stream.Stream<ProcessHandle> = java.util.stream.Stream.empty()
+        override fun children(): java.util.stream.Stream<ProcessHandle> = java.util.stream.Stream.empty()
+        override fun parent(): java.util.Optional<ProcessHandle> = java.util.Optional.empty()
+        override fun info(): ProcessHandle.Info = error("Unexpected process info read")
+        override fun supportsNormalTermination() = true
+        override fun compareTo(other: ProcessHandle) = pid().compareTo(other.pid())
+    }
+
+    @Test fun `post-signal identity failures accept confirmed exit but retain live unverifiable leases`() {
+        for (missing in listOf("executable", "birth")) for (exited in listOf(false, true)) fixture { shared, legacy, identity ->
+            val process = StoppingProcess()
+            val manager = ServerOwnership(4096, shared, legacy, identity, processHandle = { assertEquals(123L, it); process })
+            privateFile(Path.of("${manager.path}.managed"), Json.stringify(marker()))
+            assertTrue(manager.refresh(4096))
+            val before = Files.readString(manager.path)
+            val failRead = {
+                if (process.signals > 0) {
+                    if (exited) process.alive = false
+                    error("Cannot verify $missing identity")
+                }
+            }
+            if (missing == "executable") identity.onExecutable = failRead else identity.onBirth = failRead
+            if (exited) {
+                assertTrue(manager.stop(0))
+                assertFalse(Files.exists(manager.path))
+                assertFalse(Files.exists(Path.of("${manager.path}.managed")))
+            } else {
+                assertThrows(IllegalStateException::class.java) { manager.stop(0) }
+                assertEquals(before, Files.readString(manager.path))
+                assertTrue(Files.exists(Path.of("${manager.path}.managed")))
+            }
+            assertEquals(1, process.signals)
+            assertEquals(0, process.forced)
+            assertFalse(Files.exists(Path.of("${manager.path}.claim")))
+        }
+    }
+
+    @Test fun `pre-signal identity failures never authorize termination`() = fixture { shared, legacy, identity ->
+        val process = StoppingProcess()
+        val manager = ServerOwnership(4096, shared, legacy, identity, processHandle = { process })
+        privateFile(Path.of("${manager.path}.managed"), Json.stringify(marker()))
+        assertTrue(manager.refresh(4096))
+        val before = Files.readString(manager.path)
+        identity.onExecutable = { error("Cannot verify executable identity") }
+        assertThrows(IllegalStateException::class.java) { manager.stop(0) }
+        assertEquals(0, process.signals)
+        assertEquals(0, process.forced)
+        assertEquals(before, Files.readString(manager.path))
+    }
+
+    @Test fun `credential verification and unchanged registration refresh serialize without false invalidation`() {
+        for (companion in listOf(false, true)) fixture { shared, legacy, identity ->
+            val path = shared.resolve("varro-opencode-server-4096.json")
+            privateFile(if (companion) Path.of("$path.credentials") else path, Json.stringify(if (companion)
+                Json.obj("version" to 1, "port" to 4096, "owner" to "launch", "createdAt" to 1, "password" to "secret") else lease()))
+            identity.serverBirth = "darwin:replacement"
+            val entered = java.util.concurrent.CountDownLatch(1)
+            val release = java.util.concurrent.CountDownLatch(1)
+            var block = false
+            val manager = ServerOwnership(4096, shared, legacy, identity, verifyCredentials = {
+                if (block) { entered.countDown(); check(release.await(5, java.util.concurrent.TimeUnit.SECONDS)) }
+                true
+            })
+            assertNotNull(manager.connection())
+            block = true
+            val pool = java.util.concurrent.Executors.newFixedThreadPool(2)
+            try {
+                val verification = pool.submit { manager.verifyConnection(4096, reconnect = true) }
+                assertTrue(entered.await(5, java.util.concurrent.TimeUnit.SECONDS))
+                val refresh = pool.submit<ServerOwnership.Connection?> { manager.connection() }
+                release.countDown()
+                verification.get(5, java.util.concurrent.TimeUnit.SECONDS)
+                assertEquals("secret", refresh.get(5, java.util.concurrent.TimeUnit.SECONDS)!!.password)
+                assertTrue(manager.credentialOnly)
+                assertNull(manager.registeredPid)
+                assertFalse(manager.refresh(4096, takeover = true))
+            } finally { release.countDown(); pool.shutdownNow() }
+        }
+    }
+
+    @Test fun `credential evidence changed during verification is rejected`() {
+        for (field in listOf("password", "username", "port")) fixture { shared, legacy, identity ->
+            val path = shared.resolve("varro-opencode-server-4096.json")
+            val value = lease()
+            privateFile(path, Json.stringify(value))
+            identity.serverBirth = "darwin:replacement"
+            var mutate = false
+            val manager = ServerOwnership(4096, shared, legacy, identity, verifyCredentials = {
+                if (mutate) privateFile(path, Json.stringify(value.deepCopy().apply {
+                    if (field == "port") addProperty(field, 5001) else addProperty(field, "changed")
+                }))
+                true
+            })
+            assertNotNull(manager.connection())
+            mutate = true
+            assertThrows(IllegalStateException::class.java) { manager.verifyConnection(4096, reconnect = true) }
+            assertNull(manager.registeredPid)
+            assertFalse(manager.refresh(4096, takeover = true))
+        }
     }
 
     @Test fun `discovery retains the VS Code coordination key and username`() = fixture { shared, legacy, identity ->

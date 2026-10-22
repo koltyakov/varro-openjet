@@ -3,6 +3,7 @@ type MeasuredEntranceOptions = {
   heightProperty: string;
   onFinish?: () => void;
   skipWithin?: string;
+  measureContentHeight?: () => number | undefined;
 };
 
 const ACTIVE_CLASS = 'measured-entrance-active';
@@ -41,10 +42,18 @@ export function prepareMeasuredEntrance(
     let targetHeight = -1;
     const updateTargetHeight = () => {
       const renderedHeight = element.getBoundingClientRect().height;
+      const scrollHeight = element.scrollHeight;
+      const contentHeight = options.measureContentHeight?.();
       // scrollHeight is integer-rounded. Prefer the exact box when it already contains
-      // the content, otherwise cleanup can shrink the range by a painted pixel.
+      // the content, or the unanimated content box when it explains the full scroll height.
+      // A pending block can grow during the entrance; rounding that growth up makes
+      // cleanup shrink the row by a painted pixel.
       const nextHeight =
-        element.scrollHeight <= Math.ceil(renderedHeight) ? renderedHeight : element.scrollHeight;
+        contentHeight !== undefined && Math.round(contentHeight) === scrollHeight
+          ? contentHeight
+          : scrollHeight <= Math.ceil(renderedHeight)
+            ? renderedHeight
+            : scrollHeight;
       if (nextHeight <= targetHeight) return;
       targetHeight = nextHeight;
       element.style.setProperty(options.heightProperty, `${targetHeight}px`);

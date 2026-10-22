@@ -1152,6 +1152,13 @@ export function AssistantMessageContent(props: {
                 animationName: 'streamed-assistant-item-in',
                 heightProperty: '--streamed-assistant-item-height',
                 skipWithin: '.interactive-item-entering',
+                measureContentHeight:
+                  item().part.type === 'text'
+                    ? () =>
+                        element
+                          .querySelector(':scope > .rendered-markdown')
+                          ?.getBoundingClientRect().height
+                    : undefined,
               })
             );
           }
