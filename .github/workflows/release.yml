@@ -1,0 +1,200 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: release-${{ github.event.workflow_run.id || github.ref }}
+  cancel-in-progress: false
+
+env:
+  RELEASE_TAG: ${{ github.ref_name }}
+
+jobs:
+  resume:
+    name: Start tagged release after CI
+    if: >-
+      github.event_name == 'workflow_run' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      contains(fromJSON('["push", "workflow_dispatch"]'), github.event.workflow_run.event)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: write
+    steps:
+      # Never check out PR/fork code in a privileged workflow_run job.
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+      - name: Dispatch only a tag pointing at the successful CI commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CI_RUN_ID: ${{ github.event.workflow_run.id }}
+        run: python3 scripts/release-artifact.py wake --sha "$(git rev-parse HEAD)" --ci-run-id "$CI_RUN_ID"
+
+  artifact:
+    name: Select tested CI archive
+    if: github.event_name != 'workflow_run' && startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      actions: read
+    outputs:
+      ready: ${{ steps.claim.outputs.ready }}
+      run_id: ${{ steps.ci.outputs.run_id }}
+      artifact_id: ${{ steps.ci.outputs.artifact_id }}
+      sha256: ${{ steps.archive.outputs.sha256 }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+      - name: Check CI once and defer unfinished runs to the completion event
+        id: ci
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/release-artifact.py resolve --sha "$(git rev-parse HEAD)" --tag "$RELEASE_TAG"
+      - name: Download immutable CI artifact
+        if: steps.ci.outputs.ready == 'true'
+        uses: actions/download-artifact@v8
+        with:
+          artifact-ids: ${{ steps.ci.outputs.artifact_id }}
+          run-id: ${{ steps.ci.outputs.run_id }}
+          github-token: ${{ github.token }}
+          path: dist
+          merge-multiple: true
+      - name: Validate archive identity and record checksum
+        if: steps.ci.outputs.ready == 'true'
+        id: archive
+        run: python3 scripts/release-artifact.py check --tag "$RELEASE_TAG" --verify-tag-ref
+      - name: Reserve this release without publishing it
+        if: steps.ci.outputs.ready == 'true'
+        id: claim
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/release-artifact.py claim --sha "$(git rev-parse HEAD)" --tag "$RELEASE_TAG"
+
+  verify:
+    name: Verify IDE ${{ matrix.ide }}
+    needs: artifact
+    if: needs.artifact.outputs.ready == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        ide: ['2025.2.6.3', '2025.3.6.1', '2026.1.5', '2026.2.3', '263.6800.24']
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+      - uses: actions/download-artifact@v8
+        with:
+          artifact-ids: ${{ needs.artifact.outputs.artifact_id }}
+          run-id: ${{ needs.artifact.outputs.run_id }}
+          github-token: ${{ github.token }}
+          path: dist
+          merge-multiple: true
+      - name: Check the exact CI archive
+        id: archive
+        env:
+          EXPECTED_SHA256: ${{ needs.artifact.outputs.sha256 }}
+        run: python3 scripts/release-artifact.py check --tag "$RELEASE_TAG" --expected-sha256 "$EXPECTED_SHA256" --verify-tag-ref
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: gradle/actions/setup-gradle@v6
+      - name: Verify the downloaded ZIP without rebuilding
+        env:
+          ARCHIVE: ${{ steps.archive.outputs.archive }}
+          IDE: ${{ matrix.ide }}
+        run: ./gradlew --no-daemon verifyPlugin "-PverificationIde=$IDE" "-PverificationArchive=$ARCHIVE" -PskipWebview=true --rerun-tasks
+      - name: Upload verifier reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: plugin-verifier-${{ matrix.ide }}-${{ github.run_attempt }}
+          path: build/reports/pluginVerifier/
+          retention-days: 14
+
+  release:
+    name: Publish GitHub release
+    needs: [artifact, verify]
+    if: needs.artifact.outputs.ready == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+      - uses: actions/download-artifact@v8
+        with:
+          artifact-ids: ${{ needs.artifact.outputs.artifact_id }}
+          run-id: ${{ needs.artifact.outputs.run_id }}
+          github-token: ${{ github.token }}
+          path: dist
+          merge-multiple: true
+      - name: Check the verified archive
+        env:
+          EXPECTED_SHA256: ${{ needs.artifact.outputs.sha256 }}
+        run: python3 scripts/release-artifact.py check --tag "$RELEASE_TAG" --expected-sha256 "$EXPECTED_SHA256" --verify-tag-ref
+      - name: Confirm this run still owns the release reservation
+        id: owner
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_SHA256: ${{ needs.artifact.outputs.sha256 }}
+        run: python3 scripts/release-artifact.py claim --sha "$(git rev-parse HEAD)" --tag "$RELEASE_TAG" --require-owned --expected-sha256 "$EXPECTED_SHA256"
+      - name: Publish release and attach the verified archive
+        if: steps.owner.outputs.ready == 'true'
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Varro OpenJet ${{ github.ref_name }}
+          files: dist/*.zip
+          fail_on_unmatched_files: true
+          generate_release_notes: true
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          draft: false
+
+  marketplace:
+    name: Upload stable release to JetBrains Marketplace
+    if: needs.artifact.outputs.ready == 'true' && !contains(github.ref_name, '-')
+    needs: [artifact, verify, release]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+      - uses: actions/download-artifact@v8
+        with:
+          artifact-ids: ${{ needs.artifact.outputs.artifact_id }}
+          run-id: ${{ needs.artifact.outputs.run_id }}
+          github-token: ${{ github.token }}
+          path: dist
+          merge-multiple: true
+      - name: Check the verified archive
+        env:
+          EXPECTED_SHA256: ${{ needs.artifact.outputs.sha256 }}
+        run: python3 scripts/release-artifact.py check --tag "$RELEASE_TAG" --expected-sha256 "$EXPECTED_SHA256" --verify-tag-ref
+      - name: Upload tested archive to the stable channel
+        env:
+          JETBRAINS_MARKETPLACE_TOKEN: ${{ secrets.JETBRAINS_MARKETPLACE_TOKEN }}
+        run: bash scripts/publish-marketplace.sh

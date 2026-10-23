@@ -190,7 +190,10 @@ class OpenCodeV2IntegrationTest {
             val answer = transport.request("POST", "/session/$id/message", Json.obj("model" to Json.obj("providerID" to "fixture", "modelID" to "fixture"),
                 "parts" to listOf(Json.obj("type" to "text", "text" to "Reply using the fixture provider")))).data.asObjectOrNull()
             assertTrue(answer.arr("parts")!!.any { it.asObjectOrNull().str("text") == "OpenJet stream verified." })
-            assertTrue(events.any { it.asObjectOrNull().str("type") == "session.next.text.delta" })
+            // The HTTP response can finish before the independent SSE reader delivers the delta.
+            waitFor("Text delta for $id was not delivered over SSE") {
+                events.any { it.asObjectOrNull().str("type") == "session.next.text.delta" && it.asObjectOrNull().obj("properties").str("sessionID") == id }
+            }
             if (OpenCodeCli.compareVersions(version, "2.0.29") >= 0) {
                 verifySideQuestions(transport, workspace.toString(), providerRequests, streamGate)
                 verifyDelegatedCommands(transport, providerInputs)
@@ -527,10 +530,10 @@ class OpenCodeV2IntegrationTest {
         }
     }
 
-    private fun waitFor(condition: () -> Boolean) {
+    private fun waitFor(message: String = "Released-server fixture did not reach the expected state", condition: () -> Boolean) {
         val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10)
         while (!condition()) {
-            assertTrue("Released-server fixture did not reach the expected state", System.nanoTime() < deadline)
+            assertTrue(message, System.nanoTime() < deadline)
             Thread.sleep(20)
         }
     }

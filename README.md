@@ -2,275 +2,77 @@
 
 # Varro: OpenJet
 
-[Varro](https://github.com/koltyakov/varro) for JetBrains IDEs. Run [OpenCode](https://opencode.ai) in IntelliJ IDEA, WebStorm, PyCharm, GoLand, or another IntelliJ-platform IDE.
+Run [OpenCode](https://opencode.ai) in JetBrains IDEs with [Varro](https://github.com/koltyakov/varro)'s chat UI. Use your existing providers, models, agents, commands, skills and MCP servers.
 
-The plugin reuses Varro's chat UI, with a Kotlin backend for editor integration, settings, persistence, and provider limits. It uses your existing OpenCode configuration for providers, models, agents, commands, skills, and MCP servers.
-
-![The Varro OpenJet workbench in a JetBrains IDE](https://raw.githubusercontent.com/koltyakov/varro-openjet/main/assets/demo.jpg)
+![Varro OpenJet in a JetBrains IDE](https://raw.githubusercontent.com/koltyakov/varro-openjet/main/assets/demo.jpg)
 
 ## Getting started
 
-You'll need:
+Requires a JetBrains IDE from 2025.2 onward with a JCEF-enabled runtime, plus OpenCode v2 2.0.5+ or v1 1.16.0+.
 
-- A JetBrains IDE in the supported build range, 252 through 262, with a JCEF-enabled runtime. The plugin is built against IntelliJ IDEA 2026.2.2.
-- OpenCode CLI V2 2.0.5 or newer, or V1 1.16.0 or newer, available on `PATH` or configured in Settings > Tools > Varro.
-- An OpenCode provider set up with `opencode auth login` or `/connect` in chat.
-
-If you haven't installed OpenCode yet, follow its [installation guide](https://opencode.ai/v2/docs/cli) or use npm:
+Install OpenCode using its [installation guide](https://opencode.ai/v2/docs/cli), or npm:
 
 ```bash
 npm install -g @opencode/cli
-opencode auth login
 ```
 
-Download the plugin ZIP from [GitHub Releases](https://github.com/koltyakov/varro-openjet/releases), or build it using the instructions below. Open Settings > Plugins > Install Plugin from Disk and select the ZIP. Restart the IDE and open the Varro tool window on the right.
+Download the plugin ZIP from [GitHub Releases](https://github.com/koltyakov/varro-openjet/releases). In the IDE:
 
-Varro discovers a registered local V2 service when no explicit CLI command is configured. Otherwise it connects to a healthy server at `127.0.0.1:4096`, or starts one when needed. It detects V1 and V2 automatically and authenticates V2 requests in the Kotlin host. CLI discovery prefers `opencode2` when installed alongside `opencode`. A managed server can try subsequent ports when its port is occupied. You can change the command, port, or automatic startup in Settings > Tools > Varro.
+1. Open **Settings > Plugins > Install Plugin from Disk** and select the ZIP.
+2. Restart and open the **Varro** tool window on the right.
 
-Background CLI updates are enabled by default and run only for a managed server while sessions and host work are idle. The updated CLI takes effect on the next server start. Varro only stops servers it started.
+Varro finds OpenCode on `PATH`, reuses a local service or starts one when needed. Set an explicit CLI path, server port or startup policy in **Settings > Tools > Varro**.
 
-OpenJet and Varro for VS Code share server ownership under the same OS user. They use the same
-version-1 leases, managed markers, credential companions and launch claims, including surviving
-legacy temporary-directory records. Discovery retains the original record's path, even when the
-other editor selected a different port. A private saved credential can reconnect after process
-replacement only when the server rejects anonymous and incorrect-password requests. That fallback
-is attach-only and cannot stop, restart or update the server. Registered connections recover through
-the shared records when another editor restarts their server.
-
-If a server rejects authentication, Varro retries credentials saved for that server URL, then asks for a username and password. It saves verified credentials in the IDE password safe for future connections.
-
-### Installing from a checkout
-
-The install script can build the plugin and install it into your detected JetBrains IDEs:
-
-```bash
-./scripts/install.sh                         # build and install
-./scripts/install.sh --no-build              # install the ZIP already in dist/
-./scripts/install.sh --list                  # list detected IDEs
-./scripts/install.sh --ide IntelliJIdea2026.2 # install into one IDE
-./scripts/install.sh --uninstall
-```
-
-Run the same command to update, then restart the IDE. The script targets IDEs within the plugin's supported build range.
+Automatic CLI updates are enabled by default for Varro-managed servers. You can disable them in settings.
 
 ## Using Varro
 
-Chat in the tool window or open a session in an editor tab. On IntelliJ 2026.1+, choose **Open in Window** from a session's menu to move it into a detached IDE window. The new-chat menu also offers **New Chat Window**. Opening the same session in a window again focuses its existing window. On 2025.2 and 2025.3, window commands are hidden; open an editor tab and drag it out of the IDE window to detach it manually. Editor tabs support IntelliJ's usual split and move controls. Drafts and session routes are saved per view.
+Chat in the tool window, an editor tab or a detached window. **Open in Window** requires IDE 2026.1+; on older IDEs, drag an editor tab into a separate window. Drafts are saved per view.
 
-Model preferences are shared across projects in the same IDE and can sync across JetBrains IDEs through OpenJet's shared settings file. Each session's selected model and permission mode are project-owned and sync between the tool window and editor tabs. Project UI preferences survive browser reloads and IDE restarts.
+- Add context by dropping files into the composer or choosing **Add to Varro Context** in the editor or Project view.
+- Queue follow-ups while a task runs. On v2, use `/btw` for a side question without interrupting it.
+- Choose models and agents in chat. Set session or project permission rules in Permissions.
+- Generate commit messages from the commit toolbar. Generation does not stage files or commit changes.
+- Restore deleted sessions from the recycle bin for up to seven days.
 
-Wide editor and window chats have a light/dark toggle in the upper-right gutter. It switches that chat to Varro's opposite light or dark palette and follows subsequent IDE theme changes. Each open chat keeps its own toggle; new chats restore the last saved preference. Click again to return to the IDE palette. The control hides when the gutter is too narrow.
+### Settings
 
-To add context, drop files or directories into the composer, or choose **Add to Varro Context** from the editor or Project view. The current-document chip toggles automatic context and remembers your choice per project. Switching to a chat tab keeps the last source editor as context, including unsaved edits.
+Open **Settings > Tools > Varro** for server startup, models, fonts and chat options.
 
-In **Settings > Tools > Varro > Chat**, disable **Automatically attach the active file or editor selection** to hide that chip and omit automatic file context, including from queued messages. Manually attached files and database context are unaffected. **Include IDE problems in chat context** controls both automatic diagnostics and explicit Problems attachments. Existing Problems opt-outs are preserved.
+- The active file or selection is attached automatically. Disable this under **Chat > Automatically attach the active file or editor selection**. IDE problems have a separate toggle.
+- Permission mode starts at `auto`. `default` follows OpenCode's rules; `full` allows actions without confirmation.
+- Notifications are off by default. Enable desktop alerts or sounds under **Notifications**.
+- To share model preferences across JetBrains IDEs, open **Shared OpenJet settings** and choose **Use this IDE's settings to initialize sharing**. Appearance and session selections stay local.
 
-Pasting 10 or more lines that match the current selection in a saved workspace file creates a line-range attachment. Shorter pastes and unsaved selections stay as text. Plain-text pastes of 10 or more lines matching an open terminal's available output become terminal attachments; terminal engines that do not expose their output leave the paste as text.
+### Database context
 
-History images load small previews near the viewport. OpenJet generates these in Kotlin with JVM image codecs, applies EXIF orientation, and preserves transparency. PNG, JPEG, GIF and WebP inputs produce PNG previews up to 384 pixels and 256 KiB. AVIF and unsupported or damaged images keep a placeholder. Opening a preview or editing a message fetches the original. The shared thumbnail cache is memory-only and expires after five minutes.
+With Database Tools installed, Varro can attach loaded table metadata, SQL and selected rows. Use **Add to Varro Context** in a result grid to save a snapshot, or drag tables from Database Explorer into chat. Type `@` to search tables. Context capture uses data already loaded in the IDE and excludes connection URLs and credentials.
 
-| Action | Shortcut |
-| --- | --- |
-| Focus Varro Chat | `Ctrl+Alt+V` / `Cmd+Alt+V` |
-| Add to Varro Context | `Ctrl+Shift+K` / `Cmd+Shift+K` |
-| Hide the tool window | `Shift+Escape` |
+### Dictation
 
-Other actions are under Tools > Varro and in Find Action, including **New Varro Chat Window**. The tool-window options menu includes the file-diff toggle, settings, usage reports, and About. Commit-message generation is available in the commit toolbar.
-
-With the tool window open, hover over the OpenCode status-bar version for CLI and server versions, port, available process uptime, and the OpenJet version. An asterisk marks a CLI older than the pinned upstream verified version or a server running an older version than the installed CLI. Attach-only connections show the server address instead of local CLI update advice.
-
-For inline prompt suggestions, assign a supported model through **Use for prompt completion** in the Models menu, or set **Prompt completion model** in Settings > Tools > Varro. This requires OpenCode V2 and an API-key connection, not an OAuth subscription. Suggestions send your unfinished draft, recent user prompts, and the latest assistant reply directly to the provider. They never run tools or create sessions. Tab accepts a suggestion; Escape dismisses it. Clear the assignment to disable suggestions. **Test prompt completion** makes one sample request and may consume provider usage.
-
-If another client moves a conversation to a different folder, the original project keeps a history link. A conversation moved outside the project's open folders is read-only there. Click **Open folder** to open its destination in a new IDE window. The host verifies the current destination before opening it; attach-only connections cannot open folders on the server host.
-
-Settings are under **Settings > Tools > Varro**. You can configure server startup and updates, the default permission mode, chat layout, fonts, and models for commit messages and permission review. The initial permission mode is `auto`; `default` follows OpenCode's rules, and `full` allows a session to act without confirmation. A font size of `0` follows the IDE's font settings.
-
-The Agents settings control the runtime-only read-only `Ask` agent and fallback titles for untitled sessions. Ask is enabled by default; fallback titles are disabled. Configure automatic compaction in OpenCode. On-demand compaction remains available in chat.
-
-### Remote images and commit messages
-
-HTTPS Markdown images show a placeholder by default. Click **Load image**, or **Load all** for the current response. **Remote Markdown images** under **Settings > Tools > Varro** accepts `ask`, `on` for automatic loading near the viewport, or `off` for alt text only. This consent stays local to the IDE; repository settings cannot enable downloads.
-
-Downloads expose the IDE host's IP address and requested URL to the image server. They send no cookies, authorization or referrer, bypass proxies, and require public-network HTTPS on port 443. The host checks DNS again for every redirect, pins the checked address, and limits downloads to two at once, 15 seconds and 8 MiB per image. Existing JVM image decoders generate bounded PNG previews; unsupported formats show an error rather than loading directly in the browser.
-
-Set **Commit message rules** for an application-wide style preference. **Varro Commit Message Rules** in the commit toolbar or **Tools > Varro** overrides it for the chosen repository; clear the override to use the default. During generation, the generate button becomes a cancel button for that repository. Cancellation leaves the input untouched and allows an immediate retry. Generated text is not applied if the repository diff changed, and changed input requires another confirmation. No files are staged or committed.
-
-### Background notifications
-
-Under **Settings > Tools > Varro > Notifications**, enable desktop alerts and choose which events play the water-bubble sound: permission requests, questions, completed replies, and plans ready for review. All options default to off and stay local to each IDE. Sound works independently of desktop alerts.
-
-Alerts appear only while the IDE is in the background. On macOS, they also stay quiet while any IDE window is visible, including side-by-side use and detached chat windows. Permission alerts wait for automatic handling and disappear if the request is resolved. Subagent permission requests can alert; subagent completions do not.
-
-Varro groups bursts and leaves at least five seconds between deliveries. Desktop banners use the IDE's operating-system notification service, so enable system notifications in the IDE and allow the IDE in your OS notification settings. The IDE notification list also keeps the latest alert with an **Open chat** action. Sound uses the bundled recording through JVM audio without external players.
-
-### Database context in DataGrip
-
-Open a table or query-result grid for automatic context. Varro includes visible column metadata and any selected rows. The composer chip shows the object name; hover for connection details, scope, and row count, or click it to disable context. Switching to chat keeps the last grid, while returning to an editor restores file context.
-
-SQL consoles and datasource-associated SQL files provide the active connection, current catalog/schema and search path, connection state, and selected SQL or the statement under the caret. If the IDE has not parsed the latest edits, Varro uses the current buffer. Result grids include the SQL that produced them and the selected column names.
-
-Selecting objects in Database Explorer supplies context without opening a grid. Selecting a column or key includes its parent table. SQL references resolved by DataGrip supply relevant object metadata, including primary keys, foreign keys, indexes, nullability, defaults, and comments. Context follows the last console, grid, DDL editor, or Explorer selection into chat. The chip's tooltip identifies the datasource and schema; `@` table search prioritizes that datasource and schema.
-
-Project database context also includes configured datasources, their connection states, and loaded catalog/schema names, even with an empty editor area. The current datasource follows the console, grid, or Explorer selection. With no selection, Varro identifies the only configured or only connected datasource when there is one; multiple candidates stay explicit. The inventory also accompanies ordinary file context. Disabling automatic context disables this inventory too.
-
-DDL tabs provide the full editor buffer, including unsaved edits. Table grids also include DDL when already loaded in the IDE.
-
-- Use **Add to Varro Context** in a grid or `Ctrl+Shift+K` / `Cmd+Shift+K` to attach a JSON snapshot with selected row values. Snapshots stay attached when you switch tables and open from the composer for inspection.
-- Drag tables from Database Explorer or type `@` to search by table, schema, or datasource. These attach column metadata and already-loaded DDL without opening a grid. Drops support up to 20 tables.
-
-Capture uses loaded data only. Accept active cell edits before capturing. Limits are 200 rows, 64 columns, 4,000 characters per cell, 80,000 serialized row characters, and 40,000 DDL characters. The chip reports truncation.
-
-SQL text is limited to 40,000 characters. Related metadata is limited to 8 objects and 60,000 serialized characters. Unknown connection details stay unknown, and context excludes connection URLs and credentials.
-
-Datasource inventory is limited to 20 entries and 40,000 serialized characters, with up to 16 loaded catalog/schema names per datasource.
-
-Requires Database Tools. To verify compatibility with a local DataGrip installation:
-
-```bash
-./gradlew verifyPlugin -PdatagripVerificationPath="/Applications/DataGrip.app/Contents"
-```
-
-### Sharing settings across JetBrains IDEs
-
-In the IDE whose saved preferences you want to keep, open **Settings > Tools > Varro > Shared OpenJet settings** and click **Use this IDE's settings to initialize sharing**. Apply any pending settings edits first. This copies that IDE's model list and core settings into an OpenJet-only file:
-
-| OS | Location |
-| --- | --- |
-| macOS | `~/Library/Application Support/OpenJet/settings.json` |
-| Linux | `$XDG_CONFIG_HOME/openjet/settings.json`, or `~/.config/openjet/settings.json` |
-| Windows | `%APPDATA%\OpenJet\settings.json` |
-
-Other JetBrains IDEs under the same OS user adopt the shared file when Varro opens. Running instances check for changes every second. Existing shared settings always take precedence during migration. Until you initialize sharing, preferences stay in each IDE.
-
-Shared settings include model visibility, pins, ordering, names, server options, default permission mode, commit-message, auto-approve and prompt-completion models, and agent preferences. Fonts, rendering, chat appearance, and session selections stay local. VS Code's Varro storage and OpenCode's configuration are separate.
-
-Writes merge changed fields under a cross-process file lock and replace the JSON atomically. Concurrent changes to the same preference use the last write. Invalid or unsupported files remain untouched; synchronization resumes after they are repaired.
-
-### Sessions and model controls
-
-To copy existing V1 history into V2, connect to V2 and run **Tools > Varro > Import OpenCode v1 Session into v2**. Select a conversation from the current workspace. The importer copies its same-workspace children, keeps the original records unchanged, and does not execute historical tools or send a model request. Copies have new IDs and a `(v1 copy)` title suffix.
-
-V2 session sharing is unavailable. Varro stores local metadata and older-server archive overrides under `$XDG_STATE_HOME/varro/opencode-v2`, defaulting to `~/.local/state/varro/opencode-v2`. These annotations use the same format as Varro for VS Code. Capable V2 servers own archive state, so archive and restore changes are visible to other clients. Saved server allowances observed through OpenJet can be edited in Permissions when the server supports editing. Tested baselines are V1 1.19.4 and V2 2.1.3. See [V2 support](docs/opencode-v2-support.md) for details.
-
-- Queue messages while a session is running. The host persists queued dispatches and reconciles them with message history after reconnecting. It does not automatically retry a send whose outcome is uncertain.
-- On V2, use `/btw`, **Side question** in the busy-send menu, or the conversation menu to ask without interrupting the task. Follow-ups stay in the dialog, not session history or the queue. Questions use the session's current context without tools; file references alone do not read files. Closing the dialog cancels its request, not the task.
-- Native V2 slash commands follow OpenCode's definitions, including `subagent: true` delegation. Open child sessions from the session list or returned subagent activity. OpenCode owns command precedence and agent/model overrides; OpenJet does not replay commands after an uncertain send.
-- On V2, click the waiting indicator or service badge to inspect background processes and their recent logs. Mark a process as a non-blocking service or restore waiting; ordinary session abort leaves services running. The session's model classifies process lifetime through stateless generation when available, without tools or session writes. Manual choices override automatic reviews and persist across editors. Stopping a process can trigger OpenCode's completion notification and resume the assistant.
-- Deleted session trees go to the recycle bin for 7 days. Restore them there, or permanently delete them by emptying the bin. Expired entries are removed when the bin is read.
-- Ralph runs support start, pause, resume, stop, and model changes. The host journals their state and reattaches after reconnecting to OpenCode.
-- The Models menu can assign OpenCode's small model and agent models in global OpenCode configuration. Commit-message and auto-approve model assignments use OpenJet's shared settings once sharing is initialized.
-- Assign a vision-capable model to the global `vision` agent in the Models menu. Varro creates a read-only subagent when needed and automatically delegates attached images to it when the selected model supports tools but cannot read images. Existing custom vision-agent settings are preserved.
-- Permission controls can save rules for a session or the project. Project rules update the project's `opencode.jsonc` if present, otherwise `opencode.json`.
-
-### Handy dictation
-
-Install and start [Handy](https://github.com/cjpais/Handy), then configure its model and microphone/accessibility permissions. The composer shows a microphone when Varro finds the executable. Click to start or stop dictation; right-click to cancel. Varro does not launch Handy for you. Requires Handy's CLI remote-control flags.
-
-Under **Settings > Tools > Varro > Dictation**, optionally set an absolute executable path. Leave it empty to search standard installation locations and PATH. The path stays local to this IDE and is not included in shared OpenJet settings. Dictation is unavailable on remote IDE hosts.
-
-The speaking icon tracks Varro's toggles, not Handy's global shortcut or actual recording state. Disable Handy's **Auto Submit** option to review dictated text before sending.
+Start [Handy](https://github.com/cjpais/Handy), then use the composer's microphone to start or stop dictation. Right-click to cancel. Set its executable path under **Settings > Tools > Varro > Dictation** if needed. Disable Handy's **Auto Submit** to review text before sending. Dictation is unavailable on remote IDE hosts.
 
 ### Provider limits and usage
 
-Quota badges show remaining allowances and reset times when the provider exposes them. The Kotlin adapters support Anthropic/Claude Code, OpenAI Codex, GitHub Copilot, OpenRouter, Gemini, Antigravity, Ollama Cloud, OpenCode Go, Z.ai, MiniMax, Kimi, and xAI. They use existing credentials and the IDE's HTTP proxy and certificate settings. No Node.js helper is required.
+Quota badges show remaining allowances and reset times when available. Supported providers include Anthropic/Claude Code, OpenAI Codex, GitHub Copilot, OpenRouter, Gemini, Antigravity, Ollama Cloud, OpenCode Go, Z.ai, MiniMax, Kimi and xAI. Availability depends on the provider and account type.
 
-The Codex quota popup also shows the remaining credit balance when the usage endpoint provides it, even without active quota windows.
-
-Attach-only OpenCode V2 connections can show OpenAI subscription limits using the
-server's active Codex OAuth account. They never substitute the IDE's local account.
-ChatGPT token sharing cannot read usage limits or reset credits; use Codex browser
-login for those values. Other attached providers and V1 remain unsupported.
-
-When a poll fails, Varro may show the last successful snapshot for up to 15 minutes. Quota caches are project-local. Antigravity needs a detected local language-server port or the `ANTIGRAVITY_BASE_URL` and `ANTIGRAVITY_CSRF_TOKEN` environment variables, with a loopback IP address in the URL.
-
-Usage reports open as Markdown documents and cover retained history across projects for today, the last 7 and 30 days, and optionally all time. They read the local OpenCode database without starting the server and include prompt counts, tokens, cache usage, and assistant duration by provider and model. If the database is missing, reports fall back to REST history for up to 250 sessions.
+Open usage reports from the tool-window menu for prompt counts, tokens, cache usage and assistant duration by provider and model.
 
 ### Network and credentials
 
-Chat requests go through the local OpenCode server. Provider-limit polling contacts provider quota endpoints directly, using credentials held in the IDE host. Credentials are not sent to the webview. Supported OAuth adapters can refresh expired tokens.
+OpenCode handles model requests. Attached context goes to the selected provider. Quota polling contacts providers directly; credentials stay in the IDE host, not the chat webview.
 
-Webview API requests pass through a [route allowlist](src/main/kotlin/varro/host/ApiRoutes.kt), and terminal setup commands use a fixed allowlist. Commit-message generation reads staged or unstaged changes without mixing them, staging files, or creating commits.
+Remote Markdown images ask before loading by default. Loading one contacts the image server from the IDE host. Change this under **Remote Markdown images** in settings.
 
-## Building
+Enable prompt completion with **Use for prompt completion** in the Models menu. It requires v2 and an API-key model, not an OAuth subscription, and sends your unfinished draft and recent chat directly to the provider. Tab accepts a suggestion; Escape dismisses it.
 
-### Docker
+## Documentation
 
-Docker provides the JDK, Gradle, and Node toolchain:
-
-```bash
-./scripts/build.sh          # build the working tree
-./scripts/build.sh clean    # clean build inside the image
-./scripts/build.sh verify   # Kotlin and webview host tests
-./scripts/build.sh shell    # open a shell in the build container
-./scripts/build.sh prune    # trim OpenJet's Docker image/build cache
-```
-
-The plugin ZIP is written to `dist/varro-openjet-<version>.zip`. The first build downloads the IntelliJ Platform, which is over a gigabyte. Later builds reuse the Docker volume cache.
-
-Docker Buildx is required. Image builds use a dedicated `varro-openjet` builder with a 4 GB build-cache target. The script trims that cache and removes dangling OpenJet images before and after builds, including failures. Gradle checks its cache after every container build, removing unused downloads and released wrappers after 14 days, and generated cache entries after 7 days. Active dependencies remain cached. These limits apply to cache retention, not peak disk usage during a build.
-
-### Local build
-
-Install JDK 21 and the Node/npm versions listed in [`webview/package.json`](webview/package.json). [Volta](https://volta.sh) selects the pinned Node/npm versions automatically. Gradle uses the included wrapper.
-
-```bash
-./gradlew buildPlugin       # build/distributions/varro-openjet-<version>.zip
-./gradlew runIde            # launch a sandbox IDE
-./gradlew test              # Kotlin and webview host tests
-./gradlew check buildPlugin # CI-equivalent checks and packaging
-```
-
-When needed, run the IntelliJ Plugin Verifier directly on a development machine with `./gradlew verifyPlugin`. Do not run it in Docker.
-
-The build uses `npm ci`. If you change webview dependencies, run `npm install` in `webview/` and commit the updated lockfile. Keep the Node/npm versions in `webview/package.json` and `Dockerfile` in sync.
-
-For Kotlin-only iteration, `-PskipWebview=true` skips webview dependency installation, bundling, and host tests. Use it only after building the webview resources. `clean` removes those resources, so rebuild them before packaging.
-
-### CI and releases
-
-GitHub Actions runs `./gradlew --no-daemon --stacktrace check buildPlugin` for pull requests, pushes to `main`, and tags starting with `v`. This runs Kotlin and webview host tests, TypeScript checking, vendor integrity, and plugin packaging. A separate job tests the pinned published OpenCode V2 release in isolated fixtures. Main, tag, and manual runs also run Plugin Verifier across the supported IDE matrix. Successful builds save the ZIP as the `plugin-archive` workflow artifact for 14 days.
-
-To publish a release, push a version tag on the commit you want to ship:
-
-```bash
-git tag v0.1.0
-git push origin v0.1.0
-```
-
-Use tags such as `v0.1.0` for stable releases or `v0.2.0-rc.1` for prereleases. The workflow uses the tag without the `v` prefix as `pluginVersion`, overriding `gradle.properties` for that build. After tests, compatibility checks, Plugin Verifier, and packaging pass, it creates or updates the GitHub release, generates release notes, and attaches `varro-openjet-<version>.zip`. Tags with a prerelease suffix produce GitHub prereleases.
-
-GitHub release publishing uses the built-in `GITHUB_TOKEN`. The release job has `contents: write` permission. Branch and pull-request builds use the version in `gradle.properties`.
-
-Stable tag pushes also upload the same tested ZIP to [Varro: OpenJet on JetBrains Marketplace](https://plugins.jetbrains.com/plugin/34204-varro-openjet), after all checks and the GitHub release succeed. Prerelease tags remain GitHub-only and never upload to Marketplace. Manual workflow runs do not upload to Marketplace.
-
-Before pushing the first stable tag with Marketplace publishing enabled:
-
-1. Generate a permanent token in [Marketplace > My profile > Tokens](https://plugins.jetbrains.com/author/me/tokens), using the account that can upload updates to the plugin.
-2. In [GitHub > Settings > Secrets and variables > Actions](https://github.com/koltyakov/varro-openjet/settings/secrets/actions), add a repository secret named `JETBRAINS_MARKETPLACE_TOKEN` with that token as its value. Never commit the token.
-3. Commit the workflow changes, then push a new, unused version tag, such as `v0.9.3`. Version `0.9.2` has already been uploaded manually, so do not upload it again.
-
-The upload targets plugin ID `34204` and the default Stable channel. A missing token fails the Marketplace job. Marketplace still verifies and reviews each update; a successful upload does not mean it is publicly available yet. Publisher-side signing is not configured by this workflow.
-
-If an upload fails or times out, check the Marketplace Versions page before rerunning the failed job. The upload may already have succeeded, and the workflow deliberately does not retry the POST automatically. Rerun only the failed job once you have confirmed that the version is absent. GitHub releases remain available if the Marketplace upload fails.
-
-## Development
-
-The chat UI runs in IntelliJ's embedded JCEF browser. Kotlin handles the host messages and connects to OpenCode over REST and SSE. See [architecture](docs/architecture.md) for the component map and bridge protocol.
-
-See [contributing](CONTRIBUTING.md) for the development workflow, checks, and sandbox verification. For CLI, server, browser, or quota problems, see [troubleshooting](docs/troubleshooting.md).
-
-Upstream UI sources live in `webview/vendor/`. To refresh them, run these commands from `webview/`:
-
-```bash
-npm run sync                                # fetch upstream and update vendored sources
-VARRO_SOURCE=/path/to/varro npm run sync    # use a local Varro checkout
-```
-
-[`webview/upstream.json`](webview/upstream.json) selects the repository and ref, currently `main`, and the files to copy. Sync replaces the vendored directories and records the resolved commit in `webview/vendor/UPSTREAM.json`. Normal builds use the committed vendor snapshot without fetching upstream. Review vendor changes before committing a sync.
-
-Sync also copies upstream version specifiers for packages already listed in `webview/package.json`, including dev dependencies. Packages absent from upstream keep their current versions. If sync updates dependency versions, run `npm install` in `webview/` and commit the updated manifest and lockfile with the vendor changes.
-
-Run `npm run test:host` from `webview/` to test project storage, editor context, session permission modes, and the quota event contract. `npm run typecheck` checks TypeScript, and `npm run watch` rebuilds browser assets as you edit. The Kotlin host tests run with `./gradlew test` from the repository root, which also runs the webview host tests unless `skipWebview` is set.
+- [Contributing and building](CONTRIBUTING.md)
+- [Troubleshooting](docs/troubleshooting.md)
+- [OpenCode v2 support and compatibility](docs/opencode-v2-support.md)
+- [Architecture](docs/architecture.md)
+- [CI and releases](docs/ci-and-releases.md)
 
 ## License
 

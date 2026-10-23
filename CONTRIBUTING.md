@@ -26,7 +26,7 @@ Docker can provide the build toolchain instead:
 ./scripts/build.sh verify
 ```
 
-The Docker build writes the ZIP to `dist/`. Install it in a local IDE for UI verification. See [building](README.md#building) for the other build modes.
+The Docker build writes the ZIP to `dist/`. Install it in a local IDE for UI verification.
 
 ## Choose where to make a change
 
@@ -81,7 +81,13 @@ This skips browser dependency installation, bundling, and host tests. `clean` re
 
 Run `./gradlew verifyPlugin` locally when checking IntelliJ API compatibility. Do not run Plugin Verifier in Docker.
 
-CI runs the isolated published V2 compatibility suites on pull requests and pushes. Main, tag, and manual runs also verify every configured IDE branch on host runners. Release publishing requires the build, compatibility suites, and verifier matrix to pass. To check one IDE locally, use `./gradlew verifyPlugin -PverificationIde=2025.2.6.3`.
+CI lints workflows, Python release helpers and shell syntax, runs script regressions, and uses `python3 scripts/check-opencode-compatibility.py --version <version> --full-check` for one Gradle check/build invocation with the isolated published V2 suites enabled. Pull requests, main pushes and manual CI runs do not run IDE verification. Tags select the successful main CI artifact for that exact commit and run the IDE matrix against that ZIP before publishing. See [CI and releases](docs/ci-and-releases.md) for version matching, handoff and rerun rules.
+
+To verify an already-built ZIP without compiling or packaging it again, use `./gradlew verifyPlugin -PverificationArchive=/absolute/path/to/varro-openjet-<version>.zip -PskipWebview=true`. Add `-PverificationIde=2025.2.6.3` to check one IDE. Without `verificationArchive`, local `verifyPlugin` retains its normal build-then-verify behavior.
+
+After workflow or release-script changes, run `go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12`, `python3 scripts/test-release-artifact.py` and `python3 scripts/test-opencode-compatibility.py`. Release-gate fixtures cover commit/repository/workflow isolation, both tag/CI event orderings, immediate deferral without CI polling, draft ownership and duplicate-event suppression, cancelled CI, rerun attempts, expired artifacts, package identity and checksum mismatches. Network writes are mocked and checked for no automatic replay. Tests never publish a release or upload to Marketplace.
+
+For the release helper files, run `ruff check --select E4,E7,E9,F,I,EXE,SIM,PLW scripts/{check-opencode-compatibility,test-opencode-compatibility,release-artifact,test-release-artifact}.py`. CI uses pinned Ruff 0.17.1 on Python 3.12. Keep shebang-bearing CLI files executable.
 
 The verification matrix in `build.gradle.kts` must include the exact EAP build checked by Marketplace, not just an earlier build of the same branch. Database grid APIs and plugin dependencies can move between EAP builds. Keep the older branches in the matrix when adding a compatibility adapter. Plugin Verifier cannot validate reflective lookups, so test those against the actual IDE APIs and exercise database context capture in the target IDE before publishing.
 
@@ -153,4 +159,4 @@ Run browser checks, then `./gradlew check buildPlugin` from the root, and verify
 
 Describe the behavior changed, how to reproduce or exercise it, and which checks you ran. Include screenshots for visible UI changes. Update the README or architecture guide when defaults, workflows, or host behavior change.
 
-Release tagging and packaging are documented in [CI and releases](README.md#ci-and-releases).
+Release tagging and packaging are documented in [CI and releases](docs/ci-and-releases.md).

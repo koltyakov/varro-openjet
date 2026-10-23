@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
-"""Run Kotlin compatibility checks against a pinned, isolated released V2 CLI."""
+"""Run isolated released V2 checks, optionally with the full CI build."""
 
 import argparse
 import json
 import os
-from pathlib import Path
 import re
 import subprocess
 import sys
 import xml.etree.ElementTree as ET
-
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SUITES = (
@@ -72,10 +71,22 @@ def probe_environment(directory):
     return environment
 
 
+def gradle_command(full_check=False):
+    wrapper = ROOT / ("gradlew.bat" if os.name == "nt" else "gradlew")
+    if full_check:
+        # One invocation runs the full suite with the pinned binary, static checks and packaging.
+        return [str(wrapper), "--no-daemon", "--stacktrace", "check", "buildPlugin", "--rerun-tasks"]
+    command = [str(wrapper), "test", "-PskipWebview=true", "--rerun-tasks"]
+    for name in SUITES:
+        command += ["--tests", name]
+    return command
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--version", type=released_version, required=True)
     parser.add_argument("--binary", type=Path, help="Use an existing matching executable instead of installing one")
+    parser.add_argument("--full-check", action="store_true", help="Run the full CI check and package once with the released suites enabled")
     args = parser.parse_args()
     directory = ROOT / "build/opencode-compatibility" / args.version
     directory.mkdir(parents=True, exist_ok=True)
@@ -92,12 +103,9 @@ def main():
         environment = dict(os.environ)
         environment.update(VARRO_OPENCODE_TEST_BINARY=str(binary), VARRO_OPENCODE_TEST_VERSION=args.version,
                            VARRO_OPENCODE_DESKTOP_TEST_BINARY=str(binary))
-        wrapper = ROOT / ("gradlew.bat" if os.name == "nt" else "gradlew")
-        command = [str(wrapper), "test", "-PskipWebview=true", "--rerun-tasks"]
-        for name in SUITES:
-            command += ["--tests", name]
+        command = gradle_command(args.full_check)
         record["command"] = command
-        subprocess.run(command, cwd=ROOT, env=environment, timeout=600, check=True)
+        subprocess.run(command, cwd=ROOT, env=environment, timeout=2400 if args.full_check else 600, check=True)
         record.update(status="passed", suites=read_results(ROOT / "build/test-results/test"))
         print(f"Kotlin adapter and managed-service compatibility passed against OpenCode {observed}.")
         return 0

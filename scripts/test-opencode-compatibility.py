@@ -3,10 +3,9 @@
 
 import argparse
 import importlib.util
-from pathlib import Path
 import tempfile
 import unittest
-
+from pathlib import Path
 
 spec = importlib.util.spec_from_file_location("compatibility", Path(__file__).with_name("check-opencode-compatibility.py"))
 compatibility = importlib.util.module_from_spec(spec)
@@ -14,6 +13,17 @@ spec.loader.exec_module(compatibility)
 
 
 class CompatibilityTest(unittest.TestCase):
+    def test_full_ci_runs_all_tests_static_checks_and_build_in_one_invocation(self):
+        command = compatibility.gradle_command(full_check=True)
+        self.assertEqual(command[1:], ["--no-daemon", "--stacktrace", "check", "buildPlugin", "--rerun-tasks"])
+        self.assertNotIn("--tests", command)
+        self.assertNotIn("-PskipWebview=true", command)
+
+    def test_focused_compatibility_keeps_both_released_suites(self):
+        command = compatibility.gradle_command()
+        self.assertEqual(command[1:4], ["test", "-PskipWebview=true", "--rerun-tasks"])
+        self.assertEqual(command[4:], [item for suite in compatibility.SUITES for item in ("--tests", suite)])
+
     def test_only_exact_v2_releases_are_accepted(self):
         self.assertEqual("2.0.28", compatibility.released_version("2.0.28"))
         for version in ("latest", "^2.0.28", "1.19.0", "2.0.28-preview", "../2.0.28"):

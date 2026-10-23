@@ -93,7 +93,7 @@ while IFS= read -r line; do
   [ -n "$line" ] && DETECTED+=("$line")
 done < <(detect_ides)
 
-if [ "${#DETECTED[@]:-0}" -eq 0 ]; then
+if [ "${#DETECTED[@]}" -eq 0 ]; then
   echo "error: found no IDE profiles under $CONFIG_ROOT" >&2
   exit 1
 fi
@@ -129,7 +129,7 @@ else
       TARGETS+=("$ide")
     fi
   done
-  if [ "${#TARGETS[@]:-0}" -eq 0 ]; then
+  if [ "${#TARGETS[@]}" -eq 0 ]; then
     echo "error: no IDE in the supported build range ${BUILD_RANGE}." >&2
     echo "       Run --list to see what was found, or --all to install anyway." >&2
     exit 1

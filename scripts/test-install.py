@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check artifact selection using isolated IDE profiles, without touching real IDEs."""
+"""Check IDE detection and artifact selection without touching real IDEs."""
 
 import os
 from pathlib import Path
@@ -68,6 +68,23 @@ class InstallScriptTest(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("pluginVersion is missing", result.stderr)
         self.assertFalse((self.plugins / "varro-openjet").exists())
+
+    def test_no_ide_profiles_is_rejected(self):
+        self.plugins.rmdir()
+        result = self.run_install("--no-build")
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("found no IDE profiles", result.stderr)
+
+    def test_no_compatible_ides_is_rejected(self):
+        self.plugins.parent.rename(self.plugins.parent.with_name("IntelliJIdea2024.1"))
+        result = self.run_install("--no-build")
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("no IDE in the supported build range", result.stderr)
+
+    def test_list_detected_ide(self):
+        result = self.run_install("--list")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("IntelliJIdea2026.2", result.stdout)
 
 
 if __name__ == "__main__":

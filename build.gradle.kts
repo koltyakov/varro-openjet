@@ -83,6 +83,14 @@ intellijPlatform {
     }
 }
 
+// A release verifies the CI-produced ZIP. Setting a plain file provider replaces
+// the default buildPlugin output dependency, so no source compilation is needed.
+providers.gradleProperty("verificationArchive").orNull?.let { path ->
+    tasks.named<org.jetbrains.intellij.platform.gradle.tasks.VerifyPluginTask>("verifyPlugin") {
+        archiveFile.set(layout.projectDirectory.file(path))
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Webview pipeline
 //
