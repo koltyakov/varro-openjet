@@ -115,6 +115,7 @@ import {
   setSessionUsageLimit,
   isSessionCompacting,
   isSessionAwaitingInput,
+  isSessionStatusWorking,
   isSessionTreeStatusWorking,
   replaceClipboardImages,
   replaceNativePdfs,
@@ -209,6 +210,7 @@ import {
   TERMINAL_SELECTION_MARKER,
 } from '../../shared/context-files';
 import { normalizeSessionTitle } from '../../shared/session-title';
+import { isSubagentCardVisible } from '../lib/subagent-visibility';
 import { createOpenCodeMessageID } from '../../shared/opencode-id';
 import { getQueuedAttachmentSnapshot } from '../hooks/session/session-send';
 import {
@@ -2324,6 +2326,30 @@ export function ChatInput(props: { newSession?: boolean; onBeforeSend?: () => vo
     return false;
   });
   const isComposerBusy = createMemo(() => !props.newSession && isActiveSessionWorking());
+  const workingSubagentIds = createMemo(() => {
+    const sessionId = composerSessionId();
+    if (!sessionId) return [];
+    return getSessionTreeIds(sessionId).filter(
+      (id) => id !== sessionId && isSessionStatusWorking(state.sessionStatus[id])
+    );
+  });
+  const waitingForSubagents = createMemo(
+    () =>
+      workingSubagentIds().length > 0 &&
+      (latestAssistantResponseIsTerminal() ||
+        !isSessionStatusWorking(state.sessionStatus[composerSessionId()!]))
+  );
+  const workingSubagentTitles = createMemo(() => {
+    if (!waitingForSubagents()) return '';
+    const ids = new Set(workingSubagentIds());
+    return state.sessions
+      .filter((session) => ids.has(session.id))
+      .map((session) => normalizeSessionTitle(session.title) || 'Untitled subagent')
+      .join(', ');
+  });
+  const showSubagentWaitingStatus = createMemo(
+    () => waitingForSubagents() && workingSubagentIds().some((id) => !isSubagentCardVisible(id))
+  );
   const [composerBusyDisplayHold, setComposerBusyDisplayHold] = createSignal(
     !props.newSession && isActiveSessionWorking()
   );
@@ -2349,7 +2375,9 @@ export function ChatInput(props: { newSession?: boolean; onBeforeSend?: () => vo
   });
   onCleanup(clearComposerBusyDisplayTimer);
   const isComposerDisplayBusy = createMemo(
-    () => !latestAssistantResponseIsTerminal() && (isComposerBusy() || composerBusyDisplayHold())
+    () =>
+      workingSubagentIds().length > 0 ||
+      (!latestAssistantResponseIsTerminal() && (isComposerBusy() || composerBusyDisplayHold()))
   );
 
   const slashCommands = createMemo(() =>
@@ -6254,6 +6282,19 @@ export function ChatInput(props: { newSession?: boolean; onBeforeSend?: () => vo
           directory={composerBackgroundServiceDirectory()}
           count={composerBackgroundServices()}
         />
+      </Show>
+      <Show
+        when={showSubagentWaitingStatus() && !hasExpandedDiffOverlay() && !composerEditingMessage()}
+      >
+        <div class="chat-subagent-waiting" role="status">
+          <span class="chat-subagent-waiting-label">
+            Waiting for {workingSubagentIds().length}{' '}
+            {workingSubagentIds().length === 1 ? 'subagent' : 'subagents'}
+          </span>
+          <span class="chat-subagent-waiting-titles" title={workingSubagentTitles()}>
+            {workingSubagentTitles()}
+          </span>
+        </div>
       </Show>
       <Show
         when={

@@ -14,6 +14,7 @@ class SessionTransfers(
     private val roots: () -> List<String>,
     private val readSession: (String) -> JsonElement?,
     private val publish: (JsonObject) -> Unit,
+    private val invalidateCatalog: () -> Unit = {},
 ) {
     private val entries = linkedMapOf<String, JsonObject>()
     private val observed = linkedMapOf<String, String>()
@@ -25,7 +26,10 @@ class SessionTransfers(
             val session = summary(entry.get("session")) ?: return@forEach
             val origins = entry.arr("origins")?.strings()?.filter(::isDirectory)?.take(32).orEmpty()
             if (origins.isEmpty() || !isDirectory(session.obj("transfer").str("originDirectory"))) return@forEach
-            entries[key(server, session.str("id")!!)] = Json.obj("server" to server, "origins" to origins, "session" to session)
+            entries[key(server, session.str("id")!!)] = Json.obj("server" to server, "origins" to origins, "session" to session).apply {
+                entry.arr("hiddenOrigins")?.strings()?.filter(::isDirectory)?.take(32)?.takeIf { it.isNotEmpty() }
+                    ?.let { add("hiddenOrigins", Json.toElement(it)) }
+            }
         }
     }
 
@@ -70,6 +74,7 @@ class SessionTransfers(
         val origins = (previous.arr("origins")?.strings().orEmpty() + origin).distinct().filter(::isDirectory).take(32)
         session.add("transfer", Json.obj("originDirectory" to (previous.obj("session").obj("transfer").str("originDirectory") ?: origin), "available" to isOpen(session.str("directory"))))
         val next = Json.obj("server" to server, "origins" to origins, "session" to session)
+        previous.arr("hiddenOrigins")?.let { next.add("hiddenOrigins", it.deepCopy()) }
         val changed = previous?.get("session").asObjectOrNull().str("directory") != session.str("directory")
         val saved = LinkedHashMap(entries)
         saved[key] = next
@@ -80,14 +85,63 @@ class SessionTransfers(
         if (changed) publish(Json.obj("sessionId" to id, "directory" to session.str("directory"), "available" to isOpen(session.str("directory"))))
     }
 
-    @Synchronized fun list(): List<JsonObject> = entries.values.filter { belongs(it) }.mapNotNull { entry ->
-        entry.obj("session")?.deepCopy()?.apply {
-            obj("transfer")?.addProperty("available", isOpen(str("directory")))
-        }
+    @Synchronized fun list(includeHidden: Boolean = false, directory: String? = null): List<JsonObject> {
+        val scope = directory?.let(::listOf) ?: roots()
+        return entries.values.filter { entry ->
+            val hiddenOrigins = entry.arr("hiddenOrigins")?.strings().orEmpty()
+            belongs(entry) && entry.arr("origins")?.strings().orEmpty().any { origin ->
+                scope.any { WorkspacePaths.isSame(it, origin) } &&
+                    (includeHidden || hiddenOrigins.none { WorkspacePaths.isSame(it, origin) })
+            }
+        }.mapNotNull { project(it, scope) }
     }
 
-    @Synchronized fun get(id: String): JsonObject? = entry(id).obj("session")?.deepCopy()?.apply {
-        obj("transfer")?.addProperty("available", isOpen(str("directory")))
+    @Synchronized fun get(id: String): JsonObject? = entry(id)?.let { project(it, roots()) }
+
+    private fun project(entry: JsonObject, scope: List<String>): JsonObject? = entry.obj("session")?.deepCopy()?.apply {
+        val hiddenOrigins = entry.arr("hiddenOrigins")?.strings().orEmpty()
+        val available = isOpen(str("directory"))
+        val hidden = !available && entry.arr("origins")?.strings().orEmpty()
+            .filter { origin -> scope.any { WorkspacePaths.isSame(it, origin) } }
+            .all { origin -> hiddenOrigins.any { WorkspacePaths.isSame(it, origin) } }
+        add("transfer", Json.obj("originDirectory" to obj("transfer").str("originDirectory"), "available" to available).apply {
+            if (hiddenOrigins.isNotEmpty()) add("hiddenOrigins", Json.toElement(hiddenOrigins))
+            if (hidden) addProperty("hidden", true)
+        })
+    }
+
+    /** Hiding affects only origin-list preferences, not history access or the server session. */
+    @Synchronized fun hide(id: String, directory: String? = null): Boolean {
+        require(isSessionId(id)) { "Invalid session ID" }
+        require(directory == null || isOpen(directory)) { "Workspace folder is not open" }
+        val entry = entry(id) ?: return false
+        val scope = directory?.let(::listOf) ?: roots()
+        val origins = entry.arr("origins")?.strings().orEmpty().filter { origin ->
+            scope.any { WorkspacePaths.isSame(it, origin) } && !WorkspacePaths.isSame(origin, entry.obj("session").str("directory"))
+        }
+        if (origins.isEmpty()) return false
+        val next = entry.deepCopy().apply {
+            add("hiddenOrigins", Json.toElement((entry.arr("hiddenOrigins")?.strings().orEmpty() + origins).distinct().take(32)))
+        }
+        val saved = LinkedHashMap(entries).apply { put(key(serverUrl(), id), next) }
+        persist(Json.array(saved.values))
+        entries.clear(); entries.putAll(saved)
+        invalidateCatalog()
+        return true
+    }
+
+    /** Include hidden metadata so stale pages and active history reads cannot restore a visible link. */
+    @Synchronized fun merge(sessions: JsonArray, request: ApiRoutes.Request): JsonArray {
+        val merged = sessions.mapNotNull { it.asObjectOrNull() }.associateByTo(linkedMapOf()) { it.str("id") }
+        val search = request.query["search"]?.firstOrNull()
+        list(includeHidden = true, directory = request.query["directory"]?.firstOrNull()).forEach { session ->
+            if (search != null && !session.str("title").orEmpty().contains(search, ignoreCase = true)) return@forEach
+            if (request.query["roots"]?.firstOrNull() == "true" && session.text("parentID") != null) return@forEach
+            val id = session.str("id")!!
+            val current = merged[id]
+            if (current == null) merged[id] = session else current.add("transfer", session.get("transfer"))
+        }
+        return Json.array(merged.values)
     }
 
     /** Return a verified history scope, rejecting writes and unrelated directory overrides. */
@@ -167,7 +221,9 @@ class SessionTransfers(
                 "time" to Json.obj("created" to time!!.get("created"), "updated" to time.get("updated"))).apply {
                 record.str("parentID")?.let { addProperty("parentID", it) }
                 if (record.str("workspaceScope") == "workspace") addProperty("workspaceScope", "workspace")
-                record.obj("transfer")?.let { add("transfer", it.deepCopy()) }
+                record.obj("transfer")?.str("originDirectory")?.takeIf(::isDirectory)?.let {
+                    add("transfer", Json.obj("originDirectory" to it, "available" to false))
+                }
             }
         }
     }

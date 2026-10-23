@@ -170,8 +170,20 @@ function isPlaceholderSessionTitle(title: string | null | undefined) {
 
 function mergeFreshSession(existing: Session | undefined, incoming: Session) {
   if (!existing) return incoming;
-  if (existing.transfer && !incoming.transfer)
-    incoming = { ...incoming, transfer: existing.transfer };
+  let transfer = incoming.transfer ?? existing.transfer;
+  if (transfer && existing.transfer?.hiddenOrigins?.length && incoming.transfer) {
+    transfer = {
+      ...transfer,
+      hidden: transfer.hidden || (existing.transfer.hidden && !transfer.available),
+      hiddenOrigins: [
+        ...new Set([...existing.transfer.hiddenOrigins, ...(transfer.hiddenOrigins ?? [])]),
+      ],
+    };
+  }
+  // Link visibility is local metadata, independent of the conversation timestamp.
+  // A saved transfer summary can be older than the live conversation it describes.
+  if (transfer !== incoming.transfer) incoming = { ...incoming, transfer };
+  if (transfer !== existing.transfer) existing = { ...existing, transfer };
   const existingUpdated = existing.time?.updated ?? 0;
   const incomingUpdated = incoming.time?.updated ?? 0;
   if (existingUpdated > incomingUpdated) {

@@ -40,6 +40,7 @@ import type { FileChange } from '../lib/tool-file-change';
 import { getToolCallExpanded, setToolCallExpanded } from '../lib/tool-call-expansion-state';
 import type { ToolCallPermissionMatch } from '../lib/tool-call-matching';
 import { resolveTaskSessionId } from '../lib/task-session';
+import { observeSubagentCard } from '../lib/subagent-visibility';
 import { getToolKind, isApplyPatchTool, normalizeToolName } from '../lib/tool-normalization';
 import type { ToolKind } from '../lib/tool-normalization';
 import { rememberDirectSessionReturn } from '../lib/session-navigation';
@@ -1695,6 +1696,14 @@ function GenericToolCall(props: {
     (isExpanded() || !hasBashResultRow());
 
   const bodyId = createUniqueId();
+  let taskHeader: HTMLButtonElement | undefined;
+  const observedTaskSessionId = createMemo(() =>
+    props.state.status === 'running' ? taskSessionId() : null
+  );
+  createEffect(() => {
+    const sessionId = observedTaskSessionId();
+    if (sessionId && taskHeader) onCleanup(observeSubagentCard(taskHeader, sessionId));
+  });
   return (
     <div class={`chat-tool-invocation-part${isTask() ? ' tool-invocation-task' : ''}`}>
       <div
@@ -1703,6 +1712,9 @@ function GenericToolCall(props: {
         <button
           type="button"
           class="tool-invocation-header"
+          ref={(element) => {
+            taskHeader = element;
+          }}
           onClick={props.toggleExpand}
           disabled={!hasExpandableContent()}
           aria-expanded={hasExpandableContent() ? isExpanded() : undefined}

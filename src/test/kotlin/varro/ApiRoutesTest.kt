@@ -12,6 +12,16 @@ import org.junit.Test
  */
 class ApiRoutesTest {
 
+    @Test fun `transfer hiding allows only a local POST with an optional directory`() {
+        val path = ApiRoutes.Endpoints.SESSION_TRANSFER_HIDE
+        assertTrue(ApiRoutes.isAllowed("POST", path))
+        assertTrue(ApiRoutes.isAllowed("POST", "$path?directory=%2Frepo"))
+        for (method in listOf("GET", "DELETE", "PATCH")) assertFalse(ApiRoutes.isAllowed(method, path))
+        for (query in listOf("directory=", "directory=/a&directory=/b", "unexpected=true")) {
+            assertFalse(ApiRoutes.isAllowed("POST", "$path?$query"))
+        }
+    }
+
     @Test fun `saved permission editing uses only the project checked host endpoint`() {
         val path = ApiRoutes.Endpoints.PERMISSION_SERVER_MEMORY
         for (method in listOf("GET", "PATCH", "DELETE")) {

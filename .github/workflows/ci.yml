@@ -2,8 +2,6 @@ name: CI and release
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: '17 4 * * 1'
   pull_request:
   push:
     branches: [main]
@@ -178,3 +176,23 @@ jobs:
           fail_on_unmatched_files: true
           generate_release_notes: true
           prerelease: ${{ contains(github.ref_name, '-') }}
+
+  marketplace:
+    name: Upload stable release to JetBrains Marketplace
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/') && !contains(github.ref_name, '-')
+    needs: [build, compatibility, verify, release]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Download tested plugin archive
+        uses: actions/download-artifact@v8
+        with:
+          name: plugin-archive
+          path: dist
+
+      - name: Upload tested archive to the stable channel
+        env:
+          JETBRAINS_MARKETPLACE_TOKEN: ${{ secrets.JETBRAINS_MARKETPLACE_TOKEN }}
+        run: bash scripts/publish-marketplace.sh

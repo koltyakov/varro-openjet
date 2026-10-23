@@ -468,6 +468,7 @@ export const VARRO_API_ENDPOINTS = {
   session: `${VARRO_API_NAMESPACE}/session`,
   sessionTrash: `${VARRO_API_NAMESPACE}/session-trash`,
   sessionHistoryScope: `${VARRO_API_NAMESPACE}/session-history-scope`,
+  sessionTransferHide: `${VARRO_API_NAMESPACE}/session-transfer/hide`,
   workspaceFile: `${VARRO_API_NAMESPACE}/workspace-file`,
   workspaceFilePick: `${VARRO_API_NAMESPACE}/workspace-file/pick`,
   workspaceProblems: `${VARRO_API_NAMESPACE}/workspace-problems`,

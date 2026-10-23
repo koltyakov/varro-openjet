@@ -101,6 +101,7 @@ import {
 import { Tooltip } from '../Tooltip';
 import { sessionDiffSummaries } from './session-diff-summaries';
 import { sessionStore } from '../../lib/stores/session-store';
+import { isSessionTransferHidden } from '../../lib/session-transfer';
 
 const {
   cache: sessionDiffSummaryCache,
@@ -1321,6 +1322,7 @@ export function SessionListView(props: {
   );
   const recycleBinSessionIds = createMemo(() => getRecycleBinSessionIds(recycleBinEntries()));
   const isVisibleSession = (session: Session) => {
+    if (isSessionTransferHidden(session, sessionHistoryDirectory())) return false;
     if (recycleBinSessionIds().has(session.id)) return false;
     return !shouldHideEmptySessionFromList(session, {
       isQueued: (sessionId) => queuedMessageCounts().has(sessionId),
@@ -1754,6 +1756,51 @@ export function SessionListView(props: {
               isDragOverPinned={dragOverPinnedSessionId() === sessionId}
               startsUnpinnedGroup={startsUnpinnedGroup()}
               folderLabel={getSessionFolderLabel(session())}
+              onHide={
+                session().transfer &&
+                !isSameWorkspacePath(session().directory, sessionHistoryDirectory())
+                  ? async () => {
+                      const directory = sessionHistoryDirectory();
+                      const roots = directory
+                        ? [directory]
+                        : (state.editorContext.workspaceFolders ?? []).map((folder) => folder.path);
+                      if (!roots.length) roots.push(session().transfer!.originDirectory);
+                      try {
+                        const hidden = await client.varro.session.hideTransfer(sessionId, {
+                          directory: directory ?? undefined,
+                        });
+                        if (!hidden) throw new Error('Could not hide the moved session');
+                        const hideLink = (item: Session): Session => {
+                          if (item.id !== sessionId || !item.transfer) return item;
+                          return {
+                            ...item,
+                            transfer: {
+                              ...item.transfer,
+                              hidden:
+                                item.transfer.hidden ||
+                                !roots.some((root) => isSameWorkspacePath(root, item.directory)),
+                              hiddenOrigins: [
+                                ...new Set([
+                                  ...(item.transfer.hiddenOrigins ?? []),
+                                  ...roots.filter(
+                                    (root) => !isSameWorkspacePath(root, item.directory)
+                                  ),
+                                ]),
+                              ],
+                            },
+                          };
+                        };
+                        batch(() => {
+                          setState('sessions', (items) => items.map(hideLink));
+                          setNativeSearchResults((results) => results?.map(hideLink) ?? null);
+                        });
+                        await reloadSessions();
+                      } catch (error) {
+                        setError(error instanceof Error ? error.message : String(error));
+                      }
+                    }
+                  : undefined
+              }
               onTogglePinned={async () => {
                 try {
                   const pinnedSessionIds = await client.varro.session.setPinned(
@@ -2242,6 +2289,7 @@ function SessionListItem(props: {
   startsUnpinnedGroup: boolean;
   folderLabel: string | null;
   onTogglePinned: () => Promise<void>;
+  onHide?: () => Promise<void>;
   onPinnedDragStart: (event: DragEvent) => void;
   onPinnedDragEnd: () => void;
   onPinnedDragOver: (event: DragEvent) => void;
@@ -2804,6 +2852,7 @@ function SessionListItem(props: {
           onEscape={() => sessionButtonRef?.focus()}
           onTogglePinned={() => props.onTogglePinned()}
           onDelete={(sessionId) => deleteSession(sessionId)}
+          onHide={props.onHide}
         />
       </Show>
     </div>

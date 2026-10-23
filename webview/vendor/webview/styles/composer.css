@@ -2237,6 +2237,29 @@
   font-variant-numeric: tabular-nums;
 }
 
+.chat-subagent-waiting {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 4px;
+  padding: 6px 10px;
+  border: 1px solid var(--color-vscode-border-soft);
+  border-radius: var(--radius-card);
+  background: var(--color-vscode-surface-soft);
+  font-size: 12px;
+}
+
+.chat-subagent-waiting-label {
+  color: var(--color-vscode-fg);
+}
+
+.chat-subagent-waiting-titles {
+  color: var(--color-vscode-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .chat-queue-container {
   margin: 0 0 4px;
   padding: 0;

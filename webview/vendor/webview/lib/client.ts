@@ -706,6 +706,15 @@ export const client = {
       },
     },
     session: {
+      async hideTransfer(sessionID: string, options?: { directory?: string }): Promise<boolean> {
+        return apiCall(
+          'POST',
+          withDirectory(VARRO_API_ENDPOINTS.sessionTransferHide, options?.directory),
+          {
+            sessionID,
+          }
+        );
+      },
       async deleteImmediately(
         sessionID: string,
         options?: { directory?: string }

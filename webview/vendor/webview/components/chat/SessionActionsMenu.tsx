@@ -86,6 +86,7 @@ export function SessionActionsMenu(props: {
   onOpenAsEditor?: (sessionId: string) => void;
   onTogglePinned: (sessionId: string) => void | Promise<void>;
   onDelete: (sessionId: string) => void | Promise<void>;
+  onHide?: (sessionId: string) => void | Promise<void>;
 }) {
   let menuRef: HTMLDivElement | undefined;
   let renameInputRef: HTMLInputElement | undefined;
@@ -296,6 +297,21 @@ export function SessionActionsMenu(props: {
               </Show>
               <Show when={!props.session.parentID}>
                 <div class="session-item-actions-separator" role="separator" />
+                <Show when={props.onHide}>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    title="Hide the moved session's link here without deleting the conversation"
+                    onClick={() => {
+                      const sessionId = props.session.id;
+                      const onHide = props.onHide;
+                      props.state.close();
+                      void onHide?.(sessionId);
+                    }}
+                  >
+                    Hide from this list
+                  </button>
+                </Show>
                 <button
                   type="button"
                   role="menuitem"

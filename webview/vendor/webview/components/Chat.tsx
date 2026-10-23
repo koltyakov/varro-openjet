@@ -71,6 +71,7 @@ import { SideQuestionDialog } from './SideQuestionDialog';
 import { sideQuestionView, closeSideQuestion } from '../lib/side-question';
 import { backgroundProcessView, closeBackgroundProcessView } from '../lib/background-process-view';
 import { readWebviewInstanceContext } from '../lib/state-stored-values';
+import { isSessionTransferHidden } from '../lib/session-transfer';
 
 type HeaderSessionCounts = {
   running: number;
@@ -277,9 +278,15 @@ export function Chat() {
   const recycleBinSessionIds = createMemo(() => getRecycleBinSessionIds(state.recycleBinEntries));
   const visibleSessions = createMemo(() => {
     const indicators = sessionIndicators();
+    const directory =
+      (state.editorContext.workspaceFolders?.length ?? 0) > 1
+        ? null
+        : (state.editorContext.workspacePath ?? state.editorContext.workspaceFolders?.[0]?.path);
     return state.sessions.filter(
       (session) =>
-        !recycleBinSessionIds().has(session.id) && !shouldHideSessionFromList(session, indicators)
+        !isSessionTransferHidden(session, directory) &&
+        !recycleBinSessionIds().has(session.id) &&
+        !shouldHideSessionFromList(session, indicators)
     );
   });
   const primarySessions = createMemo(() => visibleSessions().filter(isPrimarySession));

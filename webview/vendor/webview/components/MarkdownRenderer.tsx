@@ -270,7 +270,13 @@ const KATEX_RENDER_OPTIONS = {
 } as const;
 // Models also put the formula on the same lines as its display delimiters.
 const DISPLAY_MATH_BLOCK_RE = /^\$\$((?:\\[\s\S]|[^\\])+?)\$\$(?=\n|$)/;
-const INLINE_MATH_RE = /^(\${1,2})(?!\$)((?:\\.|[^\\\n$])+)\1(?=[\s?!.,:;？！。，：；)\]}]|$)/;
+// CJK prose does not require spaces around formulas. Keep ASCII word boundaries strict.
+const CJK_MATH_BOUNDARY = String.raw`\p{Script_Extensions=Han}\p{Script_Extensions=Hiragana}\p{Script_Extensions=Katakana}\p{Script_Extensions=Hangul}，。！？：；、（）［］｛｝【】《》〈〉「」『』〔〕`;
+const INLINE_MATH_OPEN_BOUNDARY_RE = new RegExp(String.raw`[\s([{${CJK_MATH_BOUNDARY}]$`, 'u');
+const INLINE_MATH_RE = new RegExp(
+  String.raw`^(\${1,2})(?!\$)((?:\\.|[^\\\n$])+)\1(?=[\s?!.,:;)\]}${CJK_MATH_BOUNDARY}]|$)`,
+  'u'
+);
 const MAX_COPY_TEXT_LENGTH = 20_000;
 const MAX_MERMAID_SOURCE_LENGTH = 100_000;
 const MERMAID_SVG_CACHE_LIMIT = 20;
@@ -662,10 +668,7 @@ marked.use({
       level: 'inline',
       start(src) {
         for (let index = src.indexOf('$'); index !== -1; index = src.indexOf('$', index + 1)) {
-          if (
-            (index === 0 || /[\s([{]/.test(src[index - 1]!)) &&
-            INLINE_MATH_RE.test(src.slice(index))
-          ) {
+          if (hasInlineMathOpeningBoundary(src, index) && INLINE_MATH_RE.test(src.slice(index))) {
             return index;
           }
         }
@@ -1226,6 +1229,13 @@ function isEscapedMarkdownDelimiter(content: string, index: number, lineStart: n
   return backslashCount % 2 === 1;
 }
 
+function hasInlineMathOpeningBoundary(source: string, index: number): boolean {
+  // Include both UTF-16 code units when the preceding CJK character is supplementary.
+  return (
+    index === 0 || INLINE_MATH_OPEN_BOUNDARY_RE.test(source.slice(Math.max(0, index - 2), index))
+  );
+}
+
 function isIncompleteInlineMath(source: string): boolean {
   const display = source.startsWith('$$');
   // A dollar amount is ambiguous until it contains math syntax. Keep ordinary
@@ -1328,7 +1338,8 @@ function renderIncompleteStreamingMarkdown(
             }
             if (
               nextBreak === -1 &&
-              (cursor === index || /[\s([{*~]/.test(content[cursor - 1]!)) &&
+              (hasInlineMathOpeningBoundary(content, cursor) ||
+                /[*~]/.test(content[cursor - 1]!)) &&
               isIncompleteInlineMath(content.slice(cursor, lineEnd))
             ) {
               mathStart = cursor;

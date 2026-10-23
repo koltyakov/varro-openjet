@@ -17,10 +17,11 @@ class SessionTransfersTest {
         var failPersistence = false
         val events = mutableListOf<JsonObject>()
         var reads = 0
+        var invalidations = 0
         fun service(initial: JsonArray = saved) = SessionTransfers(initial, {
             if (failPersistence) error("Persistence failed")
             saved = it.deepCopy(); writes++
-        }, { server }, { roots }, { id -> assertEquals("ses_one", id); reads++; session.deepCopy() }, { events.add(it) })
+        }, { server }, { roots }, { id -> assertEquals("ses_one", id); reads++; session.deepCopy() }, { events.add(it) }, { invalidations++ })
     }
 
     @Test fun `verified move retains a read-only link and blocks execution after reload`() {
@@ -174,6 +175,151 @@ class SessionTransfersTest {
         assertEquals(1, fixture.events.size)
         assertTrue(transfers.owns("ses_one", null))
         assertFalse(transfers.owns("ses_foreign", "/foreign"))
+    }
+
+    @Test fun `hiding persists only the selected origin without mutating conversation or history access`() {
+        val fixture = Fixture()
+        fixture.roots = listOf("/origin", "/other")
+        val transfers = fixture.service()
+        transfers.observe(fixture.session)
+        fixture.session = summary("/other")
+        transfers.observe(fixture.session)
+        fixture.session = summary("/destination")
+        transfers.observe(fixture.session)
+        val session = fixture.session.deepCopy()
+        val events = fixture.events.toList()
+        assertTrue(transfers.hide("ses_one", "/origin/"))
+        assertEquals(1, fixture.invalidations)
+        assertEquals(0, fixture.reads)
+        assertEquals(events, fixture.events)
+        assertEquals(session, fixture.session)
+
+        val store = VarroStore().apply { sessionTransfers = fixture.saved }
+        val restoredStore = VarroStore().apply { loadState(store.state) }
+        val restored = fixture.service(restoredStore.sessionTransfers)
+        assertTrue(restored.list(directory = "/origin").isEmpty())
+        assertEquals(Json.obj("originDirectory" to "/origin", "available" to false, "hidden" to true,
+            "hiddenOrigins" to listOf("/origin")), restored.list(includeHidden = true, directory = "/origin").single().obj("transfer"))
+        assertNull(restored.list(directory = "/other").single().obj("transfer").bool("hidden"))
+        assertNull(restored.list().single().obj("transfer").bool("hidden"))
+        assertEquals("/destination", restored.authorizeRequest("GET", "/session/ses_one/message"))
+        assertEquals("/destination", restored.openDirectory("ses_one"))
+        assertThrows(IllegalStateException::class.java) { restored.checkWritable("ses_one") }
+
+        fixture.session = summary("/final")
+        restored.observe(fixture.session)
+        assertTrue(fixture.service().list(directory = "/origin").isEmpty())
+        assertEquals("/final", restored.list(directory = "/other").single().str("directory"))
+    }
+
+    @Test fun `unscoped hiding covers all open origins but never hides a destination`() {
+        val fixture = Fixture()
+        fixture.roots = listOf("C:\\Origin", "D:\\Other")
+        fixture.session = summary("c:/origin/")
+        val transfers = fixture.service()
+        transfers.observe(fixture.session)
+        fixture.session = summary("d:/other")
+        transfers.observe(fixture.session)
+        fixture.session = summary("E:/Destination")
+        transfers.observe(fixture.session)
+        assertTrue(transfers.hide("ses_one"))
+        assertTrue(transfers.list().isEmpty())
+        assertEquals(true, transfers.get("ses_one").obj("transfer").bool("hidden"))
+        assertEquals(listOf("c:/origin/", "d:/other"), transfers.get("ses_one").obj("transfer").arr("hiddenOrigins")!!.strings())
+        fixture.roots = fixture.roots + "e:\\destination\\"
+        assertEquals(true, transfers.get("ses_one").obj("transfer").bool("available"))
+        assertNull(transfers.get("ses_one").obj("transfer").bool("hidden"))
+        val writes = fixture.writes
+        assertFalse(transfers.hide("ses_one", "E:/Destination"))
+        assertEquals(writes, fixture.writes)
+    }
+
+    @Test fun `foreign unknown malformed and closed-folder hide requests cannot write preferences`() {
+        val fixture = Fixture()
+        val transfers = fixture.service()
+        transfers.observe(fixture.session)
+        fixture.session = summary("/destination")
+        transfers.observe(fixture.session)
+        val saved = fixture.saved.deepCopy()
+        val writes = fixture.writes
+        for (id in listOf("", "../escape", "x".repeat(513))) {
+            assertEquals("Invalid session ID", assertThrows(IllegalArgumentException::class.java) { transfers.hide(id) }.message)
+        }
+        assertThrows(IllegalArgumentException::class.java) { transfers.hide("ses_one", "/closed") }
+        assertFalse(transfers.hide("unknown"))
+        fixture.roots = listOf("/unrelated")
+        assertFalse(transfers.hide("ses_one"))
+        fixture.roots = listOf("/origin")
+        fixture.server = "http://foreign.local"
+        assertFalse(transfers.hide("ses_one"))
+        assertEquals(writes, fixture.writes)
+        assertEquals(saved, fixture.saved)
+        assertEquals(0, fixture.invalidations)
+        assertEquals(0, fixture.reads)
+    }
+
+    @Test fun `failed hide persistence keeps the link visible and permits retry`() {
+        val fixture = Fixture()
+        val transfers = fixture.service()
+        transfers.observe(fixture.session)
+        fixture.session = summary("/destination")
+        transfers.observe(fixture.session)
+        val saved = fixture.saved.deepCopy()
+        fixture.failPersistence = true
+        assertThrows(IllegalStateException::class.java) { transfers.hide("ses_one") }
+        assertEquals(saved, fixture.saved)
+        assertEquals(1, transfers.list().size)
+        assertEquals(1, fixture.service().list().size)
+        assertEquals(0, fixture.invalidations)
+        fixture.failPersistence = false
+        assertTrue(transfers.hide("ses_one"))
+        assertTrue(fixture.service().list().isEmpty())
+        assertEquals(1, fixture.invalidations)
+    }
+
+    @Test fun `catalog pages retain hidden metadata without overwriting newer live session fields`() {
+        val fixture = Fixture()
+        val transfers = fixture.service()
+        transfers.observe(fixture.session)
+        fixture.session = summary("/destination")
+        transfers.observe(fixture.session)
+        assertTrue(transfers.hide("ses_one"))
+        val live = summary("/destination").apply {
+            addProperty("title", "Newer title")
+            obj("time")!!.addProperty("updated", 9000)
+        }
+        for (path in listOf("/session", "/session?limit=20&directory=%2Forigin",
+            "/session?limit=20&roots=true&search=Fixture&directory=%2Forigin")) {
+            val request = ApiRoutes.parse("GET", path)!!
+            val snapshot = transfers.merge(Json.array(listOf(live.deepCopy())), request).single().asJsonObject
+            assertEquals(true, snapshot.obj("transfer").bool("hidden"))
+            assertEquals(listOf("/origin"), snapshot.obj("transfer").arr("hiddenOrigins")!!.strings())
+            assertEquals("Newer title", snapshot.str("title"))
+            assertEquals(9000, snapshot.obj("time").int("updated"))
+            assertEquals(true, transfers.merge(JsonArray(), request).single().asJsonObject.obj("transfer").bool("hidden"))
+        }
+        assertEquals(true, transfers.get("ses_one").obj("transfer").bool("hidden"))
+        assertEquals("/destination", transfers.authorizeRequest("GET", "/session/ses_one"))
+        assertTrue(transfers.merge(JsonArray(), ApiRoutes.parse("GET", "/session?limit=20&directory=%2Fother")!!).isEmpty)
+        assertTrue(transfers.merge(JsonArray(), ApiRoutes.parse("GET", "/session?limit=20&search=unmatched&roots=true")!!).isEmpty)
+    }
+
+    @Test fun `restored hide preferences reject malformed paths and bound the stored list`() {
+        val fixture = Fixture()
+        val transfers = fixture.service()
+        transfers.observe(fixture.session)
+        fixture.session = summary("/destination")
+        transfers.observe(fixture.session)
+        val malformed = fixture.saved.deepCopy().apply {
+            single().asJsonObject.add("hiddenOrigins", Json.array(listOf("relative", "/bad\npath", "x".repeat(4097), 123) +
+                (1..40).map { "/valid-$it" }))
+            single().asJsonObject.obj("session")!!.obj("transfer")!!.addProperty("hidden", true)
+        }
+        val restored = fixture.service(malformed)
+        assertNull(restored.list().single().obj("transfer").bool("hidden"))
+        assertEquals((1..32).map { "/valid-$it" }, restored.get("ses_one").obj("transfer").arr("hiddenOrigins")!!.strings())
+        assertTrue(restored.hide("ses_one"))
+        assertEquals(32, fixture.saved.single().asJsonObject.arr("hiddenOrigins")!!.size())
     }
 
     companion object {

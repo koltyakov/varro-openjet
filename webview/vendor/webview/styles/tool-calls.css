@@ -1404,6 +1404,10 @@ kbd {
 
 .chat-tool-invocation-part .tool-call-spinner.tool-status-running {
   box-sizing: border-box;
+  width: 14px;
+  height: 14px;
+  /* Center the spinner in the task icon's 16px slot. */
+  margin-inline: 1px;
   border: 1px solid color-mix(in srgb, var(--color-vscode-fg-muted) 18%, transparent);
   border-top-color: color-mix(in srgb, var(--color-vscode-fg-muted) 68%, transparent);
   border-radius: 50%;

@@ -228,7 +228,7 @@ For Kotlin-only iteration, `-PskipWebview=true` skips webview dependency install
 
 ### CI and releases
 
-GitHub Actions runs `./gradlew --no-daemon --stacktrace check buildPlugin` for pull requests, pushes to `main`, and tags starting with `v`. This runs Kotlin and webview host tests, TypeScript checking, vendor integrity, and plugin packaging. A separate job tests the pinned published OpenCode V2 release in isolated fixtures. Main, tag, manual, and weekly runs also run Plugin Verifier across the supported IDE matrix. Successful builds save the ZIP as the `plugin-archive` workflow artifact for 14 days.
+GitHub Actions runs `./gradlew --no-daemon --stacktrace check buildPlugin` for pull requests, pushes to `main`, and tags starting with `v`. This runs Kotlin and webview host tests, TypeScript checking, vendor integrity, and plugin packaging. A separate job tests the pinned published OpenCode V2 release in isolated fixtures. Main, tag, and manual runs also run Plugin Verifier across the supported IDE matrix. Successful builds save the ZIP as the `plugin-archive` workflow artifact for 14 days.
 
 To publish a release, push a version tag on the commit you want to ship:
 
@@ -239,7 +239,19 @@ git push origin v0.1.0
 
 Use tags such as `v0.1.0` for stable releases or `v0.2.0-rc.1` for prereleases. The workflow uses the tag without the `v` prefix as `pluginVersion`, overriding `gradle.properties` for that build. After tests, compatibility checks, Plugin Verifier, and packaging pass, it creates or updates the GitHub release, generates release notes, and attaches `varro-openjet-<version>.zip`. Tags with a prerelease suffix produce GitHub prereleases.
 
-Release publishing uses the built-in `GITHUB_TOKEN`; no additional secrets are needed. The release job has `contents: write` permission. Branch and pull-request builds use the version in `gradle.properties`.
+GitHub release publishing uses the built-in `GITHUB_TOKEN`. The release job has `contents: write` permission. Branch and pull-request builds use the version in `gradle.properties`.
+
+Stable tag pushes also upload the same tested ZIP to [Varro: OpenJet on JetBrains Marketplace](https://plugins.jetbrains.com/plugin/34204-varro-openjet), after all checks and the GitHub release succeed. Prerelease tags remain GitHub-only and never upload to Marketplace. Manual workflow runs do not upload to Marketplace.
+
+Before pushing the first stable tag with Marketplace publishing enabled:
+
+1. Generate a permanent token in [Marketplace > My profile > Tokens](https://plugins.jetbrains.com/author/me/tokens), using the account that can upload updates to the plugin.
+2. In [GitHub > Settings > Secrets and variables > Actions](https://github.com/koltyakov/varro-openjet/settings/secrets/actions), add a repository secret named `JETBRAINS_MARKETPLACE_TOKEN` with that token as its value. Never commit the token.
+3. Commit the workflow changes, then push a new, unused version tag, such as `v0.9.3`. Version `0.9.2` has already been uploaded manually, so do not upload it again.
+
+The upload targets plugin ID `34204` and the default Stable channel. A missing token fails the Marketplace job. Marketplace still verifies and reviews each update; a successful upload does not mean it is publicly available yet. Publisher-side signing is not configured by this workflow.
+
+If an upload fails or times out, check the Marketplace Versions page before rerunning the failed job. The upload may already have succeeded, and the workflow deliberately does not retry the POST automatically. Rerun only the failed job once you have confirmed that the version is absent. GitHub releases remain available if the Marketplace upload fails.
 
 ## Development
 

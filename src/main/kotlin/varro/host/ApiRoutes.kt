@@ -35,6 +35,7 @@ object ApiRoutes {
         const val SESSION = "$NAMESPACE/session"
         const val SESSION_TRASH = "$NAMESPACE/session-trash"
         const val SESSION_HISTORY_SCOPE = "$NAMESPACE/session-history-scope"
+        const val SESSION_TRANSFER_HIDE = "$NAMESPACE/session-transfer/hide"
         const val WORKSPACE_FILE = "$NAMESPACE/workspace-file"
         const val WORKSPACE_PROBLEMS = "$NAMESPACE/workspace-problems"
         const val WORKSPACE_FILE_PICK = "$NAMESPACE/workspace-file/pick"
@@ -256,6 +257,9 @@ object ApiRoutes {
         route(Endpoints.WORKSPACE_FILE_PICK, methodsNoQuery("GET")),
         route(Endpoints.COPIED_SELECTION_MATCH, methodsNoQuery("POST")),
         route(Endpoints.WORKSPACE_PROBLEMS, methodsNoQuery("GET")),
+        route(Endpoints.SESSION_TRANSFER_HIDE) { request, _ ->
+            request.method == "POST" && request.optionalDirectory()
+        },
         route(Endpoints.SESSION_HISTORY_SCOPE) { request, _ ->
             (request.method == "GET" || request.method == "POST") &&
                 request.onlyQuery("directory") &&

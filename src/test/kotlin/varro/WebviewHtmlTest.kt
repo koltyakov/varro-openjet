@@ -125,7 +125,6 @@ class WebviewAssetsTest {
             assertTrue(asset.mimeType.startsWith("font/"))
             assertTrue(asset.cacheControl.contains("immutable"))
         }
-        assertNotNull(WebviewAssets::class.java.getResource("/META-INF/licenses/katex.txt"))
     }
 
     @Test

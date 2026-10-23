@@ -109,6 +109,7 @@ class VarroProjectService(private val project: Project) : Disposable {
             broadcast("session/transferred", payload)
             broadcast("session/catalog-invalidated")
         },
+        invalidateCatalog = { broadcast("session/catalog-invalidated") },
     )
 
     private val notifications = ProjectNotifications(project, server, settings, store) { sessionId ->

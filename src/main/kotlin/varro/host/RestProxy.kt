@@ -326,20 +326,8 @@ class RestProxy(
         return Json.obj("items" to items, "hasMore" to (ordered.size > limit || response.nextCursor != null))
     }
 
-    private fun mergeTransfers(sessions: JsonArray, request: ApiRoutes.Request): JsonArray {
-        val merged = sessions.mapNotNull { it.asObjectOrNull() }.associateByTo(linkedMapOf()) { it.str("id") }.toMutableMap()
-        val search = request.query["search"]?.firstOrNull()
-        val directory = request.query["directory"]?.firstOrNull()
-        transfers?.list()?.forEach { session ->
-            if (search != null && !session.str("title").orEmpty().contains(search, ignoreCase = true)) return@forEach
-            if (request.query["roots"]?.firstOrNull() == "true" && session.text("parentID") != null) return@forEach
-            if (directory != null && !WorkspacePaths.isSame(directory, session.obj("transfer").str("originDirectory")) && !WorkspacePaths.isSame(directory, session.str("directory"))) return@forEach
-            val id = session.str("id")!!
-            val current = merged[id]
-            if (current == null) merged[id] = session else current.add("transfer", session.get("transfer"))
-        }
-        return Json.array(merged.values)
-    }
+    private fun mergeTransfers(sessions: JsonArray, request: ApiRoutes.Request): JsonArray =
+        transfers?.merge(sessions, request) ?: sessions
 
     // --- Host API namespace ---------------------------------------------------
 
@@ -418,6 +406,12 @@ class RestProxy(
 
             pathname == ApiRoutes.Endpoints.SESSION_HISTORY_SCOPE ->
                 handleHistoryScope(method, body, q("directory"))
+
+            pathname == ApiRoutes.Endpoints.SESSION_TRANSFER_HIDE -> {
+                val sessionId = body.asObjectOrNull().str("sessionID") ?: error("Invalid session ID")
+                check(transfers?.hide(sessionId, q("directory")) == true) { "404 Transferred session not found" }
+                Json.toElement(true)
+            }
 
             pathname == ApiRoutes.Endpoints.SESSION_TRASH -> handleTrashCollection(method)
 

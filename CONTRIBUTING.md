@@ -81,7 +81,7 @@ This skips browser dependency installation, bundling, and host tests. `clean` re
 
 Run `./gradlew verifyPlugin` locally when checking IntelliJ API compatibility. Do not run Plugin Verifier in Docker.
 
-CI runs the isolated published V2 compatibility suites on pull requests and pushes. Main, tag, manual, and weekly runs also verify every configured IDE branch on host runners. Release publishing requires the build, compatibility suites, and verifier matrix to pass. To check one IDE locally, use `./gradlew verifyPlugin -PverificationIde=2025.2.6.3`.
+CI runs the isolated published V2 compatibility suites on pull requests and pushes. Main, tag, and manual runs also verify every configured IDE branch on host runners. Release publishing requires the build, compatibility suites, and verifier matrix to pass. To check one IDE locally, use `./gradlew verifyPlugin -PverificationIde=2025.2.6.3`.
 
 The verification matrix in `build.gradle.kts` must include the exact EAP build checked by Marketplace, not just an earlier build of the same branch. Database grid APIs and plugin dependencies can move between EAP builds. Keep the older branches in the matrix when adding a compatibility adapter. Plugin Verifier cannot validate reflective lookups, so test those against the actual IDE APIs and exercise database context capture in the target IDE before publishing.
 

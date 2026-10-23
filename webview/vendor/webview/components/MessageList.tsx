@@ -30,6 +30,7 @@ import {
   requestMessageListScrollToBottom,
   getActiveUsageLimitNotice,
   isActiveSessionWorking,
+  isSessionStatusWorking,
   isSessionTreeStatusWorking,
   getSessionTreeIds,
   getSessionTreeRootId,
@@ -908,6 +909,11 @@ export function MessageList() {
     return notice && shouldDisplayUsageLimitNotice(notice) ? notice : null;
   });
   const activeSessionWorking = createMemo(() => isActiveSessionWorking());
+  const subagentsWorking = createMemo(() =>
+    getSessionTreeIds(state.activeSessionId).some(
+      (id) => id !== state.activeSessionId && isSessionStatusWorking(state.sessionStatus[id])
+    )
+  );
   const backgroundWorkPending = createMemo(() => {
     const sessionId = state.activeSessionId;
     if (!sessionId) return false;
@@ -1223,7 +1229,7 @@ export function MessageList() {
   });
   const committedTextBlocksReappear = createMemo(() => {
     const key = committedTextBlockKey();
-    return key !== null && loadingRowCommittedTextKey() !== key;
+    return !subagentsWorking() && key !== null && loadingRowCommittedTextKey() !== key;
   });
   const messageIndexById = createMemo(() => {
     const result = new Map<string, number>();
@@ -2535,7 +2541,7 @@ export function MessageList() {
     );
   });
   const trailingSummaryMessageId = createMemo(() =>
-    presentation.pending() || waitingForBackground()
+    presentation.pending() || waitingForBackground() || subagentsWorking()
       ? null
       : (structurallyTrailingInterruptedMessageId() ??
         explicitTerminalFinalResponseMessageId() ??
@@ -2989,6 +2995,7 @@ export function MessageList() {
     const owner = trailingSummaryOwner();
     const ownerMatchesCurrentResponse =
       !waitingForBackground() &&
+      !subagentsWorking() &&
       owner &&
       owner.sessionId === sessionId &&
       owner.messageId === structurallyTrailingFinalResponseCandidateMessageId();
