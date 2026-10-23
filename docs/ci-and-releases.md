@@ -7,6 +7,8 @@ GitHub Actions separates validation from release publishing:
 - [CI](../.github/workflows/ci.yml) runs on pull requests, pushes to `main`, and manual dispatch. It lints workflows, Python release helpers and shell syntax, tests the build/release scripts, then runs TypeScript checking, vendor integrity, Kotlin/browser tests and packaging. The exact pinned published OpenCode V2 binary is enabled in that same Gradle invocation, so the released adapter and managed-service suites run without a second Kotlin compilation or test pass. Successful attempts save `plugin-archive-<attempt>` for 14 days. CI does not run the IDE verifier or publish anything.
 - [Release](../.github/workflows/release.yml) starts for `v*` tag pushes, or resumes tagged releases after successful main CI completion. It selects successful CI for the tag's exact commit, downloads that attempt's immutable archive, verifies it across all supported IDEs, then publishes that same ZIP. Tag jobs never rebuild or rerun the test suite. Both workflows pin `ubuntu-24.04` rather than following runner OS migrations.
 
+The five IDE verifier jobs can run concurrently, subject to available GitHub runners. Each job forces only `verifyPlugin` to rerun with Gradle's task-scoped `--rerun`, so verification cannot reuse an old verdict while prerequisites can reuse cached work. Runner setup, Gradle configuration and IDE dependency downloads still add overhead to the verifier itself.
+
 ## Tag a release
 
 To release, first set `pluginVersion` in `gradle.properties`, commit it with the changes and push to `main`. Tag that same commit with the matching version:

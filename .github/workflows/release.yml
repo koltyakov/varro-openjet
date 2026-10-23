@@ -94,7 +94,6 @@ jobs:
     timeout-minutes: 45
     strategy:
       fail-fast: false
-      max-parallel: 2
       matrix:
         ide: ['2025.2.6.3', '2025.3.6.1', '2026.1.5', '2026.2.3', '263.6800.24']
     steps:
@@ -122,7 +121,8 @@ jobs:
         env:
           ARCHIVE: ${{ steps.archive.outputs.archive }}
           IDE: ${{ matrix.ide }}
-        run: ./gradlew --no-daemon verifyPlugin "-PverificationIde=$IDE" "-PverificationArchive=$ARCHIVE" -PskipWebview=true --rerun-tasks
+        # Always run verification, but let its prerequisites reuse cached work.
+        run: ./gradlew --no-daemon verifyPlugin --rerun "-PverificationIde=$IDE" "-PverificationArchive=$ARCHIVE" -PskipWebview=true
       - name: Upload verifier reports
         if: always()
         uses: actions/upload-artifact@v7
