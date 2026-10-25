@@ -56,6 +56,15 @@ class EditorIntegration(private val project: Project) {
      *   `openPathWithResult` promise resolves to.
      */
     fun openPath(path: String, line: Int?, kind: String?): String {
+        return try {
+            openResolvedPath(path, line, kind)
+        } catch (failure: Exception) {
+            log.warn("Failed to open file $path", failure)
+            "unavailable"
+        }
+    }
+
+    private fun openResolvedPath(path: String, line: Int?, kind: String?): String {
         val file = resolve(path) ?: return "unavailable"
         var result = "unavailable"
         ApplicationManager.getApplication().invokeAndWait {
@@ -68,18 +77,15 @@ class EditorIntegration(private val project: Project) {
                 }
                 kind == "directory" -> "unavailable"
                 else -> {
-                    val descriptor = if (line != null && line > 0) {
-                        OpenFileDescriptor(project, file, line - 1, 0)
-                    } else {
-                        OpenFileDescriptor(project, file)
-                    }
-                    val editor = FileEditorManager.getInstance(project).openTextEditor(descriptor, true)
-                    editor?.scrollingModel?.scrollToCaret(ScrollType.CENTER)
-                    if (editor != null || FileEditorManager.getInstance(project).isFileOpen(file)) {
-                        "opened"
-                    } else {
-                        "unavailable"
-                    }
+                    val manager = FileEditorManager.getInstance(project)
+                    openResponseFile(line,
+                        openRegistered = { manager.openFile(file, true).isNotEmpty() },
+                        openAtLine = { zeroBasedLine ->
+                            val editor = manager.openTextEditor(OpenFileDescriptor(project, file, zeroBasedLine, 0), true)
+                            editor?.scrollingModel?.scrollToCaret(ScrollType.CENTER)
+                            editor != null || manager.isFileOpen(file)
+                        },
+                    )
                 }
             }
         }
@@ -279,5 +285,11 @@ class EditorIntegration(private val project: Project) {
 
     companion object {
         private const val MAX_READ_BYTES = 2L * 1024 * 1024
+
+        /** No line target means the registered image, PDF or custom editor owns the file. */
+        internal fun openResponseFile(line: Int?, openRegistered: () -> Boolean, openAtLine: (Int) -> Boolean): String {
+            val opened = if (line != null && line > 0) openAtLine(line - 1) else openRegistered()
+            return if (opened) "opened" else "unavailable"
+        }
     }
 }

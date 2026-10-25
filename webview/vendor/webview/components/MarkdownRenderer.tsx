@@ -118,6 +118,14 @@ class MarkdownTokenizer extends Tokenizer {
   override code() {
     return undefined;
   }
+
+  override emStrong(src: string, maskedSrc: string, prevChar?: string) {
+    // Marked masks closing delimiters, but still checks the unmasked opening delimiter.
+    if ((src[0] === '*' || src[0] === '_') && maskedSrc[maskedSrc.length - src.length] !== src[0]) {
+      return undefined;
+    }
+    return super.emStrong(src, maskedSrc, prevChar);
+  }
 }
 const tokenizer = new MarkdownTokenizer();
 let renderMarkdownContext: RenderMarkdownContext | null = null;
@@ -662,6 +670,12 @@ marked.setOptions({
   breaks: false,
 });
 marked.use({
+  hooks: {
+    emStrongMask(src) {
+      // Keep quoted emphasis markers literal without changing source offsets or code content.
+      return src.replace(/(["'])(\*+|_+)\1/g, (match) => match.replace(/[*_]/g, 'a'));
+    },
+  },
   extensions: [
     {
       name: 'inlineKatex',

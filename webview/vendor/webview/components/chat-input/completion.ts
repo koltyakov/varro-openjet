@@ -145,6 +145,9 @@ export function getActiveCompletion(text: string, cursor: number) {
     };
   }
   if (token.startsWith('/')) {
+    // Inspect the whole token so a caret inside a pasted path cannot start a
+    // command/skill search for just the path's first component.
+    if (/^\/[^\s/\\]*[/\\]/.test(text.slice(tokenStart))) return null;
     return {
       type: 'slash' as const,
       query: token.slice(1),
