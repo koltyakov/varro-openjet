@@ -158,6 +158,17 @@ class VarroConfigurable : BoundConfigurable("Varro") {
         }
 
         group("Models") {
+            row {
+                checkBox("Suggest follow-up actions after Build responses")
+                    .bindSelected(settings::chatFollowupsEnabled)
+                    .comment("Requires OpenCode V2 stateless generation. Sends the request and final answer for extra inference, which may consume paid tokens or subscription quota. Disable to opt out.")
+            }
+            row("Follow-up model:") {
+                textField()
+                    .bindText(settings::chatFollowupModel)
+                    .comment("`providerID/modelID`. Empty uses the session model and reasoning. You can also assign a model in Varro's Models view. Hover an action to preview its prompt; click to send with unchanged permissions, draft, and attachments.")
+                    .columns(40)
+            }
             row("Prompt completion model:") {
                 textField()
                     .bindText(settings::chatPromptCompletionModel)

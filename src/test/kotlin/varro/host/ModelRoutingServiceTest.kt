@@ -18,6 +18,7 @@ class ModelRoutingServiceTest {
             "commit_message" to "commitMessageModel",
             "auto_approve" to "autoApproveModel",
             "prompt_completion" to "promptCompletionModel",
+            "followups" to "followupModel",
             "agent" to "agentModels",
         )) {
             val fixture = Fixture()
@@ -97,10 +98,12 @@ class ModelRoutingServiceTest {
         fixture.service().update(request("commit_message"))
         fixture.service().update(request("auto_approve"))
         fixture.service().update(request("prompt_completion"))
+        fixture.service().update(request("followups"))
         val restored = XmlSerializer.deserialize(XmlSerializer.serialize(fixture.settings.state), VarroSettings::class.java)
         assertEquals("openai/gpt-6/astra", restored.commitMessageModel)
         assertEquals("openai/gpt-6/astra", restored.chatAutoApproveModel)
         assertEquals("openai/gpt-6/astra", restored.chatPromptCompletionModel)
+        assertEquals("openai/gpt-6/astra", restored.chatFollowupModel)
         assertTrue(fixture.patches.isEmpty())
     }
 

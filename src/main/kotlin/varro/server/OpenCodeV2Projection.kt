@@ -197,6 +197,7 @@ internal object OpenCodeV2Projection {
         } else {
             info.add("model", Json.obj("providerID" to model.str("providerID").orEmpty(), "modelID" to model.str("id").orEmpty(), "variant" to model?.get("variant")))
             if (type == "user") {
+                varro.protocol.Followups.title(value.obj("metadata").str("varroFollowupTitle"))?.let { info.addProperty("followupTitle", it) }
                 value.obj("metadata").str("varroDelivery")?.takeIf { it == "steer" || it == "queue" }?.let {
                     info.addProperty("delivery", it)
                 }

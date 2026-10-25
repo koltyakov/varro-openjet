@@ -9,6 +9,7 @@ internal object SharedCoreSettings {
     private val names = setOf(
         "serverPort", "serverCommand", "serverAutoUpdate", "serverAutoStart",
         "chatDefaultPermissionMode", "chatAutoApproveModel", "chatPromptCompletionModel", "commitMessageModel",
+        "chatFollowupsEnabled", "chatFollowupModel",
         "chatAutoRenameUntitledSessions", "chatEnableAskAgent",
     )
     private val fields = VarroSettings::class.java.declaredFields.filter { it.name in names }.onEach { it.isAccessible = true }

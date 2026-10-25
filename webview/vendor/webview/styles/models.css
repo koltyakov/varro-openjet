@@ -1411,6 +1411,10 @@
   --models-route-color: var(--color-vscode-success);
 }
 
+.models-route-tag-followups {
+  --models-route-color: var(--vscode-terminal-ansiCyan, #4ec9b0);
+}
+
 .models-route-tag-commit {
   --models-route-color: var(--vscode-gitDecoration-modifiedResourceForeground, #e2a759);
 }

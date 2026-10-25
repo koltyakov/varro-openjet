@@ -373,6 +373,8 @@ export function parseExtensionMessage<T>(value: T): ExtensionMessage | null {
         config.remoteImages = payload.remoteImages;
       if (isString(payload.promptCompletionModel))
         config.promptCompletionModel = payload.promptCompletionModel;
+      if (isBoolean(payload.followupsEnabled)) config.followupsEnabled = payload.followupsEnabled;
+      if (isString(payload.followupModel)) config.followupModel = payload.followupModel;
       if (isBoolean(payload.debugShowQuotaWarning))
         config.debugShowQuotaWarning = payload.debugShowQuotaWarning;
       if (

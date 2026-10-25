@@ -12,7 +12,9 @@ import com.intellij.openapi.project.guessProjectDir
 import com.intellij.openapi.ui.Messages
 import com.intellij.util.EnvironmentUtil
 import varro.protocol.Json
+import varro.protocol.Followups
 import varro.protocol.asObjectOrNull
+import varro.protocol.bool
 import varro.protocol.obj
 import varro.protocol.str
 import varro.host.quota.QuotaCredentials
@@ -50,10 +52,12 @@ class OpenCodeHostServices(
     fun clearProviderQuotaCache() {
         providerQuotas.clearCache()
         promptCompletion.invalidate()
+        invalidateFollowups()
     }
 
     fun dispose() {
         promptCompletion.invalidate()
+        followups.close()
         providerQuotas.close()
     }
 
@@ -67,6 +71,43 @@ class OpenCodeHostServices(
     override fun resolveWorkspacePath(path: String): JsonObject? = editor.resolveWorkspacePath(path)
 
     // --- OpenCode configuration -----------------------------------------------
+
+    private val followups = FollowupService({ server.transport.apiVersion }, server.transport::request)
+    private fun followupConfiguration() = Triple(settings.chatFollowupsEnabled, settings.chatFollowupModel.trim(),
+        server.requestGeneration() to server.url())
+    private var followupPreferences = followupConfiguration()
+
+    @Synchronized fun invalidateFollowups() {
+        val preferences = followupConfiguration()
+        if (preferences != followupPreferences) {
+            followupPreferences = preferences
+            followups.invalidate()
+        }
+    }
+
+    override fun followups(sessionId: String, body: JsonElement?, directory: String?, dismiss: Boolean, isCancelled: () -> Boolean): JsonElement {
+        require(directory == null || varro.server.WorkspacePaths.isSame(directory, server.workspaceDirectory()) ||
+            workspaceRoots().any { varro.server.WorkspacePaths.isSame(directory, it) }) { "Workspace directory is not an open project folder" }
+        val source = Followups.source(body)
+        val scope = directory ?: server.workspaceDirectory()
+        if (dismiss) { followups.dismiss(sessionId, source, scope); return com.google.gson.JsonPrimitive(true) }
+        val modelRef = settings.chatFollowupModel.trim()
+        val serverIdentity = server.requestGeneration() to server.url()
+        val selected = if (modelRef.isEmpty()) body.asObjectOrNull()?.get("model").asObjectOrNull() else {
+            val provider = modelRef.substringBefore('/', "")
+            val id = modelRef.substringAfter('/', "")
+            if (provider.isEmpty() || id.isEmpty() || modelRef.any(Char::isWhitespace)) null
+            else Json.obj("providerID" to provider, "modelID" to id)
+        }
+        val model = Followups.model(selected)
+        if (!settings.chatFollowupsEnabled || model == null) return Followups.empty()
+        return followups.suggest(sessionId, source, model, scope, body.asObjectOrNull().bool("allowGenerate") == true,
+            isCancelled, { settings.chatFollowupsEnabled && settings.chatFollowupModel.trim() == modelRef &&
+            (server.requestGeneration() to server.url()) == serverIdentity })
+    }
+
+    override fun clearFollowups(sessionId: String, directory: String?, messageId: String?) =
+        followups.clearPreviousTurn(sessionId, directory ?: server.workspaceDirectory(), messageId)
 
     private val promptCompletion = PromptCompletionService(
         apiVersion = { server.transport.apiVersion },

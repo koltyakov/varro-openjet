@@ -175,6 +175,7 @@ import {
 } from './message-list/scrolling';
 import { VirtualizedContent } from './message-list/VirtualizedContent';
 import { AssistantDialogSummaryForMessage, type ModelChangeInfo } from './message-list/MessageRows';
+import { FollowupSuggestions } from './message-list/FollowupSuggestions';
 import { deduplicateFileEdits } from './message/AssistantMessageContent';
 import {
   getLinkedToolCallKeys,
@@ -192,6 +193,7 @@ import {
   getLatestPlanImplementationMessageId,
   isPlanImplementationMessage,
 } from './message-list/plan-actions';
+import { getFollowupActionTitle } from '../../shared/followups';
 import {
   sameAssistantRetryScanState,
   scanAssistantRetryStates,
@@ -389,6 +391,7 @@ function numberPrompts(messages: readonly MessageEntry[], previous?: PromptNumbe
   for (const message of messages) {
     if (message.info.role !== 'user' || message.info.pendingDelivery) continue;
     if (isSessionResumeMessage(message.parts)) continue;
+    if (getFollowupActionTitle(message.info, message.parts) !== null) continue;
     const parsed = parseUserMessageContent(message.parts);
     if (!hasUserMessageContent(parsed)) continue;
     if (steering.ids.has(message.info.id)) {
@@ -4591,6 +4594,7 @@ export function MessageList() {
       if (nextMessage?.info.role !== 'user') continue;
       if (steeringIds.has(nextMessage.info.id)) continue;
       if (isPlanImplementationMessage(nextMessage.info, nextMessage.parts)) continue;
+      if (getFollowupActionTitle(nextMessage.info, nextMessage.parts) !== null) continue;
 
       const nextRow = mountedMessageRows.get(nextMessage.info.id);
       if (!nextRow) return null;
@@ -4623,6 +4627,8 @@ export function MessageList() {
       const rowMessageIndex = rowMessageId ? messageIndexById().get(rowMessageId) : undefined;
       const rowMessage = rowMessageIndex === undefined ? undefined : messages()[rowMessageIndex];
       if (rowMessage && isPlanImplementationMessage(rowMessage.info, rowMessage.parts)) continue;
+      if (rowMessage && getFollowupActionTitle(rowMessage.info, rowMessage.parts) !== null)
+        continue;
       const source = row.querySelector<HTMLElement>(
         '.user-message-card, .inline-edit-composer-slot'
       );
@@ -4936,8 +4942,9 @@ export function MessageList() {
   function startActivityExitSummaryObserver(anchor: ActivityExitSummaryAnchor) {
     if (!trackRef || activityExitSummaryObserver) return;
     activityExitSummaryObserver = new MutationObserver(() => {
-      // New standalone content ends the collapse owner's hold even during settling.
-      // Otherwise an inline edit and bottom follow can race the obsolete summary target.
+      // New standalone content or admitted steering ends the collapse owner's hold.
+      // Steering continues the turn without restarting loading, so its card must also
+      // release the obsolete summary target and let the existing follower advance.
       if (
         activityExitHeldResponseContentSignature !== null &&
         activityExitBottomTarget === null &&
@@ -5056,14 +5063,18 @@ export function MessageList() {
     if (!trackRef) return '';
     return [
       ...trackRef.querySelectorAll<HTMLElement>(
-        '.assistant-message-flow-item[data-assistant-render-key^="part:"], .assistant-message-flow-item[data-assistant-render-key^="file-edit-stack:"]'
+        '.assistant-message-flow-item[data-assistant-render-key^="part:"], .assistant-message-flow-item[data-assistant-render-key^="file-edit-stack:"], .user-message-card.user-message-steering'
       ),
     ]
       .filter((element) => (element.textContent?.length ?? 0) > 0)
       .map((element) => {
-        // Inline edits and other standalone parts consume the exit reserve just like prose.
+        // Steering, inline edits and other standalone parts consume the reserve just like prose.
         // Exclude activity groups/trays: their own collapse must keep its summary anchor.
-        return `${element.dataset.assistantRenderKey ?? ''}:${element.textContent?.length ?? 0}`;
+        const key =
+          element.dataset.assistantRenderKey ??
+          element.closest<HTMLElement>('[data-msg-id]')?.dataset.msgId ??
+          '';
+        return `${key}:${element.textContent?.length ?? 0}`;
       })
       .join('|');
   }
@@ -7313,8 +7324,6 @@ export function MessageList() {
             !containerRef?.isConnected ||
             !containerRef.contains(element) ||
             state.messagesLoading ||
-            !autoScroll() ||
-            !pinnedToBottom ||
             editingMessage() ||
             diffFocusPauseActive ||
             stickyNavigationOwnsScroll()
@@ -7332,15 +7341,28 @@ export function MessageList() {
             next?.classList.contains('file-change-inline-diffs')
               ? Number.parseFloat(getComputedStyle(next).marginTop) || 0
               : 0;
-          reserveBottomCollapseSpace(
+          const collapseHeight =
             bounds.height +
-              (Number.parseFloat(styles.marginTop) || 0) +
-              (Number.parseFloat(styles.marginBottom) || 0) +
-              (Number.parseFloat(parentStyles?.rowGap || '') || 0) +
-              previewMargin,
-            undefined,
-            { captureSummary: false }
-          );
+            (Number.parseFloat(styles.marginTop) || 0) +
+            (Number.parseFloat(styles.marginBottom) || 0) +
+            (Number.parseFloat(parentStyles?.rowGap || '') || 0) +
+            previewMargin;
+          if (pointerScrollOwnershipActive) {
+            reserveHeldScrollbarRange(collapseHeight);
+            return;
+          }
+          if (!autoScroll() || !pinnedToBottom) {
+            // Protect the detached reader before removal can clamp the scroll range. Do not
+            // arm a collapse scroll owner that could undo their next wheel or key movement.
+            const shortfall =
+              containerRef.scrollTop -
+              (containerRef.scrollHeight - containerRef.clientHeight - collapseHeight);
+            if (shortfall <= 0) return;
+            appendBottomReserveTarget = containerRef.scrollTop;
+            setAppendBottomReserve((reserve) => reserve + Math.ceil(shortfall));
+            return;
+          }
+          reserveBottomCollapseSpace(collapseHeight, undefined, { captureSummary: false });
         })
       )
     );
@@ -9690,20 +9712,7 @@ export function MessageList() {
     const aligned = alignMountedMessage(preview);
     if (aligned) {
       directMovementAnchor = null;
-      const target = getStickyUserMessageSourceElement(preview.id);
-      const row = mountedMessageRows.get(preview.id);
-      const containerRect = containerRef?.getBoundingClientRect();
-      rememberDetachedVisibleAnchor(
-        target && row && containerRect
-          ? {
-              messageId: preview.id,
-              element: target,
-              top: target.getBoundingClientRect().top - containerRect.top,
-              messageTop: row.getBoundingClientRect().top - containerRect.top,
-              topPad: visibleRange().topPad,
-            }
-          : captureMessageScrollAnchor(preview.id)
-      );
+      rememberTurnNavigationAnchor(preview.id);
       animateTurnNavigationDestination(preview.id);
     }
     const currentPreview = untrack(stickyUserMessagePreview);
@@ -9713,6 +9722,23 @@ export function MessageList() {
       previousStickyPreviewBounds = null;
     }
     return aligned;
+  }
+
+  function rememberTurnNavigationAnchor(messageId: string) {
+    const target = getStickyUserMessageSourceElement(messageId);
+    const row = mountedMessageRows.get(messageId);
+    const containerRect = containerRef?.getBoundingClientRect();
+    rememberDetachedVisibleAnchor(
+      target && row && containerRect
+        ? {
+            messageId,
+            element: target,
+            top: target.getBoundingClientRect().top - containerRect.top,
+            messageTop: row.getBoundingClientRect().top - containerRect.top,
+            topPad: visibleRange().topPad,
+          }
+        : captureMessageScrollAnchor(messageId)
+    );
   }
 
   function animateTurnNavigationDestination(messageId: string) {
@@ -9801,13 +9827,19 @@ export function MessageList() {
         targetRect.top - container.getBoundingClientRect().top - getMessageJumpTopInset();
       if (Math.abs(offset) <= 0.5) {
         stableFrames += 1;
-        if (stableFrames >= 2) return;
+        if (stableFrames >= 2) {
+          // The first alignment can synchronously remeasure the virtual core. Remember the
+          // final painted destination, not that earlier position, for subsequent width reflow.
+          rememberTurnNavigationAnchor(preview.id);
+          return;
+        }
         continue;
       }
 
       stableFrames = 0;
       setPreservedScrollTop(container.scrollTop + offset);
     }
+    rememberTurnNavigationAnchor(preview.id);
   }
 
   function getMessageJumpTopInset() {
@@ -10496,6 +10528,23 @@ export function MessageList() {
               </div>
             )}
           </Show>
+          <FollowupSuggestions
+            finalMessageId={
+              !activeSessionWorking() && !waitingForBackground() && !subagentsWorking()
+                ? trailingFinalResponseMessageId()
+                : null
+            }
+            turnId={trailingAssistantTurn()?.userMessageId ?? null}
+            working={activeSessionWorking()}
+            blocked={
+              !!editingMessage() ||
+              hasActiveQuestion() ||
+              hasActivePermission() ||
+              isSessionCompacting() ||
+              isLoading() ||
+              state.queuedMessages.some((item) => item.sessionId === state.activeSessionId)
+            }
+          />
           <Show when={appendBottomReserve() > 0.5}>
             <div
               class="append-scroll-bottom-reserve"

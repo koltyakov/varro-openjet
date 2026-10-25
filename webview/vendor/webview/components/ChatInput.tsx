@@ -6,6 +6,7 @@ import {
   MAX_PASTED_TEXT_TOTAL_BYTES,
 } from '../../shared/pasted-text';
 import { captureExtensionContexts } from '../host/extensions';
+import { getFollowupActionTitle } from '../../shared/followups';
 import type { ExtensionContext } from '../../shared/extension-context';
 import { cloneExtensionContexts } from '../../shared/extension-context';
 import {
@@ -4267,6 +4268,7 @@ export function ChatInput(props: { newSession?: boolean; onBeforeSend?: () => vo
         if (
           entry.info.sessionID !== sessionId ||
           entry.info.role !== 'user' ||
+          getFollowupActionTitle(entry.info, entry.parts) !== null ||
           seen.has(entry.info.id)
         )
           return null;

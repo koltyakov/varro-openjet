@@ -68,6 +68,11 @@ class VarroSettings : PersistentStateComponent<VarroSettings> {
     /** Direct API autocomplete; empty disables it. Requires an API key and OpenCode V2. */
     var chatPromptCompletionModel: String = ""
 
+    /** Optional extra inference after completed Build responses. Application settings only. */
+    var chatFollowupsEnabled: Boolean = true
+    /** Empty uses the current session model and reasoning. */
+    var chatFollowupModel: String = ""
+
     /**
      * Mirrors `varro.decisions.jev.autoApprove`: let TypeSafe's Jev judge Auto-mode
      * permission requests before the model judge. The API key lives in the password safe.

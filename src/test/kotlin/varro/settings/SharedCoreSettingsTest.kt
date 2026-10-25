@@ -10,6 +10,8 @@ class SharedCoreSettingsTest {
             commitMessageModel = "provider/commit"
             chatAutoApproveModel = "provider/judge"
             chatPromptCompletionModel = "provider/completion"
+            chatFollowupModel = "provider/followups"
+            chatFollowupsEnabled = false
             chatDefaultPermissionMode = "default"
             chatFontSize = 22
             chatShowFileDiffs = true
@@ -23,6 +25,8 @@ class SharedCoreSettingsTest {
         assertEquals("provider/commit", destination.commitMessageModel)
         assertEquals("provider/judge", destination.chatAutoApproveModel)
         assertEquals("provider/completion", destination.chatPromptCompletionModel)
+        assertEquals("provider/followups", destination.chatFollowupModel)
+        assertFalse(destination.chatFollowupsEnabled)
         assertEquals("default", destination.chatDefaultPermissionMode)
         assertEquals(14, destination.chatFontSize)
         assertFalse(destination.chatShowFileDiffs)

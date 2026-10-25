@@ -388,6 +388,8 @@ class VarroProjectService(private val project: Project) : Disposable {
             addProperty("showEmptyStateHistogram", settings.chatShowEmptyStateHistogram)
             addProperty("remoteImages", settings.remoteImageMode())
             addProperty("promptCompletionModel", settings.chatPromptCompletionModel)
+            addProperty("followupsEnabled", settings.chatFollowupsEnabled)
+            addProperty("followupModel", settings.chatFollowupModel.trim())
             addProperty("desktopSessionPaneSide", settings.sessionPaneSide())
             addProperty("defaultPermissionMode", settings.permissionMode())
             add("permissionAutomation", Json.obj("owner" to (permissionOwner?.viewId == viewId), "lease" to permissionLease))
@@ -428,6 +430,8 @@ class VarroProjectService(private val project: Project) : Disposable {
                 "showEmptyStateHistogram" to settings.chatShowEmptyStateHistogram,
                 "remoteImages" to settings.remoteImageMode(),
                 "promptCompletionModel" to settings.chatPromptCompletionModel,
+                "followupsEnabled" to settings.chatFollowupsEnabled,
+                "followupModel" to settings.chatFollowupModel.trim(),
                 "desktopSessionPaneSide" to settings.sessionPaneSide(),
                 "defaultPermissionMode" to settings.permissionMode(),
                 "chatFontSize" to resolvedChatFontSize(),
@@ -909,7 +913,11 @@ class VarroProjectService(private val project: Project) : Disposable {
         payload.bool("showChangedFiles")?.let { settings.chatShowChangedFiles = it }
         payload.bool("showTurnTimer")?.let { settings.chatShowTurnTimer = it }
         payload.bool("showEmptyStateHistogram")?.let { settings.chatShowEmptyStateHistogram = it }
-        broadcastConfig()
+        payload.bool("followupsEnabled")?.let { settings.chatFollowupsEnabled = it }
+        payload.str("followupModel")?.let { settings.chatFollowupModel = it.trim() }
+        if (payload?.has("followupsEnabled") == true || payload?.has("followupModel") == true) {
+            ApplicationManager.getApplication().messageBus.syncPublisher(VarroSettings.TOPIC).settingsChanged()
+        } else broadcastConfig()
     }
 
     private fun openTransferredSession(sessionId: String) {

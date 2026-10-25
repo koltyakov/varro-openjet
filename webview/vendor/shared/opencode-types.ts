@@ -25,6 +25,8 @@ export type UserMessage = {
   pendingDelivery?: 'steer' | 'queue';
   /** Original delivery mode, retained after the prompt leaves the inbox. */
   delivery?: 'steer' | 'queue';
+  /** Short label for an explicitly clicked generated follow-up, retained in native metadata. */
+  followupTitle?: string;
   time: { created: number };
   format?: OutputFormat;
   summary?: {
@@ -53,6 +55,7 @@ export type OpenCodeModelRouting = {
   commitMessageModel: OpenCodeModelRoute | null;
   autoApproveModel: OpenCodeModelRoute | null;
   promptCompletionModel?: OpenCodeModelRoute | null;
+  followupModel?: OpenCodeModelRoute | null;
   providerConfigPaths?: Record<string, string[]>;
 };
 

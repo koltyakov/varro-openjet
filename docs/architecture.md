@@ -161,6 +161,8 @@ read does not fall back to a local account.
 | Shared model preferences | `store/VarroModelStore.kt` |
 | Model assignments | `host/ModelRoutingService.kt` |
 | `prompt-completion-service.ts` | `host/PromptCompletionService.kt` |
+| `followup-service.ts`, `followup-cache.ts`, `shared/followups.ts` | `host/FollowupService.kt`, `host/FollowupCache.kt`, `protocol/Followups.kt` |
+| `file-lock.ts` | `store/NativeFileLock.kt`, shared by follow-ups and V2 annotations |
 | `handy-integration.ts` | `host/HandyIntegration.kt` |
 | `session-transfer-catalog.ts` and move handling | `host/SessionTransfers.kt` |
 | Permission rules and review | `host/PermissionService.kt`, `host/ProjectPermissionConfig.kt`, `host/PermissionJudge.kt` |
@@ -226,6 +228,11 @@ Notification preferences use the IDE-local settings component and are excluded f
 | Editor chat routes | `VarroStore.editorRoutes` |
 | Queued dispatches, Ralph runs and recycle-bin entries | JSON journals under `<IDE config>/varro/<project location hash>/`, with project-store snapshots |
 | Attachments | `<IDE system>/varro/attachments/<project location hash>/` |
+| Follow-up admission, suggestions and dismissals | `followups/cache.json` under the shared native Varro state root, or `$VARRO_TEST_STATE_ROOT/followups/cache.json` for isolated fixtures |
+
+`FollowupService` shares pending inference across project chat surfaces and checks the latest completed Build response, parent prompt and idle status against server history. Only an explicit live-turn request can start stateless inference. Cache-only history reads never generate. A persisted claim precedes inference, so reloads, model changes, failures and cancellation cannot bill the same turn again. Native owner-directory locks coordinate with other IDE processes and Varro's TypeScript host. Atomic replacement retries bounded Windows sharing violations without deleting committed state. Only the latest 512 presentations retain generated text; admission does not expire. Dismissal and the next accepted prompt erase old generated text while retaining admission. OpenJet has no legacy workspace follow-up cache to migrate.
+
+Follow-up settings are application-only, with optional cross-IDE sharing through `SharedCoreSettings`. Requests preserve the session model and reasoning unless a model override is set. Inference has a 30-second total deadline and no helper-session fallback. The server stores clicked-action labels in native message metadata, separate from delivery mode, for history, direct-message and inbox projection. Logs exclude conversation text and provider error bodies.
 
 `project-storage.ts` serves synchronous reads from the boot snapshot and mirrors writes through `host/storage`. The host broadcasts changes to other views. `VarroStore` broadcasts session model and permission-mode changes through selection listeners. `VarroModelStore` uses an application message-bus topic to sync model preferences across projects.
 

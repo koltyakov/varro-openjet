@@ -75,6 +75,7 @@ import {
 import { isString } from '../lib/runtime-values';
 import { playIcon, xmarkCircleSolidIcon } from '../lib/ui-icons';
 import { getStopProcessActionLabel } from '../lib/background-process-action';
+import { getFollowupActionTitle } from '../../shared/followups';
 import { UiIcon } from './UiIcon';
 import { isPlanImplementationMessage } from './message-list/plan-actions';
 import { getPresentationPartKey } from './message-list/streaming-presentation';
@@ -561,7 +562,11 @@ export function Message(props: {
   const stopProcessActionLabel = createMemo(() =>
     getStopProcessActionLabel(props.info, normalizedParts())
   );
-  const isCompactUserAction = () => isPlanImplementation() || stopProcessActionLabel() !== null;
+  const followupActionTitle = createMemo(() =>
+    getFollowupActionTitle(props.info, normalizedParts())
+  );
+  const isCompactUserAction = () =>
+    isPlanImplementation() || stopProcessActionLabel() !== null || followupActionTitle() !== null;
   const automaticParts = () => parsedUserContent()?.automaticParts ?? [];
   const hasVisibleAutomaticActions = () =>
     automaticParts().some((part) => {
@@ -724,7 +729,7 @@ export function Message(props: {
             <div
               class={`value chat-turn-content ${
                 isUser()
-                  ? `chat-turn-card user-message-card${isSteeringMessage() ? ' user-message-steering' : ''}${props.promptContinuation ? ' user-message-continuation' : ''}${isWrapperlessUserMessage() ? ' user-message-card-wrapperless' : ''}${isPlanImplementation() ? ' plan-implementation-action' : ''}${stopProcessActionLabel() ? ' stop-process-action' : ''}`
+                  ? `chat-turn-card user-message-card${isSteeringMessage() ? ' user-message-steering' : ''}${props.promptContinuation ? ' user-message-continuation' : ''}${isWrapperlessUserMessage() ? ' user-message-card-wrapperless' : ''}${isPlanImplementation() ? ' plan-implementation-action' : ''}${stopProcessActionLabel() ? ' stop-process-action' : ''}${followupActionTitle() ? ' followup-action' : ''}`
                   : assistantContainerClass()
               } ${isSubagent() ? 'chat-turn-subagent' : ''} ${canEditUserMessage() && !isEditingUserMessage() ? 'user-message-card-editable' : ''}`}
               onClick={handleUserCardClick}
@@ -744,18 +749,25 @@ export function Message(props: {
                   fallback={
                     <span
                       class={
-                        isPlanImplementation()
-                          ? 'plan-implementation-action-label'
-                          : 'stop-process-action-label'
+                        followupActionTitle()
+                          ? 'followup-action-label'
+                          : isPlanImplementation()
+                            ? 'plan-implementation-action-label'
+                            : 'stop-process-action-label'
                       }
                       role="note"
                     >
                       <UiIcon
-                        source={isPlanImplementation() ? playIcon : xmarkCircleSolidIcon}
+                        source={
+                          isPlanImplementation() || followupActionTitle()
+                            ? playIcon
+                            : xmarkCircleSolidIcon
+                        }
                         width={14}
                         height={14}
                       />
-                      {isPlanImplementation() ? 'Implement the plan' : stopProcessActionLabel()}
+                      {followupActionTitle() ??
+                        (isPlanImplementation() ? 'Implement the plan' : stopProcessActionLabel())}
                     </span>
                   }
                 >

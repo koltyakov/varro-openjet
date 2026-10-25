@@ -6,6 +6,7 @@ import {
   parseUserMessageContent,
 } from '../Message';
 import { isPlanImplementationMessage } from './plan-actions';
+import { getFollowupActionTitle } from '../../../shared/followups';
 import type { UserMessageMarkupFormat } from '../Message';
 import type { Message, MessageEntry, Part } from '../../types';
 
@@ -69,6 +70,7 @@ export function getStickyUserMessagePreview(
     !steeringMessageIds.has(firstVisibleEntry.info.id) &&
     !isSessionResumeMessage(firstVisibleEntry.parts) &&
     !isPlanImplementationMessage(firstVisibleEntry.info, firstVisibleEntry.parts) &&
+    getFollowupActionTitle(firstVisibleEntry.info, firstVisibleEntry.parts) === null &&
     !subagentSessionIds.has(firstVisibleEntry.info.sessionID) &&
     getUserMessagePreviewText(firstVisibleEntry.parts) !== EMPTY_USER_MESSAGE_PREVIEW
   ) {
@@ -85,6 +87,7 @@ export function getStickyUserMessagePreview(
     if (steeringMessageIds.has(entry.info.id)) continue;
     if (isSessionResumeMessage(entry.parts)) continue;
     if (isPlanImplementationMessage(entry.info, entry.parts)) continue;
+    if (getFollowupActionTitle(entry.info, entry.parts) !== null) continue;
     if (subagentSessionIds.has(entry.info.sessionID)) continue;
     const text = getUserMessagePreviewText(entry.parts);
     if (text === EMPTY_USER_MESSAGE_PREVIEW) continue;
@@ -111,6 +114,7 @@ export function getUserMessageNavigationPreviews(
     const index = indexOffset + position;
     if (entry.info.role !== 'user' || subagentSessionIds.has(entry.info.sessionID)) continue;
     if (isSessionResumeMessage(entry.parts)) continue;
+    if (getFollowupActionTitle(entry.info, entry.parts) !== null) continue;
     const text = getUserMessagePreviewText(entry.parts);
     if (text === EMPTY_USER_MESSAGE_PREVIEW) continue;
     previews.push({
@@ -139,6 +143,7 @@ export function getNextVisibleUserMessageTopMap(
 
     if (subagentSessionIds.has(entry.info.sessionID)) continue;
     if (isPlanImplementationMessage(entry.info, entry.parts)) continue;
+    if (getFollowupActionTitle(entry.info, entry.parts) !== null) continue;
 
     const bounds = observedVisibleMessageBounds.get(entry.info.id);
     if (bounds && bounds.bottom > 0) {

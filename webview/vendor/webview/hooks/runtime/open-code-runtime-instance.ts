@@ -192,6 +192,7 @@ export interface OpenCodeRuntime {
       queuedContext?: QueuedContextSnapshot;
       preserveComposer?: boolean;
       omitContext?: boolean;
+      followupTitle?: string;
       targetSessionId?: string | null;
       newSessionWorkspace?: SessionWorkspaceTarget;
       queuedMessageDispatch?: { itemId: string; lease: number };
@@ -2542,6 +2543,15 @@ export function createOpenCodeRuntime(): OpenCodeRuntime {
       clearPendingAbort,
       persistActiveSessionId: sessionStore.persistActiveSessionId,
       markSessionSeen: sessionStore.markSessionSeen,
+      captureFollowupOpening: (id) => {
+        const session = appStore.state.sessions.find((entry) => entry.id === id);
+        const seenAt = appStore.state.lastSeenSessions[id] ?? 0;
+        const updatedAt = Math.max(
+          session?.time.updated ?? 0,
+          appStore.state.completedSessionResponses[id] ?? 0
+        );
+        appStore.setState('followupOpening', updatedAt > seenAt ? { sessionId: id, seenAt } : null);
+      },
       clearDraftCurrentDocumentState: composerStore.clearDraftCurrentDocumentState,
       resetToolCallExpansionState,
       resolvePersistedAgent: (sessionId) => ({
@@ -3204,6 +3214,7 @@ export function createOpenCodeRuntime(): OpenCodeRuntime {
       queuedContext?: QueuedContextSnapshot;
       preserveComposer?: boolean;
       omitContext?: boolean;
+      followupTitle?: string;
       targetSessionId?: string | null;
       workspaceDirectory?: string;
       newSessionWorkspace?: SessionWorkspaceTarget;

@@ -12,6 +12,19 @@ import org.junit.Test
  */
 class ApiRoutesTest {
 
+    @Test fun `follow-ups expose only scoped POST generation and dismissal`() {
+        for (path in listOf("/varro/session/ses_fixture/followups", "/varro/session/ses_fixture/followups/dismiss")) {
+            assertTrue(ApiRoutes.isAllowed("POST", path))
+            assertTrue(ApiRoutes.isAllowed("POST", "$path?directory=%2Frepo"))
+            for (method in listOf("GET", "PATCH", "DELETE")) assertFalse(ApiRoutes.isAllowed(method, path))
+            for (query in listOf("directory=", "directory=/a&directory=/b", "model=other")) {
+                assertFalse(ApiRoutes.isAllowed("POST", "$path?$query"))
+            }
+        }
+        assertFalse(ApiRoutes.isAllowed("POST", "/varro/session/a%2fb/followups"))
+        assertFalse(ApiRoutes.isAllowed("POST", "/api/experimental/generate"))
+    }
+
     @Test fun `transfer hiding allows only a local POST with an optional directory`() {
         val path = ApiRoutes.Endpoints.SESSION_TRANSFER_HIDE
         assertTrue(ApiRoutes.isAllowed("POST", path))

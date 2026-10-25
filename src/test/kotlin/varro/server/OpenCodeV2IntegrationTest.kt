@@ -23,6 +23,7 @@ class OpenCodeV2IntegrationTest {
         val workspace = Files.createDirectory(root.resolve("workspace"))
         val providerRequests = java.util.concurrent.atomic.AtomicInteger()
         val providerInputs = CopyOnWriteArrayList<com.google.gson.JsonObject>()
+        val oneShotOutput = AtomicReference("OpenJet stream verified.")
         val streamGate = AtomicReference<java.util.concurrent.CountDownLatch?>()
         val provider = com.sun.net.httpserver.HttpServer.create(java.net.InetSocketAddress("127.0.0.1", 0), 0)
         val providerExecutor = java.util.concurrent.Executors.newCachedThreadPool { runnable -> Thread(runnable, "fixture-provider").apply { isDaemon = true } }
@@ -43,13 +44,13 @@ class OpenCodeV2IntegrationTest {
                 streamGate.get()?.await(20, TimeUnit.SECONDS)
                 exchange.responseHeaders.add("Content-Type", "text/event-stream")
                 val chunks = listOf(
-                    Json.obj("id" to "chatcmpl-fixture", "object" to "chat.completion.chunk", "created" to 1, "model" to "fixture", "choices" to listOf(Json.obj("index" to 0, "delta" to Json.obj("content" to "OpenJet stream verified."), "finish_reason" to null))),
+                    Json.obj("id" to "chatcmpl-fixture", "object" to "chat.completion.chunk", "created" to 1, "model" to "fixture", "choices" to listOf(Json.obj("index" to 0, "delta" to Json.obj("content" to oneShotOutput.get()), "finish_reason" to null))),
                     Json.obj("id" to "chatcmpl-fixture", "object" to "chat.completion.chunk", "created" to 1, "model" to "fixture", "choices" to listOf(Json.obj("index" to 0, "delta" to Json.obj(), "finish_reason" to "stop")), "usage" to usage))
                 chunks.joinToString("") { "data: $it\n\n" } + "data: [DONE]\n\n"
             } else {
                 exchange.responseHeaders.add("Content-Type", "application/json")
                 Json.obj("id" to "chatcmpl-fixture", "object" to "chat.completion", "created" to 1, "model" to "fixture", "choices" to listOf(
-                    Json.obj("index" to 0, "message" to Json.obj("role" to "assistant", "content" to "OpenJet stream verified."), "finish_reason" to "stop")), "usage" to usage).toString()
+                    Json.obj("index" to 0, "message" to Json.obj("role" to "assistant", "content" to oneShotOutput.get()), "finish_reason" to "stop")), "usage" to usage).toString()
             }
             val bytes = response.toByteArray()
             exchange.sendResponseHeaders(200, bytes.size.toLong())
@@ -188,8 +189,41 @@ class OpenCodeV2IntegrationTest {
             while (events.none { it.asObjectOrNull().str("type") == "session.next.prompt.admitted" } && System.nanoTime() < eventDeadline) Thread.sleep(20)
             assertTrue(events.any { it.asObjectOrNull().str("type") == "session.next.prompt.admitted" })
             val answer = transport.request("POST", "/session/$id/message", Json.obj("model" to Json.obj("providerID" to "fixture", "modelID" to "fixture"),
+                "agent" to "build", "followupTitle" to "Verify fixture",
                 "parts" to listOf(Json.obj("type" to "text", "text" to "Reply using the fixture provider")))).data.asObjectOrNull()
             assertTrue(answer.arr("parts")!!.any { it.asObjectOrNull().str("text") == "OpenJet stream verified." })
+            val completedHistory = transport.request("GET", "/session/$id/message").data!!.asJsonArray
+            val sourceUserID = completedHistory.map { it.asJsonObject }.single { it.obj("info").str("id") == answer.obj("info").str("id") }.obj("info").str("parentID")!!
+            assertEquals("Verify fixture", transport.request("GET", "/session/$id/message/$sourceUserID").data.asObjectOrNull().obj("info").str("followupTitle"))
+            if (OpenCodeCli.compareVersions(version, "2.0.27") >= 0) {
+                val historyBefore = transport.request("GET", "/session/$id/message").data
+                val followupSource = Json.obj("assistantMessageId" to answer.obj("info").str("id"), "userMessageId" to sourceUserID,
+                    "userPrompt" to "Reply using the fixture provider", "answer" to "OpenJet stream verified.")
+                val expectedFollowups = Json.obj("summary" to "The fixture response is complete. A regression test can preserve it.",
+                    "actions" to listOf(Json.obj("title" to "Add fixture test", "prompt" to "Add a focused fixture regression test.")))
+                oneShotOutput.set(expectedFollowups.toString())
+                val beforeCalls = providerRequests.get()
+                val followupCache = varro.host.FollowupCache(root.resolve("followups/cache.json"))
+                val followupCalls = CopyOnWriteArrayList<String>()
+                try {
+                    varro.host.FollowupService({ transport.apiVersion }, { method, path, body, options ->
+                        // Diagnostics contain only this isolated deterministic fixture's data.
+                        val response = transport.request(method, path, body, options)
+                        followupCalls += "$method $path -> ${if (path == "/openapi.json") "specification" else response.data}"
+                        response
+                    }, followupCache).use { service ->
+                        val selectedModel = Json.obj("providerID" to "fixture", "modelID" to "fixture")
+                        val suggested = service.suggest(id, followupSource, selectedModel, workspace.toString(), true)
+                        assertEquals("Follow-up fixture requests: ${followupCalls.joinToString("\n")}", expectedFollowups, suggested)
+                        assertEquals(expectedFollowups, service.suggest(id, followupSource, selectedModel, workspace.toString()))
+                        service.dismiss(id, followupSource, workspace.toString())
+                        service.invalidate()
+                        assertEquals(varro.protocol.Followups.empty(), service.suggest(id, followupSource, selectedModel, workspace.toString(), true))
+                    }
+                    assertEquals(beforeCalls + 1, providerRequests.get())
+                    assertEquals(historyBefore, transport.request("GET", "/session/$id/message").data)
+                } finally { oneShotOutput.set("OpenJet stream verified.") }
+            }
             // The HTTP response can finish before the independent SSE reader delivers the delta.
             waitFor("Text delta for $id was not delivered over SSE") {
                 events.any { it.asObjectOrNull().str("type") == "session.next.text.delta" && it.asObjectOrNull().obj("properties").str("sessionID") == id }

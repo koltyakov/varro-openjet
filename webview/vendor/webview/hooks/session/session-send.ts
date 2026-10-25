@@ -109,6 +109,7 @@ type ComposerState = {
 };
 
 export type SessionSendBody = {
+  followupTitle?: string;
   messageID?: string;
   parts: Array<{
     type: string;
@@ -125,7 +126,12 @@ export type SessionSendBody = {
   queuedMessageDispatch?: { itemId: string; lease: number };
 };
 
-type SendFlowOptions = { noReply?: boolean; delivery?: 'steer' | 'queue'; omitContext?: boolean };
+type SendFlowOptions = {
+  noReply?: boolean;
+  delivery?: 'steer' | 'queue';
+  omitContext?: boolean;
+  followupTitle?: string;
+};
 
 export type QueuedAttachmentSnapshot = Pick<
   QueuedMessage,
@@ -580,6 +586,7 @@ function buildRoutedSendBody(
   options?: SendFlowOptions
 ): SessionSendBody {
   const body: SessionSendBody = { parts };
+  if (options?.followupTitle) body.followupTitle = options.followupTitle;
   if (agent) body.agent = agent;
   if (model) body.model = { providerID: model.providerID, modelID: model.modelID };
   if (model?.variant)
@@ -1233,6 +1240,7 @@ export class SessionSendOperations {
             agent: original.info.agent,
             model: original.info.model,
             variant: original.info.model.variant,
+            followupTitle: original.info.followupTitle,
           });
           await Promise.all([
             this.deps.syncSession(targetSessionId),
@@ -1387,7 +1395,13 @@ export async function sendMessageWithDependencies(
     }
 
     deps.clearSessionUsageLimit(sessionId);
-    if (deps.getActiveSessionId() === sessionId && !options?.preserveScrollPosition) {
+    // Steering continues the current turn and must not reattach a detached reader,
+    // including when admission arrives after they scroll away from the pending steer.
+    if (
+      !isSteerDelivery &&
+      deps.getActiveSessionId() === sessionId &&
+      !options?.preserveScrollPosition
+    ) {
       deps.requestMessageListScrollToBottom(
         expectsAssistantReply && optimisticMessage ? messageId : undefined
       );
@@ -1567,6 +1581,7 @@ function createOptimisticUserMessage(
       role: 'user',
       pendingDelivery: body.delivery === 'steer' ? 'steer' : undefined,
       delivery: body.delivery,
+      followupTitle: body.followupTitle,
       time: { created },
       agent,
       model: optimisticModel,

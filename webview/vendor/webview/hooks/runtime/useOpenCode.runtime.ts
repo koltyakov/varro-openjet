@@ -128,6 +128,7 @@ export async function sendMessage(
     queuedContext?: QueuedContextSnapshot;
     preserveComposer?: boolean;
     omitContext?: boolean;
+    followupTitle?: string;
     targetSessionId?: string | null;
     workspaceDirectory?: string;
     newSessionWorkspace?: SessionWorkspaceTarget;

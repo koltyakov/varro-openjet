@@ -66,6 +66,8 @@ Remote Markdown images ask before loading by default. Loading one contacts the i
 
 Enable prompt completion with **Use for prompt completion** in the Models menu. It requires v2 and an API-key model, not an OAuth subscription, and sends your unfinished draft and recent chat directly to the provider. Tab accepts a suggestion; Escape dismisses it.
 
+Follow-up suggestions are enabled by default after completed Build responses when V2 supports stateless generation. They send the current request and final answer for extra inference, which may consume paid tokens or subscription quota. Disable **Suggest follow-up actions after Build responses** under **Settings > Tools > Varro > Models** to opt out. The session's model and reasoning are used unless you assign **Use for follow-ups** in Models. Hover an action to preview its prompt; clicking sends it without changing your permissions, draft or attachments.
+
 ## Documentation
 
 - [Contributing and building](CONTRIBUTING.md)

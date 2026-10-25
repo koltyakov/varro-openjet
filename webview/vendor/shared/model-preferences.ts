@@ -45,7 +45,7 @@ export function parseRequiredModelPreferences(value: unknown): ModelPreferences 
   return parseModelPreferences(record);
 }
 
-function parseSelectedModel(value: unknown): ChatModelSelection | null {
+export function parseSelectedModel(value: unknown): ChatModelSelection | null {
   const record = asRecord(value);
   if (
     !record ||

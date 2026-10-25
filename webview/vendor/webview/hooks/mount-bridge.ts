@@ -144,6 +144,12 @@ export function createMountBridgeOperations(deps: {
           if (payload.promptCompletionModel !== undefined) {
             appStore.setState('promptCompletionModel', payload.promptCompletionModel);
           }
+          if (payload.followupsEnabled !== undefined) {
+            appStore.setState('followupsEnabled', payload.followupsEnabled);
+          }
+          if (payload.followupModel !== undefined) {
+            appStore.setState('followupModel', payload.followupModel);
+          }
           if (payload.debugShowQuotaWarning !== undefined) {
             appStore.setState('debugShowQuotaWarning', payload.debugShowQuotaWarning);
           }

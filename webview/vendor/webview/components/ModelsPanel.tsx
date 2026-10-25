@@ -82,7 +82,7 @@ type ModelRenameState = {
   displayName: string;
 };
 type ModelRouteTag = {
-  kind: 'agent' | 'small' | 'approve' | 'commit' | 'complete';
+  kind: 'agent' | 'small' | 'approve' | 'commit' | 'complete' | 'followups';
   text: string;
   label: string;
   change?: 'old' | 'new' | 'removed' | 'overridden';
@@ -339,7 +339,13 @@ export function ModelsPanel() {
   }
 
   async function saveRouting(body: {
-    target: 'small_model' | 'agent' | 'commit_message' | 'auto_approve' | 'prompt_completion';
+    target:
+      | 'small_model'
+      | 'agent'
+      | 'commit_message'
+      | 'auto_approve'
+      | 'prompt_completion'
+      | 'followups';
     providerID: string;
     modelID: string;
     agentName?: string;
@@ -975,6 +981,31 @@ export function ModelsPanel() {
                   ? "Don't use for "
                   : 'Use for '}
                 <strong>commit messages</strong>
+              </button>
+              <button
+                type="button"
+                class="models-context-menu-item"
+                disabled={
+                  isSaving() ||
+                  (!isModelRoute(routing().followupModel, menu.providerID, menu.modelID) &&
+                    (state.serverStatus.state !== 'running' || state.serverStatus.apiVersion !== 2))
+                }
+                title="Suggest optional next actions using an additional model request. Leave unset to use the session model and reasoning. Disable with varro.chat.followupsEnabled. Requires OpenCode V2."
+                onClick={() =>
+                  void saveRouting({
+                    target: 'followups',
+                    providerID: menu.providerID,
+                    modelID: menu.modelID,
+                    unset: isModelRoute(routing().followupModel, menu.providerID, menu.modelID)
+                      ? true
+                      : undefined,
+                  })
+                }
+              >
+                {isModelRoute(routing().followupModel, menu.providerID, menu.modelID)
+                  ? 'Use session model for '
+                  : 'Use for '}
+                <strong>follow-ups</strong>
               </button>
               <button
                 type="button"
@@ -2064,6 +2095,9 @@ function getModelRouteTags(
   if (isModelRoute(routing.promptCompletionModel ?? null, providerID, modelID)) {
     tags.push({ kind: 'complete', text: 'prompt', label: 'Prompt completion model' });
   }
+  if (isModelRoute(routing.followupModel, providerID, modelID)) {
+    tags.push({ kind: 'followups', text: 'followup', label: 'Follow-ups model' });
+  }
 
   const agentNames = new Set([
     ...Object.keys(routing.agentModels ?? {}),
@@ -2146,6 +2180,7 @@ function createEmptyRouting(): OpenCodeModelRouting {
     commitMessageModel: null,
     autoApproveModel: null,
     promptCompletionModel: null,
+    followupModel: null,
   };
 }
 
@@ -2158,6 +2193,7 @@ function normalizeModelRouting<T>(value: T): OpenCodeModelRouting {
   const commitMessageModel = parseModelRoute(record.commitMessageModel);
   const autoApproveModel = parseModelRoute(record.autoApproveModel);
   const promptCompletionModel = parseModelRoute(record.promptCompletionModel);
+  const followupModel = parseModelRoute(record.followupModel);
   const agentModels: OpenCodeModelRouting['agentModels'] = {};
   const rawAgents = asRecord(record.agent);
 
@@ -2193,6 +2229,7 @@ function normalizeModelRouting<T>(value: T): OpenCodeModelRouting {
     commitMessageModel,
     autoApproveModel,
     promptCompletionModel,
+    followupModel,
   };
   if (record.globalVisionModel !== undefined) {
     normalized.globalVisionModel = parseModelRoute(record.globalVisionModel);

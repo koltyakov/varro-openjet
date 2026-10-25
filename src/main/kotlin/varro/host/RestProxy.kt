@@ -92,6 +92,8 @@ class RestProxy(
      * the routing logic stays testable without a live project.
      */
     interface HostServices {
+        fun followups(sessionId: String, body: JsonElement?, directory: String?, dismiss: Boolean, isCancelled: () -> Boolean): JsonElement
+        fun clearFollowups(sessionId: String, directory: String?, messageId: String?)
         fun promptCompletionModels(isCancelled: () -> Boolean): JsonObject
         fun completePrompt(body: JsonElement?, directory: String?, isCancelled: () -> Boolean): JsonObject
         fun testPromptCompletion(body: JsonElement?, isCancelled: () -> Boolean): JsonObject
@@ -273,6 +275,11 @@ class RestProxy(
 
         val result = server.transport.request(method = method, path = path, body = body, options = RequestOptions(isCancelled = isCancelled,
             directory = sessionId?.let { transfers?.get(it).str("directory") })).data
+        if (method == "POST" && sessionId != null && request.segments.size == 3 && request.segments[2] in setOf("prompt_async", "message", "command")) {
+            runCatching { services.clearFollowups(sessionId, transferDirectory ?: request.query["directory"]?.firstOrNull()
+                ?: server.workspaceDirectory(), body.asObjectOrNull().str("messageID")) }
+                .onFailure { log.warn("Could not clear previous-turn follow-up cache") }
+        }
         if (method == "GET" && request?.pathname == "/session") return Json.array(
             mergeTransfers(result.asArrayOrNull() ?: JsonArray(), request).filter { it.asObjectOrNull().str("id") !in store.hiddenSessionIds },
         )
@@ -493,6 +500,10 @@ class RestProxy(
         if (action in setOf("permission-mode", "rename-if-untitled", "delete")) transfers?.checkWritable(sessionId)
 
         return when (action) {
+            "followups", "dismiss" -> {
+                require(sessionId !in store.hiddenSessionIds) { "404 Session not found" }
+                services.followups(sessionId, body, directory, action == "dismiss", isCancelled)
+            }
             "activate" -> {
                 // Activating a session repoints REST scoping and the event stream at
                 // the directory that session actually belongs to, so subsequent

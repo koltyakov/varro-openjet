@@ -22,7 +22,7 @@ internal class ModelRoutingService(
     fun update(body: JsonElement?): JsonObject {
         val request = requireNotNull(body.asObjectOrNull()) { "Model routing request must be an object" }
         val target = request.str("target")
-        require(target in setOf("small_model", "agent", "commit_message", "auto_approve", "prompt_completion")) {
+        require(target in setOf("small_model", "agent", "commit_message", "auto_approve", "prompt_completion", "followups")) {
             "Unsupported model routing target: $target"
         }
         val provider = request.str("providerID")?.trim().orEmpty()
@@ -63,6 +63,7 @@ internal class ModelRoutingService(
                 when (target) {
                     "commit_message" -> settings.commitMessageModel = modelRef
                     "prompt_completion" -> settings.chatPromptCompletionModel = modelRef
+                    "followups" -> settings.chatFollowupModel = modelRef
                     else -> settings.chatAutoApproveModel = modelRef
                 }
                 current
@@ -84,6 +85,7 @@ internal class ModelRoutingService(
             "commitMessageModel" to modelRoute(settings.commitMessageModel),
             "autoApproveModel" to modelRoute(settings.chatAutoApproveModel),
             "promptCompletionModel" to modelRoute(settings.chatPromptCompletionModel),
+            "followupModel" to modelRoute(settings.chatFollowupModel),
         )
     }
 

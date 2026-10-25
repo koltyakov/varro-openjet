@@ -24,6 +24,7 @@ type SessionSelectionDeps = {
   clearPendingAbort(sessionId: string): void;
   persistActiveSessionId(id: string): void;
   markSessionSeen(id: string): void;
+  captureFollowupOpening?(id: string): void;
   clearDraftCurrentDocumentState(): void;
   resetToolCallExpansionState(): void;
   resolvePersistedAgent(id: string): {
@@ -97,6 +98,7 @@ export async function selectSessionWithDependencies(
   let persistedAgent: string | null = null;
   let persistedModel: SelectedModel | null = null;
   batch(() => {
+    if (!preserveTranscript && (options?.markSeen ?? true)) deps.captureFollowupOpening?.(id);
     if (!preserveTranscript) {
       deps.clearDraftCurrentDocumentState();
       deps.resetToolCallExpansionState();

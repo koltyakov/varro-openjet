@@ -423,6 +423,32 @@ class OpenCodeV2Test {
         }
     }
 
+    @Test fun `follow-up attribution survives native admission history direct reads and inbox projection`() {
+        for (title in listOf(null, "  Fix parser  ", "x".repeat(41), "Fix\nall", "Fix\u202eall")) {
+            var admitted: JsonObject? = null
+            val native = adapter { _, path, body ->
+                when {
+                    path.endsWith("/prompt") -> { admitted = body.asObjectOrNull(); Json.obj("data" to true) }
+                    path.endsWith("/message/msg_sent") -> Json.obj("data" to Json.obj("id" to "msg_sent", "type" to "user", "text" to "Fix it", "metadata" to admitted?.get("metadata")))
+                    path.endsWith("/inbox") -> Json.obj("data" to listOf(Json.obj("id" to "msg_sent", "type" to "user", "delivery" to "queue", "payload" to admitted)))
+                    path.contains("/message?") -> Json.obj("data" to emptyList<Any>())
+                    path == "/api/session/ses_test" -> Json.obj("data" to Json.obj("id" to "ses_test"))
+                    else -> null
+                }
+            }
+            native.request("POST", "/session/ses_test/prompt_async", Json.obj("messageID" to "msg_sent", "delivery" to "queue",
+                "followupTitle" to title, "parts" to listOf(Json.obj("type" to "text", "text" to "Fix it"))), RequestOptions())
+            val expected = if (title == "  Fix parser  ") "Fix parser" else null
+            assertEquals(expected, admitted.obj("metadata").str("varroFollowupTitle"))
+            assertEquals("queue", admitted.obj("metadata").str("varroDelivery"))
+            val direct = native.request("GET", "/session/ses_test/message/msg_sent", null, RequestOptions()).data.asObjectOrNull()
+            assertEquals(expected, direct.obj("info").str("followupTitle"))
+            val pending = native.request("GET", "/session/ses_test/message?limit=2", null, RequestOptions()).data!!.asJsonArray.single().asJsonObject
+            assertEquals(expected, pending.obj("info").str("followupTitle"))
+            assertEquals("queue", pending.obj("info").str("pendingDelivery"))
+        }
+    }
+
     @Test fun `metadata and archive times survive adapter recreation without server patches`() {
         val root = temporary.newFolder().toPath()
         val value = Json.obj("id" to "ses_test", "title" to "test", "location" to Json.obj("directory" to "/project"), "time" to Json.obj("created" to 1, "updated" to 2))

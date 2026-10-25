@@ -1,4 +1,6 @@
 import { apiCall, onMessage, postMessage } from './bridge';
+import type { FollowupSuggestionSet, FollowupSource } from '../../shared/followups';
+import { FOLLOWUP_REQUEST_TIMEOUT_MS } from '../../shared/followups';
 import type {
   QuestionAnswer,
   AutoApproveJudgeRequest,
@@ -830,6 +832,51 @@ export const client = {
     async openCodeConfig(): Promise<OpenCodeModelRouting> {
       return apiCall('GET', VARRO_API_ENDPOINTS.openCodeConfig);
     },
+    async followups(
+      sessionId: string,
+      source: FollowupSource,
+      options: {
+        signal: AbortSignal;
+        directory?: string;
+        allowGenerate?: boolean;
+        model?: ChatModelSelection | null;
+      }
+    ): Promise<FollowupSuggestionSet> {
+      return apiCall(
+        'POST',
+        withDirectory(
+          `${VARRO_API_ENDPOINTS.session}/${encodeURIComponent(sessionId)}/followups`,
+          options.directory
+        ),
+        {
+          ...source,
+          allowGenerate: options.allowGenerate === true,
+          model: options.model
+            ? {
+                providerID: options.model.providerID,
+                modelID: options.model.modelID,
+                variant: options.model.variant,
+              }
+            : undefined,
+        },
+        { signal: options.signal, timeoutMs: FOLLOWUP_REQUEST_TIMEOUT_MS, retries: 0 }
+      );
+    },
+    async dismissFollowups(
+      sessionId: string,
+      source: FollowupSource,
+      directory?: string
+    ): Promise<boolean> {
+      return apiCall(
+        'POST',
+        withDirectory(
+          `${VARRO_API_ENDPOINTS.session}/${encodeURIComponent(sessionId)}/followups/dismiss`,
+          directory
+        ),
+        source,
+        { retries: 0 }
+      );
+    },
     async promptCompletionModels(): Promise<PromptCompletionAvailability> {
       return apiCall('GET', VARRO_API_ENDPOINTS.promptCompletionModels, undefined, {
         timeoutMs: 10_000,
@@ -899,7 +946,13 @@ export const client = {
       );
     },
     async saveModelRouting(body: {
-      target: 'small_model' | 'agent' | 'commit_message' | 'auto_approve' | 'prompt_completion';
+      target:
+        | 'small_model'
+        | 'agent'
+        | 'commit_message'
+        | 'auto_approve'
+        | 'prompt_completion'
+        | 'followups';
       providerID: string;
       modelID: string;
       agentName?: string;
