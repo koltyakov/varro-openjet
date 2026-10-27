@@ -19,6 +19,9 @@ class ProviderQuotaBackend(
     private val clock: () -> Long = System::currentTimeMillis,
     private val apiVersion: () -> Int = { 1 },
     private val attachOnly: () -> Boolean = { false },
+    private val requestUsageLimits: (String?) -> JsonElement? = { directory ->
+        request("GET", "/api/experimental/usage/limits", null, directory)
+    },
 ) : AutoCloseable {
     private data class Key(val provider: String, val model: String?, val directory: String?)
     private data class Entry(val identity: String, val status: JsonObject, val expires: Long)
@@ -65,44 +68,64 @@ class ProviderQuotaBackend(
         var result = try {
             val attached = attachOnly()
             val v2 = apiVersion() == 2
-            if (attached && (!v2 || key.provider != "openai")) return status(key, "unsupported",
+            if (attached && !v2) return status(key, "unsupported",
                 "Provider quota checks need server-side credentials and are not supported in attach-only mode. Check usage with your provider or on the OpenCode server host.")
             val metadata = request("GET", "/config/providers", null, key.directory)
             val providers = metadata.asObjectOrNull().elements("providers").ifEmpty { metadata.asArrayOrNull()?.toList().orEmpty() }
             val provider = providers.firstOrNull { it.asObjectOrNull().str("id") == key.provider }.asObjectOrNull()
-                ?: throw QuotaFailure("Provider was not found in OpenCode configuration")
-            val auth = if (attached) attachedOpenAI(request("GET", "/api/credential", null, key.directory))
-                else if (!QuotaAdapters.requiresOpenCodeAuth(key.provider)) JsonObject()
-                else if (v2) credentials.v2AuthStore(provider) else credentials.authStore()
-            if (attached && auth.obj("openai").str("type") != "oauth") return status(key, "unsupported",
-                "OpenAI subscription limits require an active Codex OAuth connection on the OpenCode server.")
-            val token = if (attached) auth.obj("openai").str("access") else credentials.token(provider, auth)
-            // Re-read identity before using a quota cache, so logging in with a new
-            // account cannot show the previous account's remaining allowance.
-            identity = if (attached) QuotaCredentials.fingerprint("attached-v2", Json.stringify(provider), Json.stringify(auth))
-                else QuotaCredentials.fingerprint(Json.stringify(provider), Json.stringify(auth),
-                Json.stringify(if (key.provider == "anthropic" && auth.obj("anthropic").str("type") != "oauth") credentials.read(credentials.claudePath) else null),
-                Json.stringify(if (key.provider == "openai") credentials.codex(auth) else null),
-                if (key.provider in setOf("google", "gemini")) credentials.gemini(key.provider, auth).orEmpty() else "",
-                token.orEmpty(),
-                if (key.provider == "github-copilot" && token == null) credentials.copilotFallback().orEmpty() else "")
-            cache[key]?.takeIf { it.identity == identity && it.expires > clock() }?.let { return it.status }
-            val writeAuth: ((String, JsonObject) -> Unit)? = if (v2) null else { id, value ->
-                check(version == generation.get() && !closed) { "Provider quota poll was retired" }
-                if (credentials.authStore().obj(id) != auth.obj(id)) throw QuotaFailure("Provider credentials changed during refresh; retrying with current credentials")
-                request("PUT", "/auth/$id", value, key.directory)
-            }
-            val adapters = QuotaAdapters(http, credentials, writeAuth)
-            adapters.poll(provider, auth, key.model, clock()) ?: run {
-                var windows = directWindows(provider.obj("models").obj(key.model.orEmpty()), clock())
-                    .ifEmpty { directWindows(provider, clock()) }
-                if (windows.isEmpty()) {
-                    val console = runCatching { request("GET", "/experimental/console", null, key.directory).asObjectOrNull() }.getOrNull()
-                    val managed = console.arr("consoleManagedProviders")?.strings().orEmpty()
-                    if (managed.isEmpty() || key.provider in managed) windows = directWindows(console, clock())
+            val native = if (v2 && (key.provider in setOf("opencode", "opencode-go") || provider.str("integrationID") == "opencode")) {
+                try {
+                    val response = requestUsageLimits(key.directory).asObjectOrNull()
+                    val data = response?.get("data")
+                    identity = "server-console:${data.asObjectOrNull().obj("workspace").str("id").orEmpty()}"
+                    if (data?.isJsonNull == true) status(key, "unsupported", "This OpenCode location is not signed in to a Console workspace.", "opencode")
+                    else OpenCodeUsageLimits.project(data, key.provider, key.model, clock())
+                } catch (failure: Exception) {
+                    // A location 404 must not switch credential owners. Only the generic route 404 can.
+                    if (failure is varro.server.OpenCodeRequestException && failure.message.equals("404 Not found", true)) null
+                    else {
+                        identity = lastGood[key]?.identity?.takeIf { it.startsWith("server-console:") }.orEmpty()
+                        status(key, "error", "OpenCode Console limits failed: ${failure.message}", "opencode")
+                    }
                 }
-                if (windows.isNotEmpty()) status(key, "available", "Read from OpenCode metadata", "opencode").apply { add("windows", Json.array(windows)) }
-                else status(key, "unsupported", "This provider does not expose quota information")
+            } else null
+            native ?: run {
+                if (attached && key.provider != "openai") return status(key, "unsupported",
+                    "Provider quota checks are not supported in attach-only mode without a server-owned limits endpoint.")
+                if (provider == null) throw QuotaFailure("Provider was not found in OpenCode configuration")
+                val auth = if (attached) attachedOpenAI(request("GET", "/api/credential", null, key.directory))
+                    else if (!QuotaAdapters.requiresOpenCodeAuth(key.provider)) JsonObject()
+                    else if (v2) credentials.v2AuthStore(provider) else credentials.authStore()
+                if (attached && auth.obj("openai").str("type") != "oauth") return status(key, "unsupported",
+                    "OpenAI subscription limits require an active Codex OAuth connection on the OpenCode server.")
+                val token = if (attached) auth.obj("openai").str("access") else credentials.token(provider, auth)
+                // Re-read identity before using a quota cache, so logging in with a new
+                // account cannot show the previous account's remaining allowance.
+                identity = if (attached) QuotaCredentials.fingerprint("attached-v2", Json.stringify(provider), Json.stringify(auth))
+                    else QuotaCredentials.fingerprint(Json.stringify(provider), Json.stringify(auth),
+                    Json.stringify(if (key.provider == "anthropic" && auth.obj("anthropic").str("type") != "oauth") credentials.read(credentials.claudePath) else null),
+                    Json.stringify(if (key.provider == "openai") credentials.codex(auth) else null),
+                    if (key.provider in setOf("google", "gemini")) credentials.gemini(key.provider, auth).orEmpty() else "",
+                    token.orEmpty(),
+                    if (key.provider == "github-copilot" && token == null) credentials.copilotFallback().orEmpty() else "")
+                cache[key]?.takeIf { it.identity == identity && it.expires > clock() }?.let { return it.status }
+                val writeAuth: ((String, JsonObject) -> Unit)? = if (v2) null else { id, value ->
+                    check(version == generation.get() && !closed) { "Provider quota poll was retired" }
+                    if (credentials.authStore().obj(id) != auth.obj(id)) throw QuotaFailure("Provider credentials changed during refresh; retrying with current credentials")
+                    request("PUT", "/auth/$id", value, key.directory)
+                }
+                val adapters = QuotaAdapters(http, credentials, writeAuth)
+                adapters.poll(provider, auth, key.model, clock()) ?: run {
+                    var windows = directWindows(provider.obj("models").obj(key.model.orEmpty()), clock())
+                        .ifEmpty { directWindows(provider, clock()) }
+                    if (windows.isEmpty()) {
+                        val console = runCatching { request("GET", "/experimental/console", null, key.directory).asObjectOrNull() }.getOrNull()
+                        val managed = console.arr("consoleManagedProviders")?.strings().orEmpty()
+                        if (managed.isEmpty() || key.provider in managed) windows = directWindows(console, clock())
+                    }
+                    if (windows.isNotEmpty()) status(key, "available", "Read from OpenCode metadata", "opencode").apply { add("windows", Json.array(windows)) }
+                    else status(key, "unsupported", "This provider does not expose quota information")
+                }
             }
         } catch (failure: QuotaFailure) {
             status(key, if (failure.code in setOf(401, 403)) "unsupported" else "error", failure.message.orEmpty())
@@ -134,6 +157,8 @@ class ProviderQuotaBackend(
                 }
             } else if (result.str("status") == "available") {
                 lastGood[key] = Entry(identity, result, clock() + 900_000)
+            } else {
+                lastGood.remove(key)
             }
             val expires = if (result.str("status") == "available") {
                 minOf(clock() + ttl, (result.long("checkedAt") ?: clock()) + 900_000)

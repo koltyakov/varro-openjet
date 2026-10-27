@@ -261,8 +261,7 @@ export function getLeadingSlashCommand(text: string) {
 
 export function getCompletionSelection(
   completion: ReturnType<typeof getActiveCompletion> | null,
-  item: CompletionItem | undefined,
-  confirm = false
+  item: CompletionItem | undefined
 ): CompletionSelection | null {
   if (!completion || !item) return null;
   if (item.type === 'problems' && completion.type === 'slash') {
@@ -293,7 +292,7 @@ export function getCompletionSelection(
       normalizedQuery === item.name.toLowerCase() ||
       item.aliases.some((alias) => normalizedQuery === alias.toLowerCase());
     return {
-      type: confirm || selectsExactCommand ? 'run-slash' : 'set-slash',
+      type: selectsExactCommand ? 'run-slash' : 'set-slash',
       value: `/${item.name}`,
     };
   }

@@ -30,14 +30,17 @@ internal class OpenCodeV2Adapter(
     private val backgroundServices = OpenCodeV2BackgroundServices(annotations, backgroundWork, classifyBackgroundProcess, backgroundChanged)
     @Volatile private var apiCapabilities: OpenCodeApiCapabilities? = null
     @Volatile private var nativeModelExclusions = false
+    @Volatile private var nativeChatCatalog = false
 
     fun setServerVersion(version: String?) {
         val release = version?.let { Regex("\\d+\\.\\d+\\.\\d+(?:-[0-9A-Za-z.-]+)?").find(it)?.value }
         val comparison = release?.let { OpenCodeCli.compareVersions(it, "2.1.2") }
         nativeModelExclusions = comparison != null && (comparison > 0 || (comparison == 0 && '-' !in release))
+        val catalogComparison = release?.let { OpenCodeCli.compareVersions(it, "2.2.0") }
+        nativeChatCatalog = catalogComparison != null && (catalogComparison > 0 || (catalogComparison == 0 && '-' !in release))
     }
 
-    fun reset() { nativeModelExclusions = false; apiCapabilities = null; childTasks.reset(); backgroundServices.reset(); permissions.clear(); forms.clear(); contexts.clear(); inputTypes.clear(); failures.clear(); parents.clear(); oauth.clear(); backgroundWork.reset() }
+    fun reset() { nativeChatCatalog = false; nativeModelExclusions = false; apiCapabilities = null; childTasks.reset(); backgroundServices.reset(); permissions.clear(); forms.clear(); contexts.clear(); inputTypes.clear(); failures.clear(); parents.clear(); oauth.clear(); backgroundWork.reset() }
 
     fun events(event: JsonObject): List<JsonObject> {
         val type = event.str("type").orEmpty()
@@ -459,6 +462,8 @@ internal class OpenCodeV2Adapter(
         state.entrySet().forEach { result.add(it.key, it.value) }
         value.str("parentID")?.let { result.addProperty("parentID", it) }
         result.add("time", time)
+        // Transcript restoration reads this separately. Session catalogs must stay bounded.
+        result.remove("generationTiming")
         return result
     }
 
@@ -576,13 +581,17 @@ internal class OpenCodeV2Adapter(
                 all.removeAll { it.str("id") == id }
                 return@forEach
             }
-            val target = all.firstOrNull { it.str("id") == id } ?: Json.obj("id" to id, "name" to (provider.str("name") ?: id), "env" to JsonArray(),
+            var target = all.firstOrNull { it.str("id") == id }
+            if (target.str("source") == "custom") target!!.addProperty("source", "config")
+            // Modern catalogs own model types, provider availability and model limits.
+            if (nativeChatCatalog) return@forEach
+            if (target == null) target = Json.obj("id" to id, "name" to (provider.str("name") ?: id), "env" to JsonArray(),
                 "source" to "config", "options" to Json.obj(), "models" to Json.obj()).also {
                     if (id in setOf("ollama", "lmstudio", "vllm")) it.addProperty("disconnectMode", "disable")
                     all.add(it)
                 }
-            if (target.str("source") == "custom") target.addProperty("source", "config")
             provider.obj("models")?.entrySet()?.forEach models@ { (modelID, definition) -> definition.asObjectOrNull()?.let { model ->
+                if (model.has("type") && model.str("type") != "chat") return@models
                 val existing = target.obj("models").obj(modelID)
                 // Newer native OpenCode catalogs own free-model and other exclusions.
                 if (existing == null && id in setOf("opencode", "opencode-go") && nativeModelExclusions) return@models

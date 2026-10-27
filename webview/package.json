@@ -27,7 +27,7 @@
     "solid-js": "^1.9.17"
   },
   "devDependencies": {
-    "@opencode/client": "^2.1.4",
+    "@opencode/client": "^2.2.0",
     "@types/node": "26.6.5",
     "@tailwindcss/vite": "4.3.3",
     "iconoir": "7.12.1",

@@ -50,18 +50,42 @@ class OneShotGenerationTest {
     }
 
     @Test fun `only exact model admission failures allow fallback`() {
-        for (message in listOf("400 Model unavailable: test/small", "401 Unauthorized", "503 Unavailable", "Request timed out", "404 Model not found", "400 Model unavailable: test/other")) {
+        for (message in listOf("400 Model unavailable: test/small", "404 Model not found: test/small", "401 Unauthorized", "503 Unavailable", "Request timed out", "404 Model not found", "404 Model not found: test/other", "400 Model unavailable: test/other")) {
             var requests = 0
             val helper = OneShotGeneration { method, _, _, _ ->
                 requests++
                 if (method == "GET") OpenCodeResponse(specification) else throw OpenCodeRequestException(message)
             }
-            if (message == "400 Model unavailable: test/small") assertNull(helper.generate(2, "prompt", model, RequestOptions()))
+            if (message in listOf("400 Model unavailable: test/small", "404 Model not found: test/small")) assertNull(helper.generate(2, "prompt", model, RequestOptions()))
             else assertEquals(message, assertThrows(OpenCodeRequestException::class.java) {
                 helper.generate(2, "prompt", model, RequestOptions())
             }.message)
             assertEquals(2, requests)
         }
+    }
+
+    @Test fun `text route is preferred and errors never replay through the legacy alias`() {
+        for (fail in listOf(false, true)) {
+            val calls = mutableListOf<String>()
+            val helper = OneShotGeneration { method, path, _, _ ->
+                calls += "$method $path"
+                if (method == "GET") OpenCodeResponse(Json.parse("""{"paths":{"/api/experimental/generate/text":{"post":{}},"/api/experimental/generate":{"post":{}}}}"""))
+                else {
+                    if (fail) throw OpenCodeRequestException("503 Fixture failure")
+                    OpenCodeResponse(Json.obj("data" to Json.obj("text" to "generated")))
+                }
+            }
+            if (fail) assertThrows(OpenCodeRequestException::class.java) { helper.generate(2, "prompt", null, RequestOptions()) }
+            else assertEquals("generated", helper.generate(2, "prompt", null, RequestOptions()))
+            assertEquals(listOf("GET /openapi.json", "POST /api/experimental/generate/text"), calls)
+        }
+    }
+
+    @Test fun `implicit model admission errors cannot fall back`() {
+        val helper = OneShotGeneration { method, _, _, _ ->
+            if (method == "GET") OpenCodeResponse(specification) else throw OpenCodeRequestException("404 Model not found: test/small")
+        }
+        assertThrows(OpenCodeRequestException::class.java) { helper.generate(2, "prompt", null, RequestOptions()) }
     }
 
     @Test fun `invalid output and cancellation never offer another generation`() {

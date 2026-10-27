@@ -47,6 +47,8 @@ import { refreshRoutingState } from '../hooks/useOpenCode';
 import type { OpenCodeModelRouting, Provider } from '../types';
 import { FormattedModelName } from './chat-input/ToolbarPickers';
 import { DecisionProviderSection, type JevStatus } from './DecisionProviderSection';
+import { NativeDecisionProviderSection } from './NativeDecisionProviderSection';
+import type { DecisionProviderStatus } from '../../shared/protocol';
 import { ProviderConnectionDialog } from './ProviderConnectionDialog';
 import { ProviderDisconnectionDialog } from './ProviderDisconnectionDialog';
 import { Tooltip } from './Tooltip';
@@ -135,8 +137,10 @@ export function ModelsPanel() {
     void loadJevStatus();
     onCleanup(
       onMessage((message) => {
-        if (message.type === 'providers/refresh' || message.type === 'config/update')
+        if (message.type === 'providers/refresh' || message.type === 'config/update') {
           void loadRouting();
+          void loadJevStatus();
+        }
       })
     );
   });
@@ -158,11 +162,18 @@ export function ModelsPanel() {
   const [modelCatalogProvider, setModelCatalogProvider] = createSignal<ModelProvider | null>(null);
   const [showProviderActions, setShowProviderActions] = createSignal(false);
   const [jevStatus, setJevStatus] = createSignal<JevStatus | null>(null);
-  const jevHandlesAutoApprove = () => !!jevStatus()?.connected && !!jevStatus()?.autoApprove;
+  const [nativeStatus, setNativeStatus] = createSignal<DecisionProviderStatus['native']>();
+  const jevHandlesAutoApprove = () =>
+    !!nativeStatus()?.model || (!!jevStatus()?.connected && !!jevStatus()?.autoApprove);
+
+  function updateDecisionStatus(status: DecisionProviderStatus) {
+    setJevStatus(status.jev);
+    setNativeStatus(status.native);
+  }
 
   async function loadJevStatus() {
     try {
-      setJevStatus((await client.varro.decisionProviders.status()).jev);
+      updateDecisionStatus(await client.varro.decisionProviders.status());
     } catch {
       // Decision providers are optional; without a status the section stays hidden.
     }
@@ -170,7 +181,7 @@ export function ModelsPanel() {
 
   async function connectDecisionModel() {
     try {
-      setJevStatus((await client.varro.decisionProviders.update({ action: 'connect' })).jev);
+      updateDecisionStatus(await client.varro.decisionProviders.update({ action: 'connect' }));
     } catch {
       // The extension host reports connection failures with a VS Code notification.
     }
@@ -824,6 +835,18 @@ export function ModelsPanel() {
 
       <div class="models-body" ref={(el) => (bodyRef = el)}>
         <div class="models-body-inner">
+          <Show
+            when={
+              nativeStatus()?.visible &&
+              (nativeStatus()?.supported || nativeStatus()?.model) &&
+              (!normalizedQuery() || /opencode|native|decision/.test(normalizedQuery()))
+            }
+          >
+            <NativeDecisionProviderSection
+              status={nativeStatus()!}
+              onStatusChange={updateDecisionStatus}
+            />
+          </Show>
           <Show
             when={
               jevStatus()?.connected &&
@@ -2085,7 +2108,7 @@ function getModelRouteTags(
         ? {
             kind: 'approve',
             text: 'approve',
-            label: 'Auto-approve model (TypeSafe Jev decides first; used only if Jev fails)',
+            label: 'Auto-approve chat fallback (a decision model reviews first)',
             change: 'overridden',
           }
         : { kind: 'approve', text: 'approve', label: 'Auto-approve model' }

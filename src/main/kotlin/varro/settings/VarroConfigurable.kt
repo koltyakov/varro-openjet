@@ -186,6 +186,15 @@ class VarroConfigurable : BoundConfigurable("Varro") {
                     .bindSelected(settings::decisionsJevAutoApprove)
                     .comment("Only confident answers approve; anything else asks you. Connect it with <b>Add decision model</b> in the Varro Models view menu, or set <code>TYPESAFE_API_KEY</code>. Permission details are sent to TypeSafe.")
             }
+            row("Native decision model:") {
+                textField().bindText(settings::chatAutoApproveDecisionModel).columns(40)
+                    .comment("Optional provider/model. Requires OpenCode 2.2.0. Sends Auto-mode permission details using the server's base configuration and credentials, including remote servers. Errors fall back to Jev or the chat judge; empty disables it.")
+            }
+            row {
+                checkBox("Show experimental native decision models in the Models view")
+                    .bindSelected(settings::debugShowNativeDecisionModels)
+                    .comment("Debug only. Hiding this section does not disable a configured native reviewer.")
+            }
             row("Commit message model:") {
                 textField()
                     .bindText(settings::commitMessageModel)

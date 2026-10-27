@@ -136,6 +136,30 @@ class OpenCodeV2IntegrationTest {
             }
             assertNotNull(password.get())
             if (OpenCodeCli.compareVersions(version, "2.1.2") >= 0) verifyFreeModelExclusions(transport, root)
+            if (OpenCodeCli.compareVersions(version, "2.2.0") >= 0) {
+                val requestsBefore = providerRequests.get()
+                val native = varro.host.NativeDecisions({ transport.apiVersion }, { "" }, transport::request)
+                val nativeStatus = native.status()
+                assertEquals(nativeStatus.toString(), true, nativeStatus.bool("supported"))
+                assertNotNull(nativeStatus.arr("models")); assertTrue(nativeStatus.get("model").isJsonNull)
+                val limits = transport.request("GET", "/api/experimental/usage/limits", options =
+                    RequestOptions(directory = workspace.toString(), maxResponseBytes = 1024 * 1024)).data.asObjectOrNull()!!
+                assertTrue(limits.get("data").isJsonNull)
+                assertEquals(workspace.toString(), limits.obj("location").str("directory"))
+                val nonChat = Files.createDirectory(root.resolve("non-chat-models"))
+                Files.writeString(nonChat.resolve("opencode.json"), Json.stringify(Json.obj("providers" to Json.obj("non-chat-fixture" to Json.obj(
+                    "package" to "@opencode/ai/providers/openai-compatible",
+                    "settings" to Json.obj("baseURL" to "http://127.0.0.1:1/v1", "apiKey" to "fixture-only"),
+                    "models" to Json.obj("picture" to Json.obj("type" to "image"), "reviewer" to Json.obj("type" to "decision")),
+                )))))
+                for (route in listOf("/provider", "/config/providers")) {
+                    val catalog = transport.request("GET", route, options = RequestOptions(directory = nonChat.toString())).data.asObjectOrNull()
+                    val providers = catalog.arr(if (route == "/provider") "all" else "providers")!!
+                    val provider = providers.map { it.asJsonObject }.firstOrNull { it.str("id") == "non-chat-fixture" }
+                    assertTrue(provider.obj("models")?.size() in listOf(null, 0))
+                }
+                assertEquals(requestsBefore, providerRequests.get())
+            }
             if (OpenCodeCli.compareVersions(version, "2.0.29") >= 0) {
                 val config = transport.request("GET", "/config").data.asObjectOrNull()
                 assertTrue(config.arr("policies")!!.any { it.asObjectOrNull().str("resource") == "openai" })
@@ -156,6 +180,13 @@ class OpenCodeV2IntegrationTest {
             if (OpenCodeCli.compareVersions(version, "2.0.27") >= 0) {
                 assertEquals("One-shot requests: $generationCalls", "OpenJet stream verified.", generated)
                 assertEquals(1, providerRequests.get())
+                assertNull(oneShot.generate(2, "Must not reach the provider", Json.obj("providerID" to "fixture", "modelID" to "missing"),
+                    RequestOptions(directory = workspace.toString())))
+                assertEquals(1, providerRequests.get())
+                if (OpenCodeCli.compareVersions(version, "2.2.0") >= 0) {
+                    assertTrue(generationCalls.contains("POST /api/experimental/generate/text"))
+                    assertTrue(generationCalls.contains("404 Model not found: fixture/missing"))
+                }
             } else {
                 assertNull(generated)
                 assertEquals(0, providerRequests.get())

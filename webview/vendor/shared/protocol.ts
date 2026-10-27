@@ -233,6 +233,13 @@ export type AutoApproveJudgeResponse = {
 export const JEV_DECISION_PROVIDER_ID = 'typesafe';
 
 export type DecisionProviderStatus = {
+  native?: {
+    visible?: boolean;
+    supported: boolean;
+    model: { providerID: string; modelID: string } | null;
+    models: Array<{ providerID: string; modelID: string; name: string }>;
+    error?: string;
+  };
   jev: {
     connected: boolean;
     credentialSource: 'secret' | 'environment' | null;
@@ -242,6 +249,7 @@ export type DecisionProviderStatus = {
 };
 
 export type DecisionProviderRequest =
+  | { action: 'native'; model: string }
   | { action: 'connect' }
   | { action: 'disconnect' }
   | { action: 'update'; autoApprove?: boolean };

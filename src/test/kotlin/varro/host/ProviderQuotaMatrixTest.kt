@@ -7,6 +7,7 @@ import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import varro.host.quota.*
 import varro.protocol.*
+import varro.server.OpenCodeRequestException
 import java.nio.file.Files
 
 /** Exercises credential discovery and adapters together without live logins or provider traffic. */
@@ -60,6 +61,10 @@ class ProviderQuotaMatrixTest {
                         assertEquals("/fixture", directory)
                         Json.obj("providers" to listOf(Json.obj("id" to fixture.id, "integrationID" to "integration-${fixture.id}", "models" to JsonObject())))
                     }
+                    "/api/experimental/usage/limits" -> {
+                        assertEquals(2, version); assertEquals("opencode-go", fixture.id)
+                        throw OpenCodeRequestException("404 Not found") // Exercise the older-V2 local adapter.
+                    }
                     else -> error("Unexpected OpenCode request for $description")
                 }
             }, QuotaHttp { request ->
@@ -92,6 +97,10 @@ class ProviderQuotaMatrixTest {
             ProviderQuotaBackend(creds, { _, path, _, _ ->
                 when (path) {
                     "/config/providers" -> Json.obj("providers" to listOf(Json.obj("id" to fixture.id, "models" to JsonObject())))
+                    "/api/experimental/usage/limits" -> {
+                        assertEquals(2, version); assertEquals("opencode-go", fixture.id)
+                        throw OpenCodeRequestException("404 Not found")
+                    }
                     else -> error("Unexpected OpenCode request")
                 }
             }, QuotaHttp { QuotaResponse(401, "private provider response with fixture-secret".toByteArray()) },

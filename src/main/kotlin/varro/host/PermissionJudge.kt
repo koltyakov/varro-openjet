@@ -11,10 +11,11 @@ class PermissionJudge(
     private val request: (String, String, JsonElement?, Long) -> JsonElement?,
     private val hide: (String) -> Unit,
     private val jev: JevDecisions? = null,
+    private val native: NativeDecisions? = null,
 ) {
-    /** The reviewer the composer shows: Jev when it is enabled, otherwise the model judge. */
+    /** Display the configured reviewer even when its experimental Models section is hidden. */
     fun model(fallback: JsonObject? = null): JsonObject? =
-        jev?.takeIf { it.isAutoApproveEnabled() }?.model ?: judgeModel(fallback)
+        native?.model ?: jev?.takeIf { it.isAutoApproveEnabled() }?.model ?: judgeModel(fallback)
 
     private fun judgeModel(fallback: JsonObject?): JsonObject? {
         val configured = configuredModel().trim()
@@ -34,8 +35,16 @@ class PermissionJudge(
         if (permission.text("sessionID") == null || type.isEmpty()) return ask("Missing permission context.")
         if (type in SAFE) return Json.obj("decision" to "allow", "reason" to "Known read-only or session-local tool.")
         if (type == "external_directory") return ask("External directory access requires approval.")
-        // One budget covers Jev and the fallback so the webview's 20s review timeout never fires first.
+        // One budget covers native, Jev and chat fallback, below the webview's 20s timeout.
         val deadline = System.nanoTime() + 19_000_000_000L
+        native?.model?.let { selected ->
+            try {
+                return native.judgePermission(selected, permission, input.arr("approvedReferences") ?: JsonArray())
+                    .apply { add("reviewerModel", selected) }
+            } catch (failure: Exception) {
+                log.warn("Native decision judge failed; using configured fallback: ${failure.message}")
+            }
+        }
         if (jev != null && jev.isAutoApproveEnabled()) {
             try {
                 return jev.judgePermission(permission, input.arr("approvedReferences") ?: JsonArray())

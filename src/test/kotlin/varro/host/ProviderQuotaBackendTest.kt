@@ -200,7 +200,11 @@ class ProviderQuotaBackendTest {
 
     @Test fun `other attached providers and V1 do not read server or local credentials`() {
         for ((version, provider) in listOf(1 to "openai", 2 to "anthropic", 2 to "openrouter")) {
-            ProviderQuotaBackend(credentials(), { _, _, _, _ -> error("No server reads allowed") }, QuotaHttp { error("No HTTP allowed") },
+            ProviderQuotaBackend(credentials(), { _, path, _, _ ->
+                assertEquals(2, version)
+                assertEquals("/config/providers", path)
+                metadata(provider)
+            }, QuotaHttp { error("No HTTP allowed") },
                 apiVersion = { version }, attachOnly = { true }).use { backend ->
                 val result = backend.get(provider, null, null)
                 assertEquals("unsupported", result.str("status")); assertTrue(result.str("note")!!.contains("attach-only"))

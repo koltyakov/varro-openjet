@@ -104,6 +104,19 @@ class ServerOwnershipTest {
         } finally { pool.shutdownNow() }
     }
 
+    @Test fun `removed runtime config does not block handoff or relax process verification`() = fixture { shared, legacy, identity ->
+        val path = shared.resolve("varro-opencode-server-4096.json")
+        val config = shared.resolve("removed-runtime-config/opencode.json")
+        privateFile(path, Json.stringify(lease().apply { addProperty("configPath", config.toString()) }))
+        val manager = ServerOwnership(4096, shared, legacy, identity)
+        assertFalse(Files.exists(config))
+        assertTrue(manager.refresh(4096))
+        assertEquals(ServerOwnership.Connection(4096, "secret", "varro-user"), manager.connection())
+        identity.serverBirth = "darwin:reused-pid"
+        assertFalse(manager.refresh(4096, takeover = true))
+        assertEquals(config.toString(), ServerOwnership.record(path).str("configPath"))
+    }
+
     @Test fun `inspection failures and malformed records preserve evidence`() = fixture { shared, legacy, identity ->
         val path = shared.resolve("varro-opencode-server-4096.json")
         privateFile(Path.of("$path.managed"), Json.stringify(marker()))

@@ -20,17 +20,19 @@ internal class OneShotGeneration(
             if (failure.message?.startsWith("404 ") == true) return null
             throw failure
         }
-        if (specification.asObjectOrNull().obj("paths").obj(GENERATE_PATH).obj("post") == null) return null
+        val paths = specification.asObjectOrNull().obj("paths")
+        val generatePath = GENERATE_PATHS.firstOrNull { paths.obj(it).obj("post") != null } ?: return null
         options.checkCancelled()
         val response = try {
-            request("POST", GENERATE_PATH, Json.obj("prompt" to prompt, "model" to model?.let {
+            request("POST", generatePath, Json.obj("prompt" to prompt, "model" to model?.let {
                 Json.obj("providerID" to it.get("providerID"), "id" to it.get("modelID")).apply {
                     if (it.has("variant")) add("variant", it.get("variant"))
                 }
             }), options).data
         } catch (failure: OpenCodeRequestException) {
             options.checkCancelled()
-            if (model != null && failure.message == "400 Model unavailable: ${model.str("providerID")}/${model.str("modelID")}") return null
+            val route = "${model.str("providerID")}/${model.str("modelID")}"
+            if (model != null && failure.message in listOf("400 Model unavailable: $route", "404 Model not found: $route")) return null
             throw failure
         }
         options.checkCancelled()
@@ -38,5 +40,7 @@ internal class OneShotGeneration(
             ?: error("OpenCode returned an invalid one-shot generation response")
     }
 
-    companion object { private const val GENERATE_PATH = "/api/experimental/generate" }
+    companion object {
+        private val GENERATE_PATHS = listOf("/api/experimental/generate/text", "/api/experimental/generate")
+    }
 }

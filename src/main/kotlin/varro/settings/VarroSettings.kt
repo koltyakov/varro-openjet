@@ -65,6 +65,11 @@ class VarroSettings : PersistentStateComponent<VarroSettings> {
     /** `providerID/modelID` for the auto-approve judge; empty lets Varro pick. */
     var chatAutoApproveModel: String = ""
 
+    /** Explicit server-owned decision reviewer. Empty disables native decisions. */
+    var chatAutoApproveDecisionModel: String = ""
+    /** Hides only the experimental Models section, not a configured reviewer. */
+    var debugShowNativeDecisionModels: Boolean = false
+
     /** Direct API autocomplete; empty disables it. Requires an API key and OpenCode V2. */
     var chatPromptCompletionModel: String = ""
 

@@ -2198,8 +2198,7 @@ export function ChatInput(props: { newSession?: boolean; onBeforeSend?: () => vo
     if (
       explicitFile &&
       selectedLines.length > 0 &&
-      formatContextLineRanges(explicitFile.lineRanges) === formatContextLineRanges(selectedLines) &&
-      inputText().includes(`@${explicitFile.relativePath || explicitFile.path}`)
+      subtractContextLineRanges(selectedLines, explicitFile.lineRanges).length === 0
     ) {
       return null;
     }
@@ -2230,6 +2229,31 @@ export function ChatInput(props: { newSession?: boolean; onBeforeSend?: () => vo
         : ` · Current ${source} context is disabled. Click to enable it again`
     }`;
   });
+  const canPinActiveContext = () => {
+    const context = activeContext();
+    if (!context || context.icon === 'table') return false;
+    if (!composerActiveFile()?.path) return false;
+    const explicitFile = explicitContextForActiveFile();
+    if (!explicitFile) return true;
+    return (
+      !!explicitFile.lineRanges?.length &&
+      subtractContextLineRanges(
+        getSelectionRangesFromEditorContext(composerSelection()),
+        explicitFile.lineRanges
+      ).length > 0
+    );
+  };
+  const pinActiveContext = () => {
+    const file = composerActiveFile();
+    if (!file?.path) return;
+    const lineRanges = getSelectionRangesFromEditorContext(composerSelection());
+    addContextFile({
+      path: file.path,
+      relativePath: file.relativePath,
+      type: 'file',
+      lineRanges: lineRanges.length > 0 ? lineRanges : undefined,
+    });
+  };
   const hasAttachmentStripItems = () =>
     !!composerExtensionContexts()?.length ||
     !!activeContext() ||
@@ -2838,7 +2862,13 @@ export function ChatInput(props: { newSession?: boolean; onBeforeSend?: () => vo
 
       if (e.key === 'Tab') {
         e.preventDefault();
+        const items = composerCompletions();
+        const item = items[Math.min(completionIndex(), items.length - 1)];
         void applyActiveCompletion();
+        setSuppressCompletion(
+          item?.type !== 'slash' ||
+            (item.name !== SKILLS_COMMAND_NAME && item.name !== PROBLEMS_COMMAND_NAME)
+        );
         return;
       }
 
@@ -2860,7 +2890,7 @@ export function ChatInput(props: { newSession?: boolean; onBeforeSend?: () => vo
         e.preventDefault();
         const items = composerCompletions();
         const item = items[Math.min(completionIndex(), items.length - 1)];
-        void applyActiveCompletion(item?.type === 'slash' && !item.acceptsArguments);
+        void applyActiveCompletion();
         setSuppressCompletion(
           item?.type !== 'slash' ||
             (item.name !== SKILLS_COMMAND_NAME && item.name !== PROBLEMS_COMMAND_NAME)
@@ -2967,11 +2997,11 @@ export function ChatInput(props: { newSession?: boolean; onBeforeSend?: () => vo
     });
   }
 
-  async function applyActiveCompletion(confirm = false) {
+  async function applyActiveCompletion() {
     const completion = activeCompletion();
     const items = composerCompletions();
     const item = items[Math.min(completionIndex(), items.length - 1)];
-    const completionSelection = getCompletionSelection(completion, item, confirm);
+    const completionSelection = getCompletionSelection(completion, item);
     if (!completionSelection) return;
     if (completionSelection.type === 'attach-problems') {
       attachPickedProblems(completionSelection.diagnostic);
@@ -6512,6 +6542,7 @@ export function ChatInput(props: { newSession?: boolean; onBeforeSend?: () => vo
               nativePdfsSupported={currentModelSupportsPdf()}
               clipboardImagesNeedVision={clipboardImagesNeedVision()}
               onToggleActiveContext={() => toggleCurrentDocumentEnabled(composerSessionId())}
+              onPinActiveContext={canPinActiveContext() ? pinActiveContext : undefined}
               onClearTerminalSelection={() => postMessage({ type: 'terminal-selection/clear' })}
               onClearDiagnostics={() => setState('attachedDiagnostics', null)}
               onRemoveFile={(path) => {
@@ -6734,7 +6765,7 @@ export function ChatInput(props: { newSession?: boolean; onBeforeSend?: () => vo
             }}
             onSelectCompletion={(item) => {
               const completion = activeCompletion();
-              const completionSelection = getCompletionSelection(completion, item, true);
+              const completionSelection = getCompletionSelection(completion, item);
               if (!completionSelection) return;
               if (completionSelection.type === 'attach-problems') {
                 attachPickedProblems(completionSelection.diagnostic);
@@ -6749,6 +6780,10 @@ export function ChatInput(props: { newSession?: boolean; onBeforeSend?: () => vo
               if (completionSelection.type === 'set-slash') {
                 if (completion?.type !== 'slash') return;
                 applySlashCompletionValue(completion, completionSelection.value);
+                setSuppressCompletion(
+                  item.type !== 'slash' ||
+                    (item.name !== SKILLS_COMMAND_NAME && item.name !== PROBLEMS_COMMAND_NAME)
+                );
                 return;
               }
 

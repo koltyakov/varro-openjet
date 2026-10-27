@@ -9,6 +9,7 @@ internal object SharedCoreSettings {
     private val names = setOf(
         "serverPort", "serverCommand", "serverAutoUpdate", "serverAutoStart",
         "chatDefaultPermissionMode", "chatAutoApproveModel", "chatPromptCompletionModel", "commitMessageModel",
+        "chatAutoApproveDecisionModel",
         "chatFollowupsEnabled", "chatFollowupModel",
         "chatAutoRenameUntitledSessions", "chatEnableAskAgent",
     )

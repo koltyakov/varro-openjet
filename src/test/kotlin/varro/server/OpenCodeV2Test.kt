@@ -140,6 +140,49 @@ class OpenCodeV2Test {
         }
     }
 
+    @Test fun `modern chat catalog is authoritative but keeps config labels and deny filtering`() {
+        for (version in listOf("2.1.4", "2.2.0", "2.2.1")) {
+            val native = adapter { _, path, _ -> when (path) {
+                "/api/model" -> Json.obj("data" to listOf(Json.obj("id" to "chat", "providerID" to "custom",
+                    "limit" to Json.obj("context" to 32000, "output" to 1000))))
+                "/api/provider" -> Json.obj("data" to listOf(Json.obj("id" to "custom"), Json.obj("id" to "denied")))
+                "/api/integration" -> Json.obj("data" to emptyList<Any>())
+                "/api/config" -> Json.obj("data" to listOf(Json.obj("info" to Json.obj(
+                    "policies" to listOf(Json.obj("action" to "provider.use", "resource" to "denied", "effect" to "deny")),
+                    "providers" to Json.obj("custom" to Json.obj("models" to Json.obj(
+                        "chat" to Json.obj("limit" to Json.obj("context" to 64000)),
+                        "missing" to Json.obj(), "image" to Json.obj("type" to "image"), "judge" to Json.obj("type" to "decision"))),
+                        "unavailable" to Json.obj("models" to Json.obj("missing" to Json.obj())), "denied" to Json.obj())))))
+                else -> error(path)
+            } }
+            native.setServerVersion(version)
+            for (route in listOf("/provider", "/config/providers")) {
+                val catalog = native.request("GET", route, null, RequestOptions()).data.asObjectOrNull()
+                val providers = catalog.arr(if (route == "/provider") "all" else "providers")!!.map { it.asJsonObject }
+                assertFalse(providers.any { it.str("id") == "denied" })
+                assertEquals(version == "2.1.4", providers.any { it.str("id") == "unavailable" })
+                val custom = providers.single { it.str("id") == "custom" }
+                assertEquals("config", custom.str("source"))
+                val models = custom.obj("models")!!
+                assertFalse(models.has("image")); assertFalse(models.has("judge"))
+                assertEquals(version == "2.1.4", models.has("missing"))
+                assertEquals(if (version == "2.1.4") 64000 else 32000, models.obj("chat").obj("limit").int("context"))
+            }
+        }
+    }
+
+    @Test fun `session results omit transcript generation timing without changing stored annotations`() {
+        val state = OpenCodeV2SessionState(temporary.newFolder().toPath())
+        state.update("ses_test", Json.obj("generationTiming" to Json.obj("msg_test" to Json.obj("elapsed" to 10)), "metadata" to Json.obj("kept" to true)))
+        val native = OpenCodeV2Adapter({ _, path, _, _ -> OpenCodeResponse(when (path) {
+            "/api/session/ses_test" -> Json.obj("data" to Json.obj("id" to "ses_test", "title" to "Fixture", "time" to Json.obj("created" to 1, "updated" to 2)))
+            else -> error(path)
+        }) }, state)
+        val result = native.request("GET", "/session/ses_test", null, RequestOptions()).data.asObjectOrNull()!!
+        assertFalse(result.has("generationTiming")); assertTrue(result.obj("metadata").bool("kept")!!)
+        assertTrue(state.read("ses_test").has("generationTiming"))
+    }
+
     @Test fun `startup credentials are redacted across every chunk boundary`() {
         val text = "server listening on http://127.0.0.1:1234\nserver password secret-value\nready\n"
         for (split in 0..text.length) {

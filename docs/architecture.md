@@ -131,7 +131,8 @@ With automatic startup disabled and no managed process, the connection is attach
 Attach-only V2 connections can read OpenAI subscription quotas using the active
 OpenAI OAuth credential from the authenticated server's `/api/credential` endpoint.
 This exception never reads the IDE's credential database, Codex files or environment
-tokens, and never grants stop, restart or maintenance rights. Other attached
+tokens, and never grants stop, restart or maintenance rights. Console/Go providers
+also support server-owned limits on 2.2.0 and newer. Other attached
 providers and V1 still report unsupported. Missing API support or a failed credential
 read does not fall back to a local account.
 
@@ -288,13 +289,28 @@ Only ready views can own automatic permission handling, with the tool window pre
 
 `PermissionJudge` handles known read-only tools locally and can review other requests through a hidden child session with tools denied except structured output. It asks on invalid responses or review failures. The model selection checks the configured judge model, OpenCode's `small_model`, then a supplied fallback.
 
+`NativeDecisions` adds an explicit server-hosted reviewer before legacy Jev and the chat judge.
+`chatAutoApproveDecisionModel` is empty by default and may be shared across IDEs. It uses the
+server's base configuration and credentials, including attached servers, not local credentials or
+the project's model override. Endpoint and decision-catalog discovery are bounded to five seconds.
+Typed predicate/choice answers pass the same conservative probability gates as Jev. Errors fall
+back; an `ask` answer is terminal. `debugShowNativeDecisionModels` only controls the experimental
+Models section and stays IDE-local. Hiding the section does not disable a configured reviewer.
+No legacy setting or credential is migrated.
+
+On OpenCode 2.2.0 and newer, native chat catalogs are authoritative. Config fallback cannot restore
+non-chat models or unavailable providers, or replace server-projected model limits. Older V2
+retains custom model fallback but skips explicit non-chat types. Config source labels and deny
+filters still apply. Session catalog responses omit private `generationTiming` annotations without
+changing their stored transcript data.
+
 ## Session summaries and usage
 
 `SessionSummaryService` tries local SQLite history through `LocalSessionSummary` and can fall back to REST. `SessionSummary` computes session-tree token totals, duration and file changes. `UsageReport` reads retained cross-project history through `LocalUsageDatabase` without starting OpenCode, with a bounded REST fallback when local history is unavailable.
 
 V2 pause markers live in `metadata.varro.pauses`, backed by the shared per-session annotation files. `SessionPauses` caps work periods at these markers in summaries and usage reports. REST summaries read current session metadata, and local usage reads V2 annotations alongside database records.
 
-`CommitMessageService` probes `/openapi.json` on V2 before using `/api/experimental/generate`. It uses the existing helper-session flow when the operation is absent or the server rejects the selected model before generation. Provider errors, malformed replies and ambiguous failures do not trigger a second generation.
+`CommitMessageService` probes `/openapi.json` on V2 and prefers `/api/experimental/generate/text`, using the legacy `/api/experimental/generate` path only when the canonical path is absent. It uses the existing helper-session flow when the operation is absent or the server rejects the selected model before generation with the exact 400 unavailable or 404 model-not-found result. Provider errors, malformed replies and ambiguous failures do not trigger a second generation, including through the alias.
 
 ## Authorization boundary
 
@@ -326,6 +342,15 @@ The memory cache holds at most 64 successful thumbnails and 4 MiB of accounted s
 `OpenCodeHostServices.providerLimit` delegates to the project-owned Kotlin `ProviderQuotaBackend`. It runs polls on virtual threads and uses IntelliJ `HttpRequests`, including the IDE's HTTP proxy and certificate configuration. Requests have connection/read timeouts, bounded response bodies, and disabled redirects.
 
 Metadata reads and V1 xAI refreshed-auth writes go through `OpenCodeTransport`, preserving workspace scope. V1 reads `auth.json` from OpenCode's XDG data directory. Like upstream Varro, V2 opens `opencode.db` read-only, using `OPENCODE_DB` when set or the OpenCode XDG data directory otherwise. `OpenCodeV2QuotaCredentials` selects by active status, newest creation time, then descending ID. It scopes queries to the requested provider's integration and shared credential aliases, maps integration IDs to providers, and preserves OAuth account metadata. V2 never substitutes stale V1 credentials, and OpenCode owns its OAuth rotation. Metadata-only and local IPC adapters do not need the OpenCode credential store. Adapters also support provider configuration/environment and provider credential files. Local Claude credential refresh compares the previous refresh token and replaces the file atomically while preserving unrelated fields. Credentials never enter the webview.
+
+V2 Console/Go providers and providers with the `opencode` integration first request
+`/api/experimental/usage/limits` with their workspace directory and a 1 MiB response limit.
+This works in attach-only mode and precedes all local credential reads. Only the exact generic
+route 404 permits a legacy local adapter. A location 404, malformed payload, sign-out or other
+server error cannot switch accounts. `OpenCodeUsageLimits` validates finite allowance/budget
+values, keeps Go windows separate from Console-wide budgets and uses the selected model's
+spend for per-model budgets, including zero for an absent counter. Sign-out clears the last-good
+snapshot. Server failures may retain a bounded prior snapshot, never local-account data.
 
 Caches are model/workspace scoped and fingerprint credential identity before reuse. Concurrent requests for the same key share a poll. HTTP 429 errors use exponential backoff, and provider errors can use a last-successful snapshot for at most 15 minutes. Configuration changes retire in-flight generations so their results cannot overwrite refreshed state. Cache coordination is project-local rather than shared through upstream's cross-process snapshot files.
 

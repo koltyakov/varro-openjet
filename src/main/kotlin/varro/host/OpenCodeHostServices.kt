@@ -47,6 +47,8 @@ class OpenCodeHostServices(
         onUpdate = onProviderLimitUpdate,
         apiVersion = { server.transport.apiVersion },
         attachOnly = server::isAttachOnly,
+        requestUsageLimits = { directory -> server.transport.request("GET", "/api/experimental/usage/limits", options =
+            RequestOptions(directory = directory, maxResponseBytes = 1024 * 1024)).data },
     )
 
     fun clearProviderQuotaCache() {
@@ -256,6 +258,12 @@ class OpenCodeHostServices(
 
     // --- Automatic permission approval ----------------------------------------
 
+    private val nativeDecisions = NativeDecisions(
+        apiVersion = { server.transport.apiVersion },
+        configuredModel = { settings.chatAutoApproveDecisionModel },
+        request = server.transport::request,
+    )
+
     private val decisionProviders = DecisionProviders(
         settings = settings,
         ui = object : DecisionProviders.Ui {
@@ -276,6 +284,7 @@ class OpenCodeHostServices(
         onChanged = {
             ApplicationManager.getApplication().messageBus.syncPublisher(VarroSettings.TOPIC).settingsChanged()
         },
+        native = nativeDecisions,
     )
 
     override fun decisionProviders(method: String, body: JsonElement?): JsonObject =
@@ -291,6 +300,7 @@ class OpenCodeHostServices(
             synchronized(store) { store.hiddenSessionIds = store.hiddenSessionIds + id }
         },
         jev = JevDecisions(JevClient(decisionProviders::apiKey), decisionProviders::readSettings, decisionProviders::hasApiKey),
+        native = nativeDecisions,
     )
 
     override fun judgePermission(body: JsonElement?): JsonObject = judge.judge(body)

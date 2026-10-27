@@ -8,6 +8,8 @@ import com.intellij.ide.passwordSafe.PasswordSafe
 import varro.protocol.Json
 import varro.protocol.asObjectOrNull
 import varro.protocol.bool
+import varro.protocol.arr
+import varro.protocol.obj
 import varro.protocol.str
 import varro.settings.VarroSettings
 
@@ -23,6 +25,7 @@ internal class DecisionProviders(
     private val ui: Ui,
     private val onChanged: () -> Unit = {},
     private val createClient: (String) -> JevClient = { apiKey -> JevClient({ apiKey }) },
+    private val native: NativeDecisions? = null,
 ) {
     interface SecretStore {
         fun get(): String?
@@ -54,12 +57,29 @@ internal class DecisionProviders(
             "credentialSource" to source,
             "model" to current.model,
             "autoApprove" to current.autoApprove,
-        ))
+        )).apply {
+            native?.status()?.let { add("native", it.apply { addProperty("visible", settings.debugShowNativeDecisionModels) }) }
+        }
     }
 
     fun handle(body: JsonElement?): JsonObject {
         val request = body.asObjectOrNull()
         when (request.str("action")) {
+            "native" -> {
+                val model = request.str("model") ?: throw IllegalArgumentException("Invalid decision model")
+                require(model.length <= 500) { "Invalid decision model" }
+                if (model.isNotEmpty()) {
+                    val status = native?.status()
+                    require(status.bool("supported") == true && status.arr("models")?.any {
+                        val entry = it.asObjectOrNull()
+                        "${entry.str("providerID")}/${entry.str("modelID")}" == model
+                    } == true) { "Select an available OpenCode decision model" }
+                }
+                if (settings.chatAutoApproveDecisionModel != model) {
+                    settings.chatAutoApproveDecisionModel = model
+                    onChanged()
+                }
+            }
             "connect" -> connect()
             "disconnect" -> secrets.set(null)
             "update" -> request.bool("autoApprove")?.let { enabled ->
