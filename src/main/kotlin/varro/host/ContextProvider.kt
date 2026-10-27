@@ -5,6 +5,7 @@ import com.google.gson.JsonObject
 import com.intellij.codeInsight.daemon.DaemonCodeAnalyzer
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.editor.Document
 import com.intellij.openapi.editor.Editor
 import com.intellij.openapi.editor.event.CaretEvent
 import com.intellij.openapi.editor.event.CaretListener
@@ -20,6 +21,7 @@ import com.intellij.openapi.fileEditor.TextEditor
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.project.guessProjectDir
 import com.intellij.openapi.roots.ProjectRootManager
+import com.intellij.openapi.util.TextRange
 import com.intellij.openapi.vfs.VirtualFile
 import com.intellij.util.Alarm
 import varro.protocol.Json
@@ -301,9 +303,8 @@ class ContextProvider(private val project: Project, private val hasConsumers: ()
     }
 
     /**
-     * The selected text itself, or the whole buffer when it is unsaved. An unsaved
-     * buffer is the one case where reading the file from disk would give the model
-     * something different from what the user is looking at.
+     * Only unsaved text needs an inline snapshot. Saved selections use file line
+     * references, which the composer can deduplicate against pinned selections.
      */
     private fun editorText(editor: Editor?, file: VirtualFile?, workspacePath: String?): JsonObject? {
         if (editor == null) return null
@@ -311,31 +312,13 @@ class ContextProvider(private val project: Project, private val hasConsumers: ()
         val document = editor.document
         val unsaved = file != null && FileDocumentManager.getInstance().isDocumentUnsaved(document)
 
-        val (kind, text, startLine, endLine, truncated) = when {
-            model.hasSelection() -> {
-                val start = document.getLineNumber(model.selectionStart) + 1
-                val end = document.getLineNumber(model.selectionEnd) + 1
-                TextSlice("selection", boundedText(document.immutableCharSequence, model.selectionStart, model.selectionEnd), start, end,
-                    model.selectionEnd - model.selectionStart > MAX_EDITOR_TEXT)
-            }
-            unsaved -> TextSlice("dirty-buffer", boundedText(document.immutableCharSequence, 0, document.textLength),
-                1, document.lineCount.coerceAtLeast(1), document.textLength > MAX_EDITOR_TEXT)
-            else -> return null
+        val selected = if (model.hasSelection()) TextRange(model.selectionStart, model.selectionEnd) else null
+        return editorTextSlice(document, selected, unsaved)?.apply {
+            addProperty("path", file?.path)
+            addProperty("relativePath", file?.let { WorkspacePaths.relativeWithin(it.path, workspacePath) ?: it.name } ?: "")
+            addProperty("language", file?.let { languageId(it) } ?: "plaintext")
         }
-        if (text.isEmpty()) return null
-
-        return Json.obj(
-            "kind" to kind,
-            "path" to file?.path,
-            "relativePath" to (file?.let { WorkspacePaths.relativeWithin(it.path, workspacePath) ?: it.name } ?: ""),
-            "language" to (file?.let { languageId(it) } ?: "plaintext"),
-            "range" to Json.obj("startLine" to startLine, "endLine" to endLine),
-            "text" to text,
-            "truncated" to truncated,
-        )
     }
-
-    private data class TextSlice(val kind: String, val text: String, val startLine: Int, val endLine: Int, val truncated: Boolean)
 
     private fun languageId(file: VirtualFile): String =
         file.fileType.name.lowercase().ifBlank { file.extension ?: "plaintext" }
@@ -344,6 +327,25 @@ class ContextProvider(private val project: Project, private val hasConsumers: ()
 
     companion object {
         private const val MAX_EDITOR_TEXT = 100_000
+
+        internal fun editorTextSlice(document: Document, selection: TextRange?, unsaved: Boolean): JsonObject? {
+            if (!unsaved) return null
+            val selected = selection?.takeUnless { it.isEmpty }
+            val start = selected?.startOffset ?: 0
+            val end = selected?.endOffset ?: document.textLength
+            val text = boundedText(document.immutableCharSequence, start, end)
+            if (text.isEmpty()) return null
+            return Json.obj(
+                "kind" to if (selected != null) "selection" else "dirty-buffer",
+                "range" to Json.obj(
+                    "startLine" to (document.getLineNumber(start) + 1),
+                    "endLine" to if (selected != null) document.getLineNumber(end - 1) + 1 else document.lineCount.coerceAtLeast(1),
+                ),
+                "text" to text,
+                "truncated" to (end - start > MAX_EDITOR_TEXT),
+            )
+        }
+
         internal fun boundedText(text: CharSequence, start: Int, end: Int): String =
             text.subSequence(start, minOf(end, start + MAX_EDITOR_TEXT)).toString()
     }

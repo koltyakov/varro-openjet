@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { DroppedFile, EditorContext } from '../vendor/shared/protocol';
+import { subtractContextLineRanges } from '../vendor/shared/context-files';
 import {
   buildSessionSendBody,
   SessionSendOperations,
@@ -43,6 +44,33 @@ afterEach(() => {
 });
 
 describe('context attachment settings', () => {
+  it('omits saved current selections already covered by pinned ranges', () => {
+    const state = composer({
+      ...editorContext,
+      selection: { startLine: 121, endLine: 122 },
+      editorText: null,
+    });
+    state.autoAttachActiveFile = true;
+    const pinnedRanges = [
+      { startLine: 111, endLine: 112 },
+      { startLine: 121, endLine: 122 },
+    ];
+    state.droppedFiles = [{ ...activeFile, type: 'file', lineRanges: pinnedRanges }];
+    expect(subtractContextLineRanges([state.editorContext.selection!], pinnedRanges)).toEqual([]);
+    const send = () => buildSessionSendBody(state, 'ses-test', 'Review', () => true)?.body.parts;
+    expect(send()).toEqual([
+      { type: 'text', text: 'Review' },
+      { type: 'text', text: '[Selection from app.kt lines 111-112, 121-122]' },
+    ]);
+
+    state.editorContext.selection = { startLine: 125, endLine: 126 };
+    expect(send()).toEqual([
+      { type: 'text', text: 'Review' },
+      { type: 'text', text: '[Selection from app.kt lines 125-126]' },
+      { type: 'text', text: '[Selection from app.kt lines 111-112, 121-122]' },
+    ]);
+  });
+
   it.each([false, true])(
     'omits automatic context and keeps manual files, unsaved=%s',
     (unsaved) => {
