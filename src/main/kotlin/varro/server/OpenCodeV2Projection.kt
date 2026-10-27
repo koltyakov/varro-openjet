@@ -132,7 +132,10 @@ internal object OpenCodeV2Projection {
                         "content" to listOf(Json.obj("type" to "text", "text" to output)), "metadata" to Json.obj("output" to output))))), sessionID, directory, parentID, context)
         }
         val assistant = type == "assistant" || type == "idle"
-        val model = value.obj("model") ?: context.obj("model")
+        // Status records have no model of their own and cannot establish a partial identity.
+        val model = if (type == "idle") context.obj("model")?.takeIf {
+            !it.str("providerID").isNullOrEmpty() && !it.str("id").isNullOrEmpty()
+        } else value.obj("model") ?: context.obj("model")
         val info = Json.obj("id" to id, "sessionID" to sessionID, "time" to time, "role" to if (assistant) "assistant" else "user",
             "agent" to (value.str("agent") ?: context.str("agent").orEmpty()))
         val parts = mutableListOf<JsonObject>()

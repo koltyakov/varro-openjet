@@ -28,6 +28,7 @@ internal class FollowupService(
     private val attempts = linkedMapOf<String, Attempt>()
     private class Attempt(val sessionKey: String, val digest: String) {
         val aborted = AtomicBoolean(false)
+        var keepAlive = false
         val subscribers = ConcurrentHashMap<Any, () -> Boolean>()
         val result = CompletableFuture<JsonObject>()
     }
@@ -46,13 +47,21 @@ internal class FollowupService(
         val digest = hash(source)
         val subscriber = Any()
         try {
+            // Waiting on another host's disk admission must not hold the local attempt monitor.
+            val existing = synchronized(this) { attempts[key] }
+            if (existing != null && existing.digest != digest) return Followups.empty()
+            val cached = if (existing == null) readCached(key, digest, RequestOptions(
+                deadlineNanos = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(generationTimeoutMs),
+                isCancelled = { isCancelled() || !isModelCurrent() },
+            )) else null
+            val cachedResult = cached?.let {
+                if (it.arr("actions")!!.isEmpty || sourceIsCurrent(sessionId, source, readOptions(directory, isCancelled))) it else Followups.empty()
+            }
             val attempt = synchronized(this) {
                 var current = attempts[key]
                 if (current != null && current.digest != digest) return Followups.empty()
                 if (current == null) {
-                    val cached = cache.get(key, digest)
-                    if (cached != null) return if (cached.arr("actions")!!.isEmpty ||
-                        sourceIsCurrent(sessionId, source, readOptions(directory, isCancelled))) cached else Followups.empty()
+                    if (cachedResult != null) return if (isCancelled() || !isModelCurrent()) Followups.empty() else cachedResult
                     if (!allowGenerate || isCancelled() || !isModelCurrent()) return Followups.empty()
                     while (attempts.size >= 32) attempts.remove(attempts.keys.first())?.aborted?.set(true)
                     current = Attempt(sessionKey(sessionId, directory), digest)
@@ -63,12 +72,16 @@ internal class FollowupService(
                         val options = RequestOptions(directory = directory, maxResponseBytes = 512 * 1024,
                             deadlineNanos = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(generationTimeoutMs),
                             isCancelled = { started.aborted.get() || !isModelCurrent() ||
-                                started.subscribers.values.none { !it() } })
-                        val result = try { generate(sessionId, source, model, key, digest, started.sessionKey, options, isModelCurrent) }
+                                synchronized(this) { !started.keepAlive && started.subscribers.values.none { !it() } } })
+                        val result = try { generate(sessionId, source, model, key, digest, started, options, isModelCurrent) }
                         catch (_: Exception) {
                             // Never log conversation text, generated output or provider error bodies.
                             log.info("Follow-ups failed: ${if (started.aborted.get() || options.isCancelled()) "cancelled" else if (System.nanoTime() >= options.deadlineNanos!!) "timeout" else "request-or-validation-error"}")
                             Followups.empty()
+                        }
+                        synchronized(this) {
+                            // Unadmitted transient failures must not suppress a later request.
+                            if (!started.keepAlive && attempts[key] === started) attempts.remove(key)
                         }
                         started.result.complete(result)
                     }
@@ -88,7 +101,10 @@ internal class FollowupService(
             } finally {
                 synchronized(this) {
                     attempt.subscribers.remove(subscriber)
-                    if (attempt.subscribers.isEmpty()) attempt.aborted.set(true)
+                    if (attempt.subscribers.isEmpty() && !attempt.keepAlive) {
+                        attempt.aborted.set(true)
+                        if (attempts[key] === attempt) attempts.remove(key)
+                    }
                 }
             }
         } catch (_: Exception) {
@@ -112,19 +128,41 @@ internal class FollowupService(
     }
 
     private fun generate(sessionId: String, source: JsonObject, model: JsonObject, key: String,
-                         digest: String, sessionKey: String, options: RequestOptions, isModelCurrent: () -> Boolean): JsonObject {
+                          digest: String, attempt: Attempt, options: RequestOptions, isModelCurrent: () -> Boolean): JsonObject {
         if (!isModelCurrent() || !waitForIdle(sessionId, options) || !sourceIsCurrent(sessionId, source, options) || !isModelCurrent()) return Followups.empty()
+        synchronized(this) {
+            options.checkCancelled()
+            // Once admission starts, view disposal cannot cancel this bounded generation.
+            attempt.keepAlive = true
+        }
         // Commit before inference, even if inference subsequently fails or is cancelled.
-        if (!cache.claim(key, digest, sessionKey)) return cache.get(key, digest) ?: Followups.empty()
-        options.checkCancelled()
-        val generated = OneShotGeneration(request).generate(apiVersion(), prompt(source), model, options.copy(maxResponseBytes = 16 * 1024))
-            ?: return Followups.empty()
-        val suggestions = Followups.suggestions(generated)
-        options.checkCancelled()
-        if (!isModelCurrent() || !sourceIsCurrent(sessionId, source, options)) return Followups.empty()
-        cache.complete(key, digest, suggestions)
-        log.info("Follow-ups generation completed: actions=${suggestions.arr("actions")!!.size()}")
-        return suggestions
+        if (!cache.claim(key, digest, attempt.sessionKey)) return readCached(key, digest, options) ?: Followups.empty()
+        var completed = false
+        try {
+            options.checkCancelled()
+            val generated = OneShotGeneration(request).generate(apiVersion(), prompt(source), model, options.copy(maxResponseBytes = 16 * 1024))
+                ?: return Followups.empty()
+            val suggestions = Followups.suggestions(generated)
+            options.checkCancelled()
+            if (!isModelCurrent() || !sourceIsCurrent(sessionId, source, options)) return Followups.empty()
+            cache.complete(key, digest, suggestions)
+            completed = true
+            log.info("Follow-ups generation completed: actions=${suggestions.arr("actions")!!.size()}")
+            return suggestions
+        } finally {
+            if (!completed) cache.complete(key, digest, Followups.empty())
+        }
+    }
+
+    private fun readCached(key: String, digest: String, options: RequestOptions): JsonObject? {
+        while (true) {
+            options.checkCancelled()
+            when (val state = cache.getState(key, digest)) {
+                null -> return null
+                is FollowupCache.State.Complete -> return state.suggestions
+                FollowupCache.State.Pending -> Thread.sleep(100)
+            }
+        }
     }
 
     private fun waitForIdle(sessionId: String, options: RequestOptions): Boolean {

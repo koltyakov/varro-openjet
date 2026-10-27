@@ -660,7 +660,7 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  width: 100%;
+  width: fit-content;
   height: 14px;
   max-width: 100%;
   min-height: 0;

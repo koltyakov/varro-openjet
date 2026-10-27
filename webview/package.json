@@ -22,7 +22,7 @@
     "highlight.js": "11.12.0",
     "jsonc-parser": "3.3.1",
     "katex": "0.19.1",
-    "marked": "18.1.1",
+    "marked": "18.1.2",
     "mermaid": "^12.2.0",
     "solid-js": "^1.9.17"
   },
@@ -31,7 +31,7 @@
     "@types/node": "26.6.5",
     "@tailwindcss/vite": "4.3.3",
     "iconoir": "7.12.1",
-    "material-icon-theme": "5.39.0",
+    "material-icon-theme": "5.40.0",
     "tailwindcss": "4.3.3",
     "typescript": "7.0.2",
     "vite": "8.3.5",
@@ -45,7 +45,7 @@
     "seroval": "1.6.8"
   },
   "volta": {
-    "node": "24.22.0",
+    "node": "24.22.1",
     "npm": "12.2.1"
   },
   "allowScripts": {

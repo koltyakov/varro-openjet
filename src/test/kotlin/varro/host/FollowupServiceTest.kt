@@ -112,11 +112,38 @@ class FollowupServiceTest {
             assertEquals(Followups.empty(), busy.suggest(service))
             assertEquals(0, busy.posts())
             assertFalse(Files.exists(busy.cache.path))
-            // A changed server/configuration can retry an unadmitted turn, never a billed one.
-            service.invalidate()
+            // A transient pre-admission failure can retry without a server/configuration reset.
             busy.busyReads = 0
             assertEquals(suggestions, busy.suggest(service))
             assertEquals(1, busy.posts())
+        }
+    }
+
+    @Test fun `transient source mismatch does not suppress a later request for the same turn`() {
+        val fixture = Fixture().apply { answer = "Temporarily stale" }
+        fixture.service().use { service ->
+            assertEquals(Followups.empty(), fixture.suggest(service))
+            assertFalse(Files.exists(fixture.cache.path))
+            fixture.answer = source.str("answer")!!
+            assertEquals(suggestions, fixture.suggest(service))
+            assertEquals(1, fixture.posts())
+        }
+    }
+
+    @Test(timeout = 10_000) fun `last subscriber cancellation before admission permits a fresh attempt`() {
+        val fixture = Fixture().apply { statusGate = CountDownLatch(1) }
+        val cancelled = AtomicBoolean(false)
+        Executors.newVirtualThreadPerTaskExecutor().use { executor ->
+            fixture.service().use { service ->
+                val first = executor.submit<JsonObject> { service.suggest("s", source, model, "/repo", true, cancelled::get) }
+                assertTrue(fixture.readingStatus.await(2, TimeUnit.SECONDS))
+                cancelled.set(true)
+                assertEquals(Followups.empty(), first.get(2, TimeUnit.SECONDS))
+                assertFalse(Files.exists(fixture.cache.path))
+                fixture.statusGate!!.countDown()
+                assertEquals(suggestions, fixture.suggest(service))
+                assertEquals(1, fixture.posts())
+            }
         }
     }
 
@@ -161,14 +188,66 @@ class FollowupServiceTest {
             fixture.service().use { first -> fixture.service().use { second ->
                 val results = listOf(first, second).map { service -> executor.submit<JsonObject> { fixture.suggest(service) } }
                     .map { it.get(3, TimeUnit.SECONDS) }
-                assertTrue(results.any { it == suggestions })
+                assertTrue(results.all { it == suggestions })
                 assertEquals(1, fixture.posts())
             } }
         }
     }
 
-    @Test(timeout = 10_000) fun `timeouts last-subscriber cancellation and stale postconditions never retry a billed turn`() {
-        for (kind in listOf("timeout", "cancel", "stale", "invalidated", "preferences")) {
+    @Test(timeout = 10_000) fun `another host waits for admitted generation even after the originating view closes`() {
+        for (cancelOrigin in listOf(false, true)) {
+            val fixture = Fixture().apply { gate = CountDownLatch(1) }
+            val cancelled = AtomicBoolean(false)
+            val waiting = CountDownLatch(1)
+            val checks = java.util.concurrent.atomic.AtomicInteger()
+            Executors.newVirtualThreadPerTaskExecutor().use { executor ->
+                fixture.service().use { owner -> fixture.service().use { reader ->
+                    val first = executor.submit<JsonObject> { owner.suggest("s", source, model, "/repo", true, cancelled::get) }
+                    assertTrue(fixture.generating.await(2, TimeUnit.SECONDS))
+                    val second = executor.submit<JsonObject> { reader.suggest("s", source, model, "/repo", false,
+                        isCancelled = { if (checks.incrementAndGet() >= 3) waiting.countDown(); false }) }
+                    assertTrue(waiting.await(2, TimeUnit.SECONDS))
+                    assertFalse(second.isDone)
+                    if (cancelOrigin) {
+                        cancelled.set(true)
+                        assertEquals(Followups.empty(), first.get(2, TimeUnit.SECONDS))
+                        fixture.calls.single { it.method == "POST" }.options.checkCancelled()
+                    }
+                    fixture.gate!!.countDown()
+                    if (!cancelOrigin) assertEquals(suggestions, first.get(2, TimeUnit.SECONDS))
+                    assertEquals(suggestions, second.get(2, TimeUnit.SECONDS))
+                    assertEquals(1, fixture.posts())
+                } }
+            }
+        }
+    }
+
+    @Test(timeout = 10_000) fun `pending disk waits are bounded and cancellation never starts another generation`() {
+        for (cancelWait in listOf(false, true)) {
+            val fixture = Fixture().apply { gate = CountDownLatch(1) }
+            val cancelled = AtomicBoolean(false)
+            val waiting = CountDownLatch(1)
+            val checks = java.util.concurrent.atomic.AtomicInteger()
+            Executors.newVirtualThreadPerTaskExecutor().use { executor ->
+                fixture.service().use { owner -> fixture.service(timeoutMs = if (cancelWait) 3_000 else 150).use { reader ->
+                    val first = executor.submit<JsonObject> { fixture.suggest(owner) }
+                    assertTrue(fixture.generating.await(2, TimeUnit.SECONDS))
+                    val second = executor.submit<JsonObject> { reader.suggest("s", source, model, "/repo", true,
+                        isCancelled = { if (checks.incrementAndGet() >= 3) waiting.countDown(); cancelled.get() }) }
+                    assertTrue(waiting.await(2, TimeUnit.SECONDS))
+                    if (cancelWait) cancelled.set(true)
+                    assertEquals(Followups.empty(), second.get(2, TimeUnit.SECONDS))
+                    fixture.gate!!.countDown()
+                    assertEquals(suggestions, first.get(2, TimeUnit.SECONDS))
+                    assertEquals(suggestions, fixture.suggest(reader, allowGenerate = false))
+                    assertEquals(1, fixture.posts())
+                } }
+            }
+        }
+    }
+
+    @Test(timeout = 10_000) fun `timeouts and stale postconditions settle pending admission without retrying a billed turn`() {
+        for (kind in listOf("timeout", "stale", "invalidated", "preferences", "retired")) {
             val fixture = Fixture().apply { gate = CountDownLatch(1) }
             val cancelled = AtomicBoolean(false)
             val current = AtomicBoolean(true)
@@ -177,10 +256,10 @@ class FollowupServiceTest {
                     val result = executor.submit<JsonObject> { service.suggest("s", source, model, "/repo", true, cancelled::get, current::get) }
                     assertTrue(fixture.generating.await(2, TimeUnit.SECONDS))
                     when (kind) {
-                        "cancel" -> cancelled.set(true)
                         "stale" -> fixture.answer = "Changed during generation"
                         "invalidated" -> service.invalidate()
                         "preferences" -> current.set(false)
+                        "retired" -> service.clearPreviousTurn("s", "/repo", "next-user")
                     }
                     if (kind != "timeout") fixture.gate!!.countDown()
                     assertEquals(kind, Followups.empty(), result.get(2, TimeUnit.SECONDS))
@@ -189,6 +268,7 @@ class FollowupServiceTest {
             fixture.gate = null
             fixture.service().use { assertEquals(Followups.empty(), fixture.suggest(it)) }
             assertEquals(kind, 1, fixture.posts())
+            assertFalse(kind, Files.readString(fixture.cache.path).contains("pendingSince"))
         }
     }
 
@@ -213,7 +293,9 @@ class FollowupServiceTest {
         @Volatile var available = true
         @Volatile var failGeneration = false
         @Volatile var gate: CountDownLatch? = null
+        @Volatile var statusGate: CountDownLatch? = null
         val generating = CountDownLatch(1)
+        val readingStatus = CountDownLatch(1)
         fun posts() = calls.count { it.method == "POST" }
         fun suggest(service: FollowupService, allowGenerate: Boolean = true) = service.suggest("s", source, model, "/repo", allowGenerate)
         fun service(timeoutMs: Long = 30_000, idleTimeoutMs: Long = 2_000) = FollowupService({ version }, ::request, cache, timeoutMs, idleTimeoutMs)
@@ -229,7 +311,12 @@ class FollowupServiceTest {
                     if (failGeneration) error("Fixture provider failure")
                     Json.obj("data" to Json.obj("text" to output))
                 }
-                "/session/status" -> Json.obj("s" to Json.obj("type" to if (busyReads-- > 0) "busy" else "idle"))
+                "/session/status" -> {
+                    readingStatus.countDown()
+                    while (statusGate?.await(10, TimeUnit.MILLISECONDS) == false) options.checkCancelled()
+                    options.checkCancelled()
+                    Json.obj("s" to Json.obj("type" to if (busyReads-- > 0) "busy" else "idle"))
+                }
                 "/session/s/message?limit=2" -> Json.array(listOf(Json.obj("info" to Json.obj("id" to "answer", "sessionID" to "s", "role" to "assistant",
                     "agent" to agent, "mode" to mode, "parentID" to "user", "finish" to "stop", "time" to Json.obj("completed" to 2)),
                     "parts" to listOf(Json.obj("type" to "text", "text" to answer)))))

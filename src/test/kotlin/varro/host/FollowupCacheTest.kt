@@ -18,6 +18,51 @@ class FollowupCacheTest {
     private val session = "c".repeat(64)
     private val suggestions = Json.obj("summary" to "One issue remains.", "actions" to listOf(Json.obj("title" to "Add a test", "prompt" to "Add a focused regression test.")))
 
+    @Test fun `pending admission is shared until completion without permitting another claim`() {
+        val path = temporary.newFolder().toPath().resolve("cache.json")
+        val writer = FollowupCache(path)
+        val reader = FollowupCache(path)
+        assertNull(reader.getState(key, digest))
+        assertTrue(writer.claim(key, digest, session))
+        assertEquals(FollowupCache.State.Pending, reader.getState(key, digest))
+        assertEquals(Followups.empty(), reader.get(key, digest))
+        assertEquals(FollowupCache.State.Complete(Followups.empty()), reader.getState(key, "d".repeat(64)))
+        writer.complete(key, digest, Followups.empty())
+        assertEquals(FollowupCache.State.Complete(Followups.empty()), reader.getState(key, digest))
+        assertFalse(Files.readString(path).contains("pendingSince"))
+        assertFalse(reader.claim(key, digest, session))
+    }
+
+    @Test fun `pending grace expiry and legacy entries retain permanent admission`() {
+        val path = temporary.newFolder().toPath().resolve("cache.json")
+        var now = 100_000L
+        val cache = FollowupCache(path, now = { now })
+        cache.claim(key, digest, session)
+        now += 34_999
+        assertEquals(FollowupCache.State.Pending, cache.getState(key, digest))
+        now++
+        assertEquals(FollowupCache.State.Complete(Followups.empty()), cache.getState(key, digest))
+        assertFalse(cache.claim(key, digest, session))
+        val stored = Json.parse(Files.readString(path)).asJsonObject
+        stored.obj("entries").obj(key)!!.remove("pendingSince")
+        Files.writeString(path, stored.toString())
+        assertEquals(FollowupCache.State.Complete(Followups.empty()), cache.getState(key, digest))
+        assertFalse(cache.claim(key, digest, session))
+    }
+
+    @Test fun `dismissal and new-turn retirement settle pending entries and reject late results`() {
+        for (dismiss in listOf(true, false)) {
+            val path = temporary.newFolder().toPath().resolve("cache.json")
+            val cache = FollowupCache(path)
+            cache.claim(key, digest, session)
+            if (dismiss) cache.dismiss(key, digest) else cache.clearSession(session, null)
+            cache.complete(key, digest, suggestions)
+            assertEquals(FollowupCache.State.Complete(Followups.empty()), FollowupCache(path).getState(key, digest))
+            assertFalse(Files.readString(path).contains("pendingSince"))
+            assertFalse(cache.claim(key, digest, session))
+        }
+    }
+
     @Test fun `native cache roots match Varro and isolated roots never discover production admission`() {
         val home = temporary.root.toPath()
         assertEquals(home.resolve("Library/Application Support/Varro/followups/cache.json"), FollowupCache.defaultPath(emptyMap(), home, "Mac OS X"))

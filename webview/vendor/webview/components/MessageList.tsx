@@ -8173,6 +8173,8 @@ export function MessageList() {
       const cur = msg.info as AssistantMessage;
       if (cur.mode === 'subagent') continue;
       if (msg.parts.some((part) => part.type === 'compaction')) continue;
+      // Model-less status rows neither announce a switch nor replace the last known model.
+      if (!cur.providerID || !cur.modelID) continue;
       if (previous) {
         const previousProvider = providerMap.get(previous.providerID);
         const currentProvider = providerMap.get(cur.providerID);

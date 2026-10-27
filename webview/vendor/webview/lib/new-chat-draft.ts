@@ -2,6 +2,7 @@ import { batch, createSignal } from 'solid-js';
 import { getDefaultPrimaryAgentName } from '../hooks/routing-state';
 import {
   clearMessages,
+  getPersistedSelectedAgent,
   inputText,
   isSessionAwaitingInput,
   persistActiveSessionId,
@@ -84,7 +85,7 @@ export function startNewChatDraft() {
     stopLoading();
     setPersistentShowSessionPicker(false);
     restoreSelectedModelForComposer(null);
-    setSelectedAgent(getDefaultPrimaryAgentName(state.agents), {
+    setSelectedAgent(getDefaultPrimaryAgentName(state.agents, getPersistedSelectedAgent()), {
       sessionId: blankSessionId || null,
       persistGlobal: false,
     });

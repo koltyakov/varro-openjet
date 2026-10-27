@@ -134,6 +134,7 @@ export async function sendMessage(
     newSessionWorkspace?: SessionWorkspaceTarget;
     queuedMessageDispatch?: { itemId: string; lease: number };
     onOptimisticPublish?: () => void;
+    validateBeforeSend?: () => Promise<boolean>;
   }
 ): Promise<boolean> {
   return await getCurrentOpenCodeRuntime().sendMessage(text, options);

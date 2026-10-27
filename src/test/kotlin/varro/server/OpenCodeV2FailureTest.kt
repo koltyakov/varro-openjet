@@ -10,6 +10,28 @@ class OpenCodeV2FailureTest {
     private val context = Json.obj("agent" to "build", "model" to Json.obj("providerID" to "fixture", "id" to "model"),
         "error" to Json.obj("type" to "old", "message" to "stale error", "status" to 500))
 
+    @Test fun `status rows retain only complete contextual model identities`() {
+        for (outcome in listOf("failed", "interrupted")) {
+            for (model in listOf(null, Json.obj("providerID" to "", "id" to "", "variant" to "high"),
+                Json.obj("providerID" to "fixture", "id" to "", "variant" to "high"),
+                Json.obj("providerID" to "", "id" to "model", "variant" to "high"),
+                Json.obj("providerID" to "fixture", "id" to "model", "variant" to "high"))) {
+                val record = idle().apply { addProperty("outcome", outcome) }
+                val projected = OpenCodeV2Projection.message(record, "ses_fixture", "/repo", "msg_user",
+                    Json.obj("agent" to "build", "model" to model))
+                val info = projected.obj("info")!!
+                val complete = !model.str("providerID").isNullOrEmpty() && !model.str("id").isNullOrEmpty()
+                assertEquals(if (complete) "fixture" else "", info.str("providerID"))
+                assertEquals(if (complete) "model" else "", info.str("modelID"))
+                assertEquals(if (complete) "high" else null, info.str("variant"))
+                assertEquals("msg_user", info.str("parentID"))
+                assertEquals(1000L, info.obj("time").long("completed"))
+                assertEquals(if (outcome == "interrupted") "MessageAbortedError" else "UnknownError", info.obj("error").str("name"))
+                assertTrue(projected.arr("parts")!!.isEmpty)
+            }
+        }
+    }
+
     @Test fun `persisted authorization failures override stale live context`() {
         for (message in listOf("Request failed: 401 Unauthorized", "Integration.Authorization: Request failed: 403 Forbidden")) {
             val projected = OpenCodeV2Projection.message(idle(Json.obj("type" to "integration", "message" to message)), "ses_fixture", context = context)

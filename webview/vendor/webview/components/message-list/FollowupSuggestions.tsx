@@ -147,12 +147,30 @@ export function FollowupSuggestions(props: {
       if (ready() === value)
         setError('Could not send this follow-up. Your main draft has not changed.');
     };
+    const validateBeforeSend = async () => {
+      const latest = await client.varro.followups(value.sessionId, value.source, {
+        signal: AbortSignal.timeout(5_000),
+        directory: value.directory,
+        allowGenerate: false,
+        model: untrack(sessionModel),
+      });
+      if (
+        current() !== value ||
+        !latest.actions.some((item) => item.title === action.title && item.prompt === action.prompt)
+      ) {
+        if (ready() === value) clear();
+        return false;
+      }
+      return true;
+    };
     try {
+      if (!(await validateBeforeSend())) return;
       const accepted = await sendMessage(action.prompt, {
         targetSessionId: value.sessionId,
         preserveComposer: true,
         omitContext: true,
         followupTitle: action.title,
+        validateBeforeSend,
         onOptimisticPublish: () => {
           if (ready() !== value) return;
           optimisticPublished = true;

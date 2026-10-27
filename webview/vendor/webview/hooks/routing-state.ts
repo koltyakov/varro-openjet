@@ -7,8 +7,14 @@ type AgentSelectionUpdate = {
   options: { sessionId?: string | null; persistGlobal: boolean };
 };
 
-export function getDefaultPrimaryAgentName(agents: Agent[]) {
-  return agents.find((agent) => agent.name === 'build')?.name || agents[0]?.name || null;
+export function getDefaultPrimaryAgentName(agents: Agent[], preferredAgent?: string | null) {
+  const primaryAgents = agents.filter((agent) => !agent.hidden && agent.mode !== 'subagent');
+  return (
+    primaryAgents.find((agent) => agent.name === preferredAgent)?.name ||
+    primaryAgents.find((agent) => agent.name === 'build')?.name ||
+    primaryAgents[0]?.name ||
+    null
+  );
 }
 
 export function getBuildAgentName(agents: Agent[]) {
@@ -64,7 +70,10 @@ export function reconcileLoadedAgents(args: {
   let nextSelectedAgent: AgentSelectionUpdate | null = null;
 
   if (!args.activeSessionId) {
-    const fallback = [args.selectedAgent, getDefaultPrimaryAgentName(primaryAgents)].find(
+    const fallback = [
+      args.selectedAgent,
+      getDefaultPrimaryAgentName(primaryAgents, args.persistedSelectedAgent),
+    ].find(
       (candidate): candidate is string =>
         !!candidate && primaryAgents.some((agent) => agent.name === candidate)
     );

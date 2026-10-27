@@ -197,6 +197,7 @@ export interface OpenCodeRuntime {
       newSessionWorkspace?: SessionWorkspaceTarget;
       queuedMessageDispatch?: { itemId: string; lease: number };
       onOptimisticPublish?: () => void;
+      validateBeforeSend?: () => Promise<boolean>;
     }
   ): Promise<boolean>;
   retryMessage(messageId: string, sessionId?: string | null): Promise<void>;
@@ -2871,9 +2872,7 @@ export function createOpenCodeRuntime(): OpenCodeRuntime {
         appStore.state.sessions.find((session) => session.id === sessionId)
       ),
     resolveDefaultAgent: () =>
-      getBuildAgentNameFromState() ||
-      routingStore.getPersistedSelectedAgent() ||
-      getDefaultPrimaryAgentNameFromState(),
+      getDefaultPrimaryAgentName(appStore.state.agents, routingStore.getPersistedSelectedAgent()),
     setSelectedAgent: routingStore.setSelectedAgent,
     getInitialMcpNames: () => routingStore.getSelectedMcpsForSession(null) || [],
     setSelectedMcpsForSession: routingStore.setSelectedMcpsForSession,
@@ -3220,6 +3219,7 @@ export function createOpenCodeRuntime(): OpenCodeRuntime {
       newSessionWorkspace?: SessionWorkspaceTarget;
       queuedMessageDispatch?: { itemId: string; lease: number };
       onOptimisticPublish?: () => void;
+      validateBeforeSend?: () => Promise<boolean>;
     }
   ): Promise<boolean> {
     const sessionId =

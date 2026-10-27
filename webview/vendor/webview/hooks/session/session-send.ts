@@ -160,6 +160,7 @@ type SessionSendOptions = SendFlowOptions & {
   newSessionWorkspace?: SessionWorkspaceTarget;
   queuedMessageDispatch?: { itemId: string; lease: number };
   onOptimisticPublish?: () => void;
+  validateBeforeSend?: () => Promise<boolean>;
 };
 
 type CapturedComposerAttachments = {
@@ -1361,6 +1362,7 @@ export async function sendMessageWithDependencies(
     return false;
   }
   if (!sendPayload) return false;
+  if (options?.validateBeforeSend && !(await options.validateBeforeSend())) return false;
   const { body, effectiveModel, optimisticImages } = sendPayload;
   const messageId = options?.messageId ?? createOpenCodeMessageID();
   const sendBody = { ...body, messageID: messageId };

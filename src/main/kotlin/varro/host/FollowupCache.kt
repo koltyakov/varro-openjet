@@ -15,20 +15,36 @@ import java.util.UUID
 internal class FollowupCache(
     internal val path: Path = defaultPath(),
     private val windows: Boolean = System.getProperty("os.name").lowercase().contains("windows"),
+    private val now: () -> Long = System::currentTimeMillis,
     private val replace: (Path, Path) -> Unit = { from, to ->
         Files.move(from, to, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
     },
 ) {
-    fun get(key: String, digest: String): JsonObject? {
+    sealed interface State {
+        data object Pending : State
+        data class Complete(val suggestions: JsonObject) : State
+    }
+
+    fun get(key: String, digest: String): JsonObject? = when (val state = getState(key, digest)) {
+        null -> null
+        State.Pending -> Followups.empty()
+        is State.Complete -> state.suggestions
+    }
+
+    fun getState(key: String, digest: String): State? {
         val entry = read().obj(key) ?: return null
-        return if (entry.str("digest") == digest && entry.bool("dismissed") != true) entry.obj("suggestions")!!.deepCopy() else Followups.empty()
+        if (entry.str("digest") != digest || entry.bool("dismissed") == true) return State.Complete(Followups.empty())
+        val pendingSince = entry.num("pendingSince")
+        if (pendingSince != null && now() - pendingSince < 35_000) return State.Pending
+        return State.Complete(entry.obj("suggestions")!!.deepCopy())
     }
 
     fun claim(key: String, digest: String, sessionKey: String): Boolean {
         var claimed = false
         change { entries ->
             if (entries.has(key)) false else {
-                entries.add(key, Json.obj("sessionKey" to sessionKey, "digest" to digest, "dismissed" to false, "suggestions" to Followups.empty()))
+                entries.add(key, Json.obj("sessionKey" to sessionKey, "digest" to digest, "dismissed" to false,
+                    "pendingSince" to now(), "suggestions" to Followups.empty()))
                 claimed = true
                 true
             }
@@ -39,7 +55,7 @@ internal class FollowupCache(
     fun complete(key: String, digest: String, suggestions: JsonObject) = change { entries ->
         val entry = entries.obj(key)
         if (entry == null || entry.str("digest") != digest || entry.bool("dismissed") == true) false
-        else { entry.add("suggestions", suggestions.deepCopy()); true }
+        else { entry.add("suggestions", suggestions.deepCopy()); entry.remove("pendingSince"); true }
     }
 
     fun dismiss(key: String, digest: String) = change { entries ->
@@ -113,6 +129,7 @@ internal class FollowupCache(
 
     private fun retire(entry: JsonObject) {
         entry.addProperty("dismissed", true)
+        entry.remove("pendingSince")
         entry.add("suggestions", Followups.empty())
     }
 

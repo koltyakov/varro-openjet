@@ -204,7 +204,7 @@ export function parseDroppedText(value: string): string[] {
   if (!value) return [];
 
   const structuredPaths = extractPathsFromStructuredDrop(value);
-  if (structuredPaths.length > 0) return structuredPaths;
+  if (structuredPaths !== null) return structuredPaths;
 
   const paths = new Set<string>();
 
@@ -231,6 +231,10 @@ function decodeDroppedPath(value: string): string | null {
 
   try {
     const url = new URL(trimmed);
+    // Web and virtual-document URLs must not select host files with the same pathname.
+    if (!['file:', 'vscode-file:', 'vscode-resource:', 'vscode-remote:'].includes(url.protocol)) {
+      return null;
+    }
     let pathname = decodeURIComponent(url.pathname);
 
     if (url.protocol === 'vscode-file:') {
@@ -284,9 +288,9 @@ function decodeWorkspaceRelativePath(value: string): string | null {
   return looksPathLike ? normalized : null;
 }
 
-function extractPathsFromStructuredDrop(value: string): string[] {
+function extractPathsFromStructuredDrop(value: string): string[] | null {
   const trimmed = value.trim();
-  if (!trimmed || !/^[[{"]/.test(trimmed)) return [];
+  if (!trimmed || !/^[[{"]/.test(trimmed)) return null;
 
   try {
     const parsed = JSON.parse(trimmed);
@@ -294,7 +298,7 @@ function extractPathsFromStructuredDrop(value: string): string[] {
     collectStructuredDropPaths(parsed, paths);
     return Array.from(paths);
   } catch {
-    return [];
+    return null;
   }
 }
 
