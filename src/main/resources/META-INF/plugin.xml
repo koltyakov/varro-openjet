@@ -161,6 +161,8 @@
     <depends optional="true" config-file="varro-jcef.xml">com.intellij.modules.jcef</depends>
 
     <extensions defaultExtensionNs="com.intellij">
+        <errorHandler implementation="com.intellij.diagnostic.JetBrainsMarketplaceErrorReportSubmitter"/>
+
         <toolWindow id="Varro"
                     anchor="right"
                     icon="/icons/varro.svg"
