@@ -54,6 +54,7 @@ input:focus-visible {
 .interactive-session {
   --chat-horizontal-padding: 14px;
   --interactive-list-scrollbar-inset: 0px;
+  --chat-content-fade-height: 16px;
   --chat-sidebar-width: 380px;
   --chat-radius-control: var(--radius-control);
   --chat-radius-card: var(--radius-bubble);
@@ -251,6 +252,19 @@ input:focus-visible {
     width: min(100%, var(--chat-content-max-width));
     margin-inline: auto;
     padding: 14px var(--chat-horizontal-padding) 24px;
+    /* Below the capped width, both scrollbar gutters consume space that the composer
+       does not reserve. Reduce the track padding by that shortfall on each side. */
+    padding-inline: max(
+      0px,
+      calc(
+        var(--chat-horizontal-padding) -
+          clamp(
+            0px,
+            (var(--chat-content-max-width) - 100%) / 2,
+            var(--interactive-list-scrollbar-inset) / 2
+          )
+      )
+    );
   }
 
   .interactive-session .chat-main-column-shell .interactive-input-part,
@@ -329,6 +343,8 @@ input:focus-visible {
   left: 0;
   right: 0;
   pointer-events: none;
+  /* Keep the entire reserved footprint opaque while text and card height reflow. */
+  background: var(--color-vscode-list-bg);
   contain: paint;
   transform: translateZ(0);
   will-change: transform;
@@ -361,7 +377,7 @@ input:focus-visible {
 
 .latest-user-message-sticky-bottom-fade {
   height: var(--latest-user-message-sticky-bottom-gap);
-  background: linear-gradient(to bottom, var(--color-vscode-list-bg), transparent);
+  background: var(--color-vscode-list-bg);
 }
 
 .latest-user-message-sticky {
@@ -698,7 +714,7 @@ input:focus-visible {
 }
 
 .interactive-list-bottom-fade-wrap {
-  --interactive-list-bottom-fade-gap: 16px;
+  --interactive-list-bottom-fade-gap: var(--chat-content-fade-height);
   position: absolute;
   right: var(--interactive-list-scrollbar-inset);
   bottom: 0;
@@ -707,6 +723,14 @@ input:focus-visible {
   height: var(--interactive-list-bottom-fade-gap);
   pointer-events: none;
   isolation: isolate;
+}
+
+.interactive-list-bottom-fade-wrap.is-below-content {
+  top: calc(100% + 1px);
+  right: -1px;
+  bottom: auto;
+  left: -1px;
+  transform: rotate(180deg);
 }
 
 .interactive-list-bottom-fade-overlay {

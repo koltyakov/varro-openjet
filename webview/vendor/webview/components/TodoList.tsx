@@ -4,6 +4,7 @@ import { prepareForTodoCollapse } from '../lib/message-list-layout';
 import { STORAGE_KEYS, readStored, writeStored } from '../lib/state-storage';
 import { navArrowDownIcon } from '../lib/ui-icons';
 import type { NormalizedTodo } from '../types';
+import { Tooltip } from './Tooltip';
 import { UiIcon } from './UiIcon';
 
 const todos = () => defaultAppState.state.todos;
@@ -228,33 +229,35 @@ export function TodoList() {
         </span>
         <Show when={collapsed() && activeTodo()}>
           {(todo) => (
-            <span
-              class="todo-block-active"
-              title={activeTodoTruncated() ? todo().content : undefined}
-              onMouseEnter={updateActiveTodoTruncation}
-            >
-              <svg class="todo-block-active-indicators" viewBox="0 0 6 14" aria-hidden="true">
-                <For each={activeTodoDots()}>
-                  {(dot, index) => (
-                    <circle
-                      class={`todo-block-active-dot ${index() === activeTodoIndex() ? 'is-current' : ''}`}
-                      cx="3"
-                      cy={dot.center}
-                      r={dot.radius}
-                      fill="currentColor"
-                    />
-                  )}
-                </For>
-              </svg>
+            <Tooltip content={todo().content} disabled={!activeTodoTruncated()}>
               <span
-                class="todo-block-active-text"
-                ref={(element) => {
-                  activeTodoTextRef = element;
-                }}
+                class="todo-block-active"
+                onMouseEnter={updateActiveTodoTruncation}
+                onFocusIn={updateActiveTodoTruncation}
               >
-                {todo().content}
+                <svg class="todo-block-active-indicators" viewBox="0 0 6 14" aria-hidden="true">
+                  <For each={activeTodoDots()}>
+                    {(dot, index) => (
+                      <circle
+                        class={`todo-block-active-dot ${index() === activeTodoIndex() ? 'is-current' : ''}`}
+                        cx="3"
+                        cy={dot.center}
+                        r={dot.radius}
+                        fill="currentColor"
+                      />
+                    )}
+                  </For>
+                </svg>
+                <span
+                  class="todo-block-active-text"
+                  ref={(element) => {
+                    activeTodoTextRef = element;
+                  }}
+                >
+                  {todo().content}
+                </span>
               </span>
-            </span>
+            </Tooltip>
           )}
         </Show>
         <div
@@ -288,6 +291,11 @@ export function TodoList() {
 }
 
 function TodoItem(props: { todo: NormalizedTodo }) {
+  let textRef: HTMLSpanElement | undefined;
+  const [truncated, setTruncated] = createSignal(false);
+  const updateTruncation = () => {
+    setTruncated(!!textRef && textRef.scrollWidth > textRef.clientWidth);
+  };
   const icon = () => {
     switch (props.todo.status) {
       case 'completed':
@@ -361,12 +369,26 @@ function TodoItem(props: { todo: NormalizedTodo }) {
     }
   };
   return (
-    <li class={`todo-block-item status-${props.todo.status}`} data-todo-id={props.todo.id}>
-      <span class="todo-block-item-icon" role="img" aria-label={statusLabel()}>
-        {icon()}
-      </span>
-      <span class="todo-block-item-text">{props.todo.content}</span>
-    </li>
+    <Tooltip content={props.todo.content} disabled={!truncated()}>
+      <li
+        class={`todo-block-item status-${props.todo.status}`}
+        data-todo-id={props.todo.id}
+        onMouseEnter={updateTruncation}
+        onFocusIn={updateTruncation}
+      >
+        <span class="todo-block-item-icon" role="img" aria-label={statusLabel()}>
+          {icon()}
+        </span>
+        <span
+          class="todo-block-item-text"
+          ref={(element) => {
+            textRef = element;
+          }}
+        >
+          {props.todo.content}
+        </span>
+      </li>
+    </Tooltip>
   );
 }
 

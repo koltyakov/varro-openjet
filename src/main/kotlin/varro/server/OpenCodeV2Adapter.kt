@@ -283,7 +283,7 @@ internal class OpenCodeV2Adapter(
                 val shell = data("GET", scoped(target)).asObjectOrNull() ?: error("Invalid background process")
                 check(shell.obj("metadata").str("sessionID") == id) { "404 Background process not found" }
                 if (method == "DELETE") {
-                    raw("DELETE", scoped(target))
+                    raw("DELETE", scoped("$target?reason=user"))
                     backgroundServices.cancel(shellID)
                     backgroundWork.observe("shell.deleted", Json.obj("id" to shellID), directory)
                     notifyBackgroundChange(id, directory)

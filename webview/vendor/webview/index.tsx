@@ -100,93 +100,6 @@ function trackEditorLayoutSettling() {
   };
 }
 
-function trackWebviewWidth(root: HTMLElement) {
-  const previousMaxWidth = root.style.maxWidth;
-  let width = window.innerWidth;
-  let pixelRatio = window.devicePixelRatio;
-  let frame: number | undefined;
-  // Reattaching a retained VS Code tab briefly gives its iframe the browser's
-  // default dimensions, even while document.visibilityState remains visible.
-  const isUnsizedIframe = () => window.innerWidth === 300 && window.innerHeight === 150;
-  let awaitingHostViewport = isUnsizedIframe();
-  const cancelExpansion = () => {
-    if (frame !== undefined) window.cancelAnimationFrame(frame);
-    frame = undefined;
-  };
-  const applyWidth = () => {
-    width = window.innerWidth;
-    root.style.maxWidth = `${width}px`;
-  };
-  const handleVisibilityChange = () => {
-    cancelExpansion();
-    if (document.visibilityState === 'hidden') return;
-    awaitingHostViewport = isUnsizedIframe();
-    if (awaitingHostViewport) return;
-    // A retained tab has no painted surface to preserve. Its hidden viewport can
-    // have a temporary host width; restore the current width before revealing it.
-    pixelRatio = window.devicePixelRatio;
-    applyWidth();
-  };
-  const handleResize = () => {
-    if (document.visibilityState === 'hidden') return;
-    if (isUnsizedIframe()) {
-      awaitingHostViewport = true;
-      cancelExpansion();
-      return;
-    }
-    if (awaitingHostViewport) {
-      awaitingHostViewport = false;
-      cancelExpansion();
-      pixelRatio = window.devicePixelRatio;
-      applyWidth();
-      return;
-    }
-    // Zoom changes CSS pixels without resizing the host's painted surface.
-    if (pixelRatio !== window.devicePixelRatio) {
-      pixelRatio = window.devicePixelRatio;
-      cancelExpansion();
-      applyWidth();
-      return;
-    }
-    // The 960px content layout and 1400px session sidebar use viewport media queries.
-    // Holding the old cap across either breakpoint squeezes the new layout into the
-    // narrow surface, then reflows it a second time. Commit these transitions together.
-    const layoutBreakpointChanged = [960, 1400].some(
-      (breakpoint) => width < breakpoint && window.innerWidth >= breakpoint
-    );
-    if (window.innerWidth < width || layoutBreakpointChanged) {
-      cancelExpansion();
-      applyWidth();
-      return;
-    }
-    if (window.innerWidth === width || frame !== undefined) return;
-    // VS Code can paint a wider layout through the previous, narrower webview
-    // surface for a frame. Keep cards inside that surface until it catches up.
-    // Do not restart the wait on every drag event: continuous resizing must grow.
-    // Four frames allow for cross-process resize delivery as well as painting.
-    let remainingFrames = 4;
-    const grow = () => {
-      remainingFrames -= 1;
-      if (remainingFrames > 0) {
-        frame = window.requestAnimationFrame(grow);
-      } else {
-        frame = undefined;
-        applyWidth();
-      }
-    };
-    frame = window.requestAnimationFrame(grow);
-  };
-  applyWidth();
-  window.addEventListener('resize', handleResize);
-  document.addEventListener('visibilitychange', handleVisibilityChange);
-  return () => {
-    cancelExpansion();
-    window.removeEventListener('resize', handleResize);
-    document.removeEventListener('visibilitychange', handleVisibilityChange);
-    root.style.maxWidth = previousMaxWidth;
-  };
-}
-
 export function showBootstrapFailure(root: HTMLElement) {
   const fallback = document.createElement('div');
   fallback.setAttribute('role', 'alert');
@@ -221,7 +134,6 @@ export function bootstrap(root: HTMLElement) {
   }
   document.documentElement.classList.toggle(EDITOR_SURFACE_CLASS, isEditorSurface);
   const stopTrackingEditorLayout = isEditorSurface ? trackEditorLayoutSettling() : undefined;
-  const stopTrackingWidth = trackWebviewWidth(root);
   const stopSteppedAnimationClock = startSteppedAnimationClock();
   let dispose: (() => void) | undefined;
   let failed = false;
@@ -263,7 +175,6 @@ export function bootstrap(root: HTMLElement) {
     }
     disposeWebview();
     stopTrackingEditorLayout?.();
-    stopTrackingWidth();
     stopSteppedAnimationClock();
     document.documentElement.classList.remove(EDITOR_SURFACE_CLASS);
   };

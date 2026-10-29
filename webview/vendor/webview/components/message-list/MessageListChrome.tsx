@@ -443,9 +443,13 @@ export function TurnNavigationRail(props: {
   );
 }
 
-export function ChatContentBottomFade() {
+export function ChatContentBottomFade(props: { belowContent?: boolean } = {}) {
   return (
-    <div class="interactive-list-bottom-fade-wrap" aria-hidden="true">
+    <div
+      class="interactive-list-bottom-fade-wrap"
+      classList={{ 'is-below-content': props.belowContent }}
+      aria-hidden="true"
+    >
       <div class="interactive-list-bottom-fade-overlay">
         <div class="interactive-list-bottom-fade-gradient" />
       </div>

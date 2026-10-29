@@ -409,6 +409,48 @@ class ServerOwnershipTest {
         assertEquals(4096, ServerOwnership.record(path)?.get("port")?.asInt)
     }
 
+    @Test fun `changed-port credential recheck preserves the selected endpoint during fresh stream admission`() {
+        for (changed in listOf(false, true)) fixture { shared, legacy, identity ->
+            val path = shared.resolve("varro-opencode-server-4096.json.credentials")
+            val value = Json.obj("version" to 1, "port" to 4096, "owner" to "launch", "createdAt" to 1, "password" to "secret")
+            privateFile(path, Json.stringify(value))
+            val entered = java.util.concurrent.CountDownLatch(1)
+            val release = java.util.concurrent.CountDownLatch(1)
+            val probes = java.util.concurrent.CopyOnWriteArrayList<Int>()
+            var block = false
+            val manager = ServerOwnership(4096, shared, legacy, identity, verifyCredentials = {
+                probes.add(it.port)
+                if (block) { entered.countDown(); check(release.await(5, java.util.concurrent.TimeUnit.SECONDS)) }
+                it.port == 5001 && it.password == "secret"
+            })
+            assertEquals(ServerOwnership.Connection(5001, "secret"), manager.connection(5001, "secret"))
+            val pool = java.util.concurrent.Executors.newFixedThreadPool(2)
+            try {
+                block = true
+                val admission = pool.submit { manager.verifyConnection(5001, reconnect = true) }
+                assertTrue(entered.await(5, java.util.concurrent.TimeUnit.SECONDS))
+                val preparation = pool.submit<Boolean> { manager.recheckAttachment(5001) }
+                if (changed) privateFile(path, Json.stringify(value.apply { addProperty("password", "changed") }))
+                val expectedRecord = Files.readString(path)
+                release.countDown()
+                if (changed) {
+                    val failure = assertThrows(java.util.concurrent.ExecutionException::class.java) {
+                        admission.get(5, java.util.concurrent.TimeUnit.SECONDS)
+                    }
+                    assertTrue(failure.cause is IllegalStateException)
+                } else admission.get(5, java.util.concurrent.TimeUnit.SECONDS)
+                assertFalse(preparation.get(5, java.util.concurrent.TimeUnit.SECONDS))
+                assertTrue(probes.isNotEmpty() && probes.all { it == 5001 })
+                assertTrue(manager.credentialOnly)
+                assertNull(manager.registeredPid)
+                assertFalse(manager.refresh(5001, takeover = true))
+                assertFalse(manager.stop(0))
+                assertEquals(expectedRecord, Files.readString(path))
+                assertFalse(Files.exists(manager.path))
+            } finally { release.countDown(); pool.shutdownNow() }
+        }
+    }
+
     @Test fun `ambiguous listeners and nonprivate credentials cannot grant ownership`() = fixture { shared, legacy, identity ->
         val path = shared.resolve("varro-opencode-server-4096.json")
         privateFile(path, Json.stringify(lease()))

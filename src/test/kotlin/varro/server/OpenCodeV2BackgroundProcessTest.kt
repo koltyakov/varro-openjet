@@ -220,19 +220,27 @@ class OpenCodeV2BackgroundProcessTest {
     }
 
     @Test fun `failed process stop leaves service tracking intact and successful stop clears it`() {
-        var fail = true
-        val native = OpenCodeV2Adapter({ method, _, _, _ ->
-            if (method == "DELETE" && fail) error("Stop failed")
-            OpenCodeResponse(Json.obj("data" to shell()))
-        }, OpenCodeV2SessionState(temporary.newFolder().toPath()))
-        native.request("PATCH", "/session/ses_one/background-process/shell_one", Json.obj("service" to true), RequestOptions())
-        assertThrows(IllegalStateException::class.java) {
-            native.request("DELETE", "/session/ses_one/background-process/shell_one", null, RequestOptions())
+        for (directory in listOf(null, "/one")) {
+            var fail = true
+            val options = RequestOptions(directory = directory)
+            val native = OpenCodeV2Adapter({ method, path, body, _ ->
+                if (method == "DELETE") {
+                    assertEquals("/api/shell/shell_one?reason=user" +
+                        if (directory == null) "" else "&location%5Bdirectory%5D=%2Fone", path)
+                    assertNull(body)
+                    if (fail) error("Stop failed")
+                }
+                OpenCodeResponse(Json.obj("data" to shell()))
+            }, OpenCodeV2SessionState(temporary.newFolder().toPath()))
+            native.request("PATCH", "/session/ses_one/background-process/shell_one", Json.obj("service" to true), options)
+            assertThrows(IllegalStateException::class.java) {
+                native.request("DELETE", "/session/ses_one/background-process/shell_one", null, options)
+            }
+            assertEquals(1, native.backgroundServiceCount("ses_one"))
+            fail = false
+            native.request("DELETE", "/session/ses_one/background-process/shell_one", null, options)
+            assertEquals(0, native.backgroundServiceCount("ses_one"))
         }
-        assertEquals(1, native.backgroundServiceCount("ses_one"))
-        fail = false
-        native.request("DELETE", "/session/ses_one/background-process/shell_one", null, RequestOptions())
-        assertEquals(0, native.backgroundServiceCount("ses_one"))
     }
 
     @Test fun `annotation lock contention is cancellable and dead owners recover safely`() {

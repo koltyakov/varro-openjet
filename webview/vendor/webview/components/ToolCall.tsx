@@ -518,7 +518,46 @@ export function ToolCall(props: {
     return getToolReadPath(tool().tool, state());
   };
 
-  const fileChanges = () => getToolFileChanges(tool().tool, state());
+  const fileChangePreview = createMemo<{ key: string; changes: FileChange[] }>((previous) => {
+    const key = expansionKey();
+    const changes = getToolFileChanges(tool().tool, state());
+    const previewEnabled = !props.compactFileChanges && showFileDiffs();
+    // Completion replaces the streamed patch with a deferred summary. Keep the
+    // mounted preview until its replacement arrives, while using the latest status.
+    const retained =
+      previewEnabled && detail.loading() && previous?.key === key ? previous.changes : [];
+    return {
+      key: previewEnabled ? key : '',
+      changes: changes.map((change) => {
+        if (
+          change.patch !== undefined ||
+          change.before !== undefined ||
+          change.after !== undefined ||
+          change.previewStatus !== undefined
+        )
+          return change;
+        const prior = retained.find(
+          (item) =>
+            item.path === change.path &&
+            item.fromPath === change.fromPath &&
+            item.toPath === change.toPath &&
+            item.kind === change.kind
+        );
+        return prior
+          ? {
+              ...change,
+              patch: prior.patch,
+              patchFormat: prior.patchFormat,
+              before: prior.before,
+              after: prior.after,
+              previewStatus: prior.previewStatus,
+              previewMessage: prior.previewMessage,
+            }
+          : change;
+      }),
+    };
+  });
+  const fileChanges = () => fileChangePreview().changes;
   const isReadTool = () => isToolFileRead(tool().tool);
 
   const statusClass = () => {

@@ -203,6 +203,30 @@ class OpenCodeV2IntegrationTest {
             assertEquals(workspace.toString(), session.str("directory"))
             assertEquals("2", session.str("version"))
             assertFalse(session.bool("sharingSupported")!!)
+            val historyBeforeStop = transport.request("GET", "/session/$id/message").data
+            val inboxBeforeStop = transport.request("GET", "/api/session/$id/inbox").data
+            val callsBeforeStop = providerRequests.get()
+            val shell = transport.request("POST", "/api/shell", Json.obj(
+                "command" to if (System.getProperty("os.name").startsWith("Windows")) "ping -n 30 127.0.0.1 > NUL" else "sleep 30",
+                "cwd" to workspace.toString(), "metadata" to Json.obj("sessionID" to id),
+            )).data.asObjectOrNull().obj("data")!!
+            val shellID = shell.str("id")!!
+            val processOptions = RequestOptions(directory = workspace.toString())
+            try {
+                assertEquals("running", shell.str("status"))
+                assertTrue(transport.request("GET", "/session/$id/background-process", options = processOptions).data.asArrayOrNull()!!.any {
+                    it.asObjectOrNull().str("id") == shellID
+                })
+                assertEquals(true, transport.request("DELETE", "/session/$id/background-process/$shellID", options = processOptions).data!!.asBoolean)
+                assertFalse(transport.request("GET", "/session/$id/background-process", options = processOptions).data.asArrayOrNull()!!.any {
+                    it.asObjectOrNull().str("id") == shellID
+                })
+                assertEquals(historyBeforeStop, transport.request("GET", "/session/$id/message").data)
+                assertEquals(inboxBeforeStop, transport.request("GET", "/api/session/$id/inbox").data)
+                assertEquals(callsBeforeStop, providerRequests.get())
+            } finally {
+                transport.request("DELETE", "/api/shell/$shellID")
+            }
             assertTrue(transport.request("GET", "/agent").data!!.isJsonArray)
             assertTrue(transport.request("GET", "/provider").data.asObjectOrNull().arr("all") != null)
             val fixture = transport.request("GET", "/config/providers").data.asObjectOrNull().arr("providers")!!.map { it.asJsonObject }.first { it.str("id") == "fixture" }.obj("models").obj("fixture")

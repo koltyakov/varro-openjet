@@ -210,6 +210,9 @@ export function NativeFormPrompt(props: { form: NativeForm }) {
         <For each={fields()}>
           {(field) => {
             const fieldID = createUniqueId();
+            // Keep conditional prop reads outside JSX to avoid creating memos in event handlers.
+            const fieldValue = () =>
+              Object.hasOwn(draft(), field.key) ? draft()[field.key] : undefined;
             const invalid = () =>
               serverInvalidKey() === field.key
                 ? 'The server rejected this answer. Review it and retry.'
@@ -273,7 +276,7 @@ export function NativeFormPrompt(props: { form: NativeForm }) {
                 <div class="native-form-answer">
                   <NativeFieldControl
                     field={field}
-                    value={Object.hasOwn(draft(), field.key) ? draft()[field.key] : undefined}
+                    value={fieldValue()}
                     custom={customValue(field.key)}
                     customRows={multiselectRows()[field.key] ?? []}
                     updateRows={(rows) => {
@@ -357,6 +360,7 @@ function NativeFieldControl(props: {
     if (props.value === undefined) setNumericText('');
   });
   const label = () => props.field.title ?? props.field.key;
+  const booleanSelectValue = () => (props.value === undefined ? '' : String(props.value));
   const attributes = () => ({
     'aria-label': label(),
     'aria-invalid': props.invalid,
@@ -421,7 +425,7 @@ function NativeFieldControl(props: {
               required={attributes()['aria-required']}
               describedBy={attributes()['aria-describedby']}
               disabled={props.disabled}
-              value={props.value === undefined ? '' : String(props.value)}
+              value={booleanSelectValue()}
               options={[
                 { value: '', label: 'Unanswered' },
                 { value: 'true', label: 'Yes' },

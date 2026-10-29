@@ -373,6 +373,8 @@ html > body {
   padding: 0;
 }
 
+/* Resize-event pixel caps lag the iframe layout and can retain stale prompt margins.
+   Keep viewport sizing in CSS, including native resize and retained-tab restoration. */
 html,
 body,
 #root {

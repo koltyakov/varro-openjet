@@ -15,10 +15,8 @@ import { useSecondClock } from '../lib/clock';
 import { trapModalFocus } from '../lib/modal-focus';
 import { xmarkIcon } from '../lib/ui-icons';
 import { UiIcon } from './UiIcon';
-import { recheckSessionStatus, sendMessage } from '../hooks/useOpenCode';
+import { recheckSessionStatus } from '../hooks/useOpenCode';
 import { captureSessionStatusSnapshotTime, sessionStore } from '../lib/stores/session-store';
-import { buildStopProcessPrompt } from '../lib/background-process-action';
-import { error as sendError, setError, state } from '../lib/state';
 
 const RETAINED_OUTPUT_CHARS = 128 * 1024;
 const POLL_INTERVAL_MS = 1_000;
@@ -273,28 +271,6 @@ export function BackgroundProcessDialog(props: {
     }
   };
 
-  const steerStop = async (process: BackgroundProcess) => {
-    if (actionPending()) return;
-    setActionPending(true);
-    const sessionID = props.sessionID;
-    const pendingSend = sendMessage(buildStopProcessPrompt(process), {
-      delivery: 'steer',
-      targetSessionId: sessionID,
-      workspaceDirectory: props.directory,
-      preserveComposer: true,
-      omitContext: true,
-    });
-    props.onClose();
-    try {
-      const sent = await pendingSend;
-      if (!sent && state.activeSessionId === sessionID)
-        setError(sendError() ?? 'Could not send the stop request. Try again.');
-    } catch (error) {
-      if (state.activeSessionId === sessionID)
-        setError(error instanceof Error ? error.message : String(error));
-    }
-  };
-
   return (
     <Portal>
       <div
@@ -427,18 +403,6 @@ export function BackgroundProcessDialog(props: {
                           onClick={() => void changeProcess(process())}
                         >
                           Stop process
-                        </button>
-                        <button
-                          type="button"
-                          title="Ask the agent to stop this process"
-                          disabled={
-                            actionPending() ||
-                            !availableIDs().has(process().id) ||
-                            process().status !== 'running'
-                          }
-                          onClick={() => void steerStop(process())}
-                        >
-                          Steer stop
                         </button>
                       </div>
                     </div>

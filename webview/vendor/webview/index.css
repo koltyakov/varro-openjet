@@ -13,6 +13,7 @@
 @import './styles/menus.css' layer(components);
 @import './styles/chat-header.css' layer(components);
 @import './styles/session-list.css' layer(components);
+@import './styles/session-search.css' layer(components);
 @import './styles/models.css' layer(components);
 @import './styles/background-process.css' layer(components);
 @import './styles/side-question.css' layer(components);

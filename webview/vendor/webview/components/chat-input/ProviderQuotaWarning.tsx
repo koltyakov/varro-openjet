@@ -11,18 +11,17 @@ import {
 } from 'solid-js';
 import type { ProviderLimitStatus, ProviderLimitWindow } from '../../../shared/protocol';
 import { DEFAULT_RESET_WARNING_DAYS } from '../../../shared/provider-limit-config';
-import { postMessage } from '../../lib/bridge';
 import { useSecondClock } from '../../lib/clock';
 import {
   formatProviderLimitWindowValue,
   getProviderLimitTone,
   getProviderLimitWindowRemainingPercent,
 } from '../../lib/format';
-import { getProviderUsageLink } from '../../lib/provider-usage';
 import { STORAGE_KEYS } from '../../lib/state-storage';
 import { formatDuration } from '../../lib/time-format';
 import { xmarkIcon } from '../../lib/ui-icons';
 import { UiIcon } from '../UiIcon';
+import { ProviderLimitPopup } from './ProviderLimitPopup';
 import {
   getLowQuotaWindows,
   isQuotaWarningDismissed,
@@ -88,13 +87,39 @@ export function ProviderQuotaWarning(props: {
           : !isQuotaWarningDismissed(dismissals(), props.limit!.providerID, window, now()))
     )
   );
-  const usageLink = createMemo(() => getProviderUsageLink(props.limit?.providerID));
   const availableResets = createMemo(() => {
     const limit = props.limit;
     return limit?.status === 'available' ? (limit.usageLimitResets?.availableCount ?? 0) : 0;
   });
   const resetLabel = () =>
     `${availableResets()} ${availableResets() === 1 ? 'reset' : 'resets'} available`;
+  const [showResetPopup, setShowResetPopup] = createSignal(false);
+  let resetPopupAnchor: HTMLDivElement | undefined;
+  let resetPopupButton: HTMLButtonElement | undefined;
+  createEffect(() => {
+    if (availableResets() === 0 || (visibleWindows().length === 0 && expiringResets().length === 0))
+      setShowResetPopup(false);
+  });
+  createEffect(() => {
+    if (!showResetPopup()) return;
+    const onPointerDown = (event: PointerEvent) => {
+      if (event.target instanceof Node && resetPopupAnchor?.contains(event.target)) return;
+      setShowResetPopup(false);
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      event.stopPropagation();
+      setShowResetPopup(false);
+      resetPopupButton?.focus();
+    };
+    document.addEventListener('pointerdown', onPointerDown);
+    document.addEventListener('keydown', onKeyDown, true);
+    onCleanup(() => {
+      document.removeEventListener('pointerdown', onPointerDown);
+      document.removeEventListener('keydown', onKeyDown, true);
+    });
+  });
   const isCritical = createMemo(() =>
     visibleWindows().some((window) => getProviderLimitTone(props.limit, window) === 'error')
   );
@@ -185,22 +210,25 @@ export function ProviderQuotaWarning(props: {
         </div>
         <div class="chat-quota-warning-actions">
           <Show when={availableResets() > 0}>
-            <Show when={usageLink()} fallback={<span>{resetLabel()}</span>}>
-              {(link) => (
-                <a
-                  class="chat-quota-warning-usage"
-                  href={link().url}
-                  onClick={(event) => {
-                    event.preventDefault();
-                    // VS Code's window-level link handler also opens clicks with default prevented.
-                    event.stopPropagation();
-                    postMessage({ type: 'vscode/open-external', payload: { url: link().url } });
-                  }}
-                >
-                  {resetLabel()}
-                </a>
-              )}
-            </Show>
+            <div ref={(el) => (resetPopupAnchor = el)} class="chat-quota-warning-resets">
+              <button
+                ref={(el) => (resetPopupButton = el)}
+                type="button"
+                class="chat-quota-warning-usage"
+                aria-expanded={showResetPopup()}
+                onClick={() => setShowResetPopup((visible) => !visible)}
+              >
+                {resetLabel()}
+              </button>
+              <Show when={showResetPopup()}>
+                <ProviderLimitPopup
+                  limit={props.limit}
+                  providerName={props.providerName}
+                  resetsOnly
+                  onClose={() => setShowResetPopup(false)}
+                />
+              </Show>
+            </div>
           </Show>
           <button
             type="button"

@@ -36,10 +36,10 @@ class OpenCodeStatusPresentationTest {
     }
 
     @Test fun `uses the corresponding verified version for each API family`() {
-        assertEquals("OpenCode 1.19.4", render(info(cli = "1.19.4", server = "1.19.4")).text)
+        assertEquals("OpenCode 1.19.5", render(info(cli = "1.19.5", server = "1.19.5")).text)
         assertEquals("OpenCode 1.18.34*", render(info(cli = "1.18.34", server = "1.18.34")).text)
-        assertTrue(render(info(cli = "1.18.35", server = "1.18.35")).tooltip.contains("New CLI version: OpenCode 1.19.4"))
-        assertTrue(render(info(cli = "1.16.0", server = "1.16.0")).tooltip.endsWith("Verified w/ OpenCode 1.19.4"))
+        assertTrue(render(info(cli = "1.18.35", server = "1.18.35")).tooltip.contains("New CLI version: OpenCode 1.19.5"))
+        assertTrue(render(info(cli = "1.16.0", server = "1.16.0")).tooltip.endsWith("Verified w/ OpenCode 1.19.5"))
         assertTrue(render(info(cli = "2.3.0", server = "2.3.0")).tooltip.endsWith("Verified w/ OpenCode 2.2.0"))
     }
 
@@ -99,7 +99,9 @@ class OpenCodeStatusPresentationTest {
             assertEquals("OpenCode $version*", status.text)
             assertTrue(status.tooltip.contains("New CLI version: OpenCode 2.2.0 is not installed yet."))
         }
-        assertTrue(render(info(cli = "1.19.3", server = "1.19.3")).tooltip.contains("New CLI version: OpenCode 1.19.4"))
+        for (version in listOf("1.19.3", "1.19.4")) {
+            assertTrue(render(info(cli = version, server = version)).tooltip.contains("New CLI version: OpenCode 1.19.5"))
+        }
     }
 
     @Test fun `status baselines stay aligned with the recorded upstream SDK and client`() {

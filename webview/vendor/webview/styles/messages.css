@@ -3105,7 +3105,8 @@ body:is(.vscode-high-contrast, .vscode-high-contrast-light) .remote-markdown-ima
   z-index: var(--z-menu-raised);
 }
 
-.interactive-session .chat-input-shell.showing-floating-popover {
+.interactive-session .chat-input-shell.showing-floating-popover,
+.interactive-session .chat-quota-warning:has(.provider-limit-popup) {
   z-index: var(--z-popover);
 }
 

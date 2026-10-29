@@ -363,7 +363,7 @@ export const client = {
     },
     async messages(
       id: string,
-      options?: { limit?: number; before?: string; directory?: string }
+      options?: { limit?: number; before?: string; directory?: string; signal?: AbortSignal }
     ): Promise<SessionMessagePage> {
       const params = new URLSearchParams();
       if (options?.limit) params.set('limit', String(options.limit));
@@ -371,7 +371,9 @@ export const client = {
       if (options?.directory) params.set('directory', options.directory);
       const query = params.size > 0 ? `?${params.toString()}` : '';
       const path = `/session/${encodeURIComponent(id)}/message${query}`;
-      const response = await apiCall('GET', path);
+      const response = options?.signal
+        ? await apiCall('GET', path, undefined, { signal: options.signal })
+        : await apiCall('GET', path);
       if (Array.isArray(response)) {
         // SAFETY: The message endpoint's array form is the legacy SessionMessagePage wire format.
         return response as SessionMessagePage;

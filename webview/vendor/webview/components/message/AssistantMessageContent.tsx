@@ -861,7 +861,7 @@ export function AssistantMessageContent(props: {
       const part = createMemo(() => activeActivityParts().get(partId)!);
       const partKey = getAssistantActivityPartKey(part());
       const [entering, setEntering] = createSignal(
-        claimReveal(`active-activity:${partId}`) && !isLightweight()
+        claimReveal(`active-activity:${partId}`) && part().type === 'reasoning' && !isLightweight()
       );
       const exiting = () => !isLightweight() && !!props.exitingActivityPartKeys?.has(partKey);
       createEffect(() => {

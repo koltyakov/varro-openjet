@@ -77,6 +77,7 @@ export function alignBlockSizeToPixel(blockSize: number) {
 export function buildVirtualMetrics(args: {
   itemIds: string[];
   measuredHeights: Map<string, number>;
+  estimatedHeights?: ReadonlyMap<string, number>;
   knownZeroHeightIds?: ReadonlySet<string>;
   defaultItemHeight?: number;
   /**
@@ -121,7 +122,7 @@ export function buildVirtualMetrics(args: {
 
   for (let index = rebuildFrom; index < itemCount; index += 1) {
     const id = args.itemIds[index]!;
-    const measuredHeight = args.measuredHeights.get(id);
+    const measuredHeight = args.measuredHeights.get(id) ?? args.estimatedHeights?.get(id);
     const itemHeight = args.knownZeroHeightIds?.has(id)
       ? 0
       : measuredHeight === undefined

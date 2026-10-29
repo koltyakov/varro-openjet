@@ -7,7 +7,7 @@ import java.net.URI
 internal data class OpenCodeStatusPresentation(val text: String, val tooltip: String) {
     companion object {
         // Match the SDK/client versions in the pinned upstream Varro manifest.
-        private const val VERIFIED_V1 = "1.19.4"
+        private const val VERIFIED_V1 = "1.19.5"
         private const val VERIFIED_V2 = "2.2.0"
 
         fun from(info: OpenCodeVersionInfo, extensionVersion: String, autoUpdates: Boolean, now: Long = System.currentTimeMillis()): OpenCodeStatusPresentation {

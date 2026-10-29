@@ -27,6 +27,7 @@ export function ProviderLimitPopup(props: {
   alignTo?: 'left' | 'right';
   limit: ProviderLimitStatus | null;
   providerName: string;
+  resetsOnly?: boolean;
   onClose: () => void;
 }) {
   const [resetCreditsExpanded, setResetCreditsExpanded] = createSignal(false);
@@ -61,33 +62,40 @@ export function ProviderLimitPopup(props: {
   });
 
   return (
-    <div ref={setRef} class="provider-limit-popup" onClick={(e) => e.stopPropagation()}>
-      <div class="provider-limit-popup-header">
-        <span class="provider-limit-popup-title">Provider Limits</span>
-      </div>
-
-      <Show
-        when={props.limit?.status === 'available' && windows().length > 0}
-        fallback={
-          <Show when={creditBalance() === undefined}>
-            <div class="provider-limit-popup-empty">
-              {props.limit?.status === 'unsupported' || props.limit?.status === 'error'
-                ? props.limit.note || 'Limits unavailable'
-                : 'No active limits'}
-            </div>
-          </Show>
-        }
-      >
-        <div class="provider-limit-popup-rows">
-          <For each={windows()}>{(window) => <ProviderLimitRow window={window} />}</For>
+    <div
+      ref={setRef}
+      class="provider-limit-popup"
+      classList={{ 'provider-limit-popup-resets': props.resetsOnly }}
+      onClick={(e) => e.stopPropagation()}
+    >
+      <Show when={!props.resetsOnly}>
+        <div class="provider-limit-popup-header">
+          <span class="provider-limit-popup-title">Provider Limits</span>
         </div>
-      </Show>
 
-      <Show when={creditBalance() !== undefined}>
-        <div class="provider-limit-credit-section provider-limit-row-head">
-          <span class="provider-limit-row-label">Credits</span>
-          <span class="provider-limit-row-pct">{creditBalance()?.toLocaleString()}</span>
-        </div>
+        <Show
+          when={props.limit?.status === 'available' && windows().length > 0}
+          fallback={
+            <Show when={creditBalance() === undefined}>
+              <div class="provider-limit-popup-empty">
+                {props.limit?.status === 'unsupported' || props.limit?.status === 'error'
+                  ? props.limit.note || 'Limits unavailable'
+                  : 'No active limits'}
+              </div>
+            </Show>
+          }
+        >
+          <div class="provider-limit-popup-rows">
+            <For each={windows()}>{(window) => <ProviderLimitRow window={window} />}</For>
+          </div>
+        </Show>
+
+        <Show when={creditBalance() !== undefined}>
+          <div class="provider-limit-credit-section provider-limit-row-head">
+            <span class="provider-limit-row-label">Credits</span>
+            <span class="provider-limit-row-pct">{creditBalance()?.toLocaleString()}</span>
+          </div>
+        </Show>
       </Show>
 
       <Show when={resetCredits()}>
@@ -96,21 +104,26 @@ export function ProviderLimitPopup(props: {
             Math.max(resets().availableCount - (resets().credits?.length ?? 0), 0);
           return (
             <div class="provider-limit-reset-section">
-              <button
-                type="button"
-                class="provider-limit-reset-toggle"
-                aria-expanded={resetCreditsExpanded()}
-                onClick={() => setResetCreditsExpanded((expanded) => !expanded)}
+              <Show
+                when={!props.resetsOnly}
+                fallback={<div class="provider-limit-reset-heading">Usage limit resets</div>}
               >
-                <span>Usage limit resets ({resets().availableCount})</span>
-                <UiIcon
-                  source={navArrowRightIcon}
-                  class={`provider-limit-reset-chevron${resetCreditsExpanded() ? ' expanded' : ''}`}
-                  width="10"
-                  height="10"
-                />
-              </button>
-              <Show when={resetCreditsExpanded()}>
+                <button
+                  type="button"
+                  class="provider-limit-reset-toggle"
+                  aria-expanded={resetCreditsExpanded()}
+                  onClick={() => setResetCreditsExpanded((expanded) => !expanded)}
+                >
+                  <span>Usage limit resets ({resets().availableCount})</span>
+                  <UiIcon
+                    source={navArrowRightIcon}
+                    class={`provider-limit-reset-chevron${resetCreditsExpanded() ? ' expanded' : ''}`}
+                    width="10"
+                    height="10"
+                  />
+                </button>
+              </Show>
+              <Show when={props.resetsOnly || resetCreditsExpanded()}>
                 <div class="provider-limit-reset-content">
                   <ul class="provider-limit-reset-rows" aria-label="Available usage limit resets">
                     <For each={resets().credits ?? []}>
@@ -160,7 +173,7 @@ export function ProviderLimitPopup(props: {
         }}
       </Show>
 
-      <Show when={props.providerName}>
+      <Show when={!props.resetsOnly && props.providerName}>
         <div class="provider-limit-popup-provider">
           {props.providerName}
           <Show when={planName()}>{(name) => <> · {name()}</>}</Show>

@@ -139,6 +139,7 @@ import { Tooltip } from './Tooltip';
 import { UiIcon } from './UiIcon';
 import { StarterLogo } from './message-list/StarterLogo';
 import { StarterHistogram } from './message-list/StarterHistogram';
+import { SessionSearch } from './message-list/SessionSearch';
 import {
   getSubagentSessionIds,
   getStickyUserMessagePreview,
@@ -163,6 +164,7 @@ import {
   type VisibleRange,
   type VirtualMetrics,
 } from './message-list/virtualization';
+import { RetainedRowHeights } from './message-list/retained-row-heights';
 import {
   captureExpansionScrollAnchor,
   getDistanceFromBottom,
@@ -438,6 +440,8 @@ export function getActiveTurnNavigationMessageId(
   const viewportIndex = turns.findIndex((turn) => turn.id === viewportTurnId);
   return viewportIndex > selectedIndex ? viewportTurnId : selectedTurnId;
 }
+
+const retainedRowHeights = new RetainedRowHeights();
 
 export function MessageList() {
   const pasteModifier = /Macintosh|Mac OS X/.test(navigator.userAgent) ? 'Cmd' : 'Ctrl';
@@ -741,6 +745,13 @@ export function MessageList() {
   >(null);
   let pendingTurnNavigationAnimationMessageId: string | null = null;
   let turnNavigationAnimationEpoch = 0;
+  const [searchNavigationTargetId, setSearchNavigationTargetId] = createSignal<string | null>(null);
+  let searchDestination: HTMLElement | null = null;
+  let searchDestinationTimer: ReturnType<typeof setTimeout> | undefined;
+  onCleanup(() => {
+    clearTimeout(searchDestinationTimer);
+    searchDestination?.classList.remove('session-search-destination');
+  });
   let editRevealEpoch = 0;
   let historyOwnedEdit: { messageId: string; sessionId: string } | null = null;
   let pendingExpansionScrollAnchor:
@@ -890,6 +901,18 @@ export function MessageList() {
   function stickyNavigationOwnsScroll() {
     return stickyNavigationInProgress() || pendingStickyJump() !== null;
   }
+  createEffect(
+    on(
+      () => {
+        const sessionId = state.activeSessionId;
+        return sessionId ? getSessionMessageWindowStateVersion(sessionId) : null;
+      },
+      () => {
+        if (untrack(searchNavigationTargetId)) cancelStickyNavigation();
+      },
+      { defer: true }
+    )
+  );
   const [stickyPreviewScrollTop, setStickyPreviewScrollTop] = createSignal(0);
   const [stickyPreviewViewportHeight, setStickyPreviewViewportHeight] = createSignal(0);
   const [reserveLoadingRow, setReserveLoadingRow] = createSignal(false);
@@ -1891,6 +1914,32 @@ export function MessageList() {
   });
 
   const messageIds = createMemo(() => messages().map((msg) => msg.info.id));
+  const rowHeightSessionKey = () => {
+    const sessionId = state.activeSessionId;
+    return sessionId ? `${sessionId}:${getSessionMessageWindowStateVersion(sessionId)}` : null;
+  };
+  let estimatedHeightSessionKey: string | null = null;
+  let restoredRowHeights: Map<string, number> | null = null;
+  const estimatedRowHeights = createMemo(() => {
+    const sessionKey = rowHeightSessionKey();
+    if (estimatedHeightSessionKey !== sessionKey) {
+      estimatedHeightSessionKey = sessionKey;
+      restoredRowHeights = null;
+    }
+    return (restoredRowHeights ??= retainedRowHeights.restore(sessionKey, messageIds()));
+  });
+  let lastVirtualSnapshot: {
+    sessionKey: string;
+    itemIds: string[];
+    metrics: VirtualMetrics;
+  } | null = null;
+  function retainVirtualSnapshot() {
+    if (!lastVirtualSnapshot) return;
+    const { sessionKey, itemIds, metrics } = lastVirtualSnapshot;
+    retainedRowHeights.remember(sessionKey, itemIds, metrics);
+    lastVirtualSnapshot = null;
+  }
+  onCleanup(retainVirtualSnapshot);
   const claimedEntranceMessageIds = new Set<string>();
   const revealedFlowItemKeys = new Map<string, Set<string>>();
 
@@ -2069,11 +2118,13 @@ export function MessageList() {
       setHasBootstrappedVirtualization(false);
       return;
     }
-    if (hasMeasuredAllRows()) setHasBootstrappedVirtualization(true);
+    if (hasMeasuredAllRows() || estimatedRowHeights()) setHasBootstrappedVirtualization(true);
   });
 
   const shouldVirtualize = createMemo(
-    () => shouldMeasureRows() && (hasBootstrappedVirtualization() || hasMeasuredAllRows())
+    () =>
+      shouldMeasureRows() &&
+      (hasBootstrappedVirtualization() || hasMeasuredAllRows() || estimatedRowHeights() !== null)
   );
 
   createEffect(() => {
@@ -2141,8 +2192,8 @@ export function MessageList() {
       mountedRows.push({ element: mountedRow, messageId });
     }
 
-    const invalidatedUnmountedHeight = unmountedMessageIds.some((messageId) =>
-      measuredHeights.has(messageId)
+    const invalidatedUnmountedHeight = unmountedMessageIds.some(
+      (messageId) => measuredHeights.has(messageId) || estimatedRowHeights()?.has(messageId)
     );
     const activeSessionId = state.activeSessionId;
     const invalidatedAnchorOwnershipEpoch = userScrollOwnershipEpoch;
@@ -2181,7 +2232,8 @@ export function MessageList() {
       setChangedLayoutAnchor(invalidatedAnchor);
     }
     for (const messageId of unmountedMessageIds) {
-      if (!measuredHeights.delete(messageId)) continue;
+      const removedEstimate = estimatedRowHeights()?.delete(messageId);
+      if (!measuredHeights.delete(messageId) && !removedEstimate) continue;
       zeroHeightRenderGeometrySignatures.delete(messageId);
       markVirtualMetricsDirty(messageId);
     }
@@ -2422,6 +2474,7 @@ export function MessageList() {
         getMessageRenderGeometrySignature(messageId, streaming);
       if (currentSignature === previousSignature) continue;
       measuredHeights.delete(messageId);
+      estimatedRowHeights()?.delete(messageId);
       zeroHeightRenderGeometrySignatures.delete(messageId);
       forcedVirtualContentMessageIds.add(messageId);
       markVirtualMetricsDirty(messageId);
@@ -2807,6 +2860,9 @@ export function MessageList() {
   });
 
   const virtualMetrics = createMemo(() => {
+    const sessionKey = rowHeightSessionKey();
+    if (lastVirtualSnapshot && lastVirtualSnapshot.sessionKey !== sessionKey)
+      retainVirtualSnapshot();
     if (!shouldVirtualize()) {
       cachedVirtualMetrics = null;
       cachedVirtualMetricsItemIds = null;
@@ -2823,6 +2879,7 @@ export function MessageList() {
     const result = buildVirtualMetrics({
       itemIds: ids,
       measuredHeights,
+      estimatedHeights: estimatedRowHeights() ?? undefined,
       knownZeroHeightIds: knownZeroHeightMessageIds(),
       previous,
       dirtyFromIndex: previous ? Math.min(dirtyVirtualMetricsFromIndex, ids.length) : undefined,
@@ -2830,6 +2887,7 @@ export function MessageList() {
     cachedVirtualMetrics = result;
     cachedVirtualMetricsItemIds = ids;
     dirtyVirtualMetricsFromIndex = ids.length;
+    if (sessionKey) lastVirtualSnapshot = { sessionKey, itemIds: ids, metrics: result };
     return result;
   });
 
@@ -2937,6 +2995,7 @@ export function MessageList() {
         forcedVirtualContentMessageIds.has(messageId) ||
         viewportForcedVirtualContentMessageIds.has(messageId) ||
         displayedStickyUserMessagePreview()?.id === messageId ||
+        searchNavigationTargetId() === messageId ||
         activePermissionMessageId === messageId ||
         editingMessage()?.messageId === messageId
       );
@@ -6808,11 +6867,18 @@ export function MessageList() {
     pendingTurnNavigationAnimationMessageId = null;
     setActiveTurnNavigationTargetId(null);
     setPendingStickyJump(null);
+    setSearchNavigationTargetId(null);
   }
 
   function handlePointerDown(event: PointerEvent) {
     const pointerTarget = event.target;
-    if (pointerTarget instanceof Element && pointerTarget.closest('.user-message-card')) {
+    if (
+      pointerTarget instanceof Element &&
+      (pointerTarget.closest('.user-message-card') ||
+        (searchNavigationTargetId() &&
+          pointerTarget.closest('[data-msg-id]')?.getAttribute('data-msg-id') ===
+            searchNavigationTargetId()))
+    ) {
       cancelStickyNavigation();
     }
     if (
@@ -7919,6 +7985,10 @@ export function MessageList() {
     resumeAutoScrollAfterDiffFocus = false;
     setPendingStickyJump(null);
     setStickyNavigationInProgress(false);
+    setSearchNavigationTargetId(null);
+    clearTimeout(searchDestinationTimer);
+    searchDestination?.classList.remove('session-search-destination');
+    searchDestination = null;
     setStickyUserMessagePreview(null);
     previousStickyPreviewId = null;
     previousStickyPreviewBounds = null;
@@ -8776,6 +8846,7 @@ export function MessageList() {
       const row = mountedMessageRows.get(messageId);
       if (!row?.classList.contains('interactive-item-virtual-placeholder')) continue;
       measuredHeights.delete(messageId);
+      estimatedRowHeights()?.delete(messageId);
       forcedVirtualContentMessageIds.add(messageId);
       markVirtualMetricsDirty(messageId);
       changed = true;
@@ -9431,6 +9502,7 @@ export function MessageList() {
       if (previous.has(messageId) === next.has(messageId)) continue;
       if (previous.has(messageId) && currentMessageIds.has(messageId)) {
         measuredHeights.delete(messageId);
+        estimatedRowHeights()?.delete(messageId);
         zeroHeightRenderGeometrySignatures.delete(messageId);
         forcedVirtualContentMessageIds.add(messageId);
         forcedContentChanged = true;
@@ -9635,7 +9707,7 @@ export function MessageList() {
   });
 
   async function waitForMessageRow(
-    preview: StickyUserMessagePreview,
+    preview: { id: string },
     isCurrent: () => boolean = () => true
   ): Promise<HTMLElement | null> {
     finishWidthResizeNow();
@@ -9694,10 +9766,10 @@ export function MessageList() {
     return null;
   }
 
-  function alignMountedMessage(preview: StickyUserMessagePreview): boolean {
+  function alignMountedMessage(preview: { id: string }): boolean {
     const row = mountedMessageRows.get(preview.id);
     if (!row || row.classList.contains('interactive-item-virtual-placeholder')) return false;
-    const target = row.querySelector<HTMLElement>('.user-message-card');
+    const target = row.querySelector<HTMLElement>('.user-message-card, .chat-turn-content') ?? row;
     if (containerRef && target) {
       const containerRect = containerRef.getBoundingClientRect();
       const targetRect = target.getBoundingClientRect();
@@ -9709,7 +9781,7 @@ export function MessageList() {
     return true;
   }
 
-  function navigateToMountedMessage(preview: StickyUserMessagePreview): boolean {
+  function navigateToMountedMessage(preview: { id: string }): boolean {
     disengageBottomFollow();
     const aligned = alignMountedMessage(preview);
     if (aligned) {
@@ -9811,7 +9883,7 @@ export function MessageList() {
   }
 
   async function settleMountedStickyPreviewJump(
-    preview: StickyUserMessagePreview,
+    preview: { id: string },
     sessionId: string,
     settleEpoch: number
   ) {
@@ -9851,7 +9923,7 @@ export function MessageList() {
   }
 
   async function waitAndNavigateToMessage(
-    preview: StickyUserMessagePreview,
+    preview: { id: string },
     isCurrent?: () => boolean
   ): Promise<boolean> {
     disengageBottomFollow();
@@ -9875,6 +9947,58 @@ export function MessageList() {
 
     if (isCurrent && !isCurrent()) return false;
     return navigateToMountedMessage(preview);
+  }
+
+  async function handleSearchNavigate(messageId: string) {
+    cancelStickyNavigation();
+    const sessionId = state.activeSessionId;
+    if (!sessionId) return;
+    const windowVersion = getSessionMessageWindowStateVersion(sessionId);
+    const epoch = ++stickyJumpSettleEpoch;
+    const isCurrent = () =>
+      !disposed &&
+      state.activeSessionId === sessionId &&
+      stickyJumpSettleEpoch === epoch &&
+      getSessionMessageWindowStateVersion(sessionId) === windowVersion;
+    setSearchNavigationTargetId(messageId);
+    setStickyNavigationInProgress(true);
+    pendingWheelResizeAnchor = null;
+    resumeAutoScrollAfterDiffFocus = false;
+    finishWidthResizeNow();
+    disengageBottomFollow();
+    const loadingOwner = { windowVersion };
+    try {
+      if (!messages().some((entry) => entry.info.id === messageId)) {
+        setLoadingOlderHistory(sessionId, true, loadingOwner);
+        while (isCurrent() && !messages().some((entry) => entry.info.id === messageId)) {
+          const cursor = getSessionHistoryCursor(sessionId);
+          if (!cursor) break;
+          const loaded = await loadOlderSessionHistoryPage(sessionId);
+          if (!loaded && getSessionHistoryCursor(sessionId) === cursor) break;
+        }
+      }
+      if (!isCurrent()) return;
+      if (!messages().some((entry) => entry.info.id === messageId)) {
+        throw new Error('Could not load this message. Reopen search to retry.');
+      }
+      const aligned = await waitAndNavigateToMessage({ id: messageId }, isCurrent);
+      if (!isCurrent()) return;
+      if (!aligned) throw new Error('Could not navigate to this message. Try again.');
+      clearTimeout(searchDestinationTimer);
+      searchDestination?.classList.remove('session-search-destination');
+      searchDestination = getStickyUserMessageSourceElement(messageId) ?? null;
+      searchDestination?.classList.add('session-search-destination');
+      searchDestinationTimer = setTimeout(() => {
+        searchDestination?.classList.remove('session-search-destination');
+        searchDestination = null;
+      }, 1000);
+    } finally {
+      setLoadingOlderHistory(sessionId, false, loadingOwner);
+      if (isCurrent()) {
+        setStickyNavigationInProgress(false);
+        setSearchNavigationTargetId(null);
+      }
+    }
   }
 
   async function loadAndScrollToStickyPreview(jump: {
@@ -10281,6 +10405,18 @@ export function MessageList() {
 
   return (
     <div class="interactive-list-shell min-h-0 flex-1">
+      <SessionSearch
+        sessionId={state.activeSessionId}
+        directory={
+          state.sessions.find((session) => session.id === state.activeSessionId)?.directory
+        }
+        messages={messages()}
+        loading={state.messagesLoading}
+        onNavigate={handleSearchNavigate}
+        onClose={() => {
+          if (searchNavigationTargetId()) cancelStickyNavigation();
+        }}
+      />
       <Show
         when={
           showEmptyStateHistogram() && !state.messagesLoading && shouldShowStarterLogo()
@@ -10467,6 +10603,7 @@ export function MessageList() {
                   forcedVirtualContentMessageIds.has(messageId) ||
                   viewportForcedVirtualContentMessageIds.has(messageId) ||
                   displayedStickyUserMessagePreview()?.id === messageId ||
+                  searchNavigationTargetId() === messageId ||
                   pendingPermissionSequence().activePermission?.messageID === messageId ||
                   editingMessage()?.messageId === messageId
                 );
