@@ -1524,6 +1524,71 @@ interactions, native Windows/Linux execution, live providers and OAuth were
 not verified. No production session, credential, database or service registration
 was used. This follow-up does not claim full backend or native UI parity.
 
+## Native verification follow-up, 2026-10-29
+
+Reviewed the unverified checks above against the available macOS 15.7.7 ARM64
+host, cached IntelliJ IDEA 2026.2.2/JBR runtime and Docker Linux ARM64 engine.
+The native checks below supersede the corresponding unverified JCEF and Linux
+backend entries in the preceding sync reports. No production code changed.
+
+The macOS run used a new sandbox under
+`build/native-verification-20261029/`, with separate JVM `user.home`, IDE config,
+system/log directories, HOME, XDG roots, workspace and database path. OpenCode
+autostart/updates were disabled and its command pointed to a nonexistent fixture
+path. The IDE opened the existing scrolling harness with the actual vendored UI,
+synthetic history and no OpenCode/provider connection. A disposable diagnostic
+plugin, installed only in this sandbox, queried native APIs and resized only its
+own windows. Provenance records plugin 0.9.8, IDE PID 62796, JCEF Chromium 144,
+`com.jetbrains.cef.remote.browser.RemoteBrowser` and the sandbox plugin JAR.
+The consolidated evidence is `build/native-verification-20261029/summary.json`.
+
+### Checks run
+
+| Check | Result and evidence | Coverage limit |
+| --- | --- | --- |
+| JCEF session search, pagination, navigation and focus | Passed in real JCEF. Search found historical prompt/response matches in a 260-message fixture; All prompts listed 130 prompts. Typing moved the transcript by 0 px, navigation loaded prompt 4, closed the panel and returned focus to the composer. `build/native-verification-20261029/results-ui.json`, `jcef-search.png`. | CDP key input reached JCEF. This does not verify the OS/AWT Cmd+F route or the ordinary Kotlin host bridge; history came from the synthetic host. |
+| Native Swing/JCEF resizing | Passed at measured browser widths 480, 694, 974, 1274 and 480 px, by resizing the sandbox's actual floating window rather than emulating a viewport. Root width and image-prompt right alignment agreed within 1 px at each settled size. `results-ui.json`, `jcef-resized.png` in the same directory. | Settled geometry and JCEF captures do not establish frame-by-frame desktop compositor correctness during a drag, maximize or restore. |
+| Native JCEF scrolling during synthetic streaming | Both `large-transcript` runs passed the harness's validity checks with no page errors or long tasks. Automatic following reached the bottom with no backward steps; the wheel-during-streaming run traversed 6,000 px and remained detached. p95 animation-frame intervals were 16.8 and 16.7 ms. `build/scroll-benchmark/cdp-dyIch7/` and `cdp-f2iQbl/` contain results, traces and viewport captures. | These are two synthetic fixture runs, not a performance comparison or complete real-conversation rendering verification. Wheel input was delivered through CDP to JCEF. |
+| macOS Cocoa visibility selectors | Passed. The same `NSApplication.windows`, `isVisible` and `occlusionState` selectors used by `ProjectNotifications.kt` reported visible/unoccluded counts `1/1`, then `0/0` after hiding the sandbox windows, then `1/1` after restoring them. `build/native-verification-20261029/results.json`. | Confirms native API availability and the tested transition, not every partial-occlusion, multi-monitor or notification-suppression case. |
+| IntelliJ system-notification invocation | Partial. A single labeled fixture notification was sent through the running IDE's `com.intellij.ui.SystemNotificationsImpl` while its windows were hidden; the call returned without exception. `results.json`. | No desktop-control tools were available to observe a banner. The call alone does not prove OS permission, visible delivery, sound, click-to-chat behavior or production notification admission. |
+| Native Linux V2 adapter and managed service | Passed both Kotlin suites without skips against the exact published Linux ARM64 OpenCode 2.2.0 binary through `scripts/check-opencode-compatibility.py --version 2.2.0`. The container used copied current sources, isolated HOME/XDG/database/service roots and the existing build cache. `build/native-verification-20261029/linux-results/result.json`, `linux-results/test-results/`, `linux-check.log`. | Verifies the tested Linux backend paths, including native process inspection/service recovery, not Linux desktop notifications, JCEF or other architectures/releases. |
+| Handy availability | Read-only discovery found `/Applications/Handy.app/Contents/MacOS/Handy`; same-user process inspection found it was not running. `build/native-verification-20261029/handy-discovery.json`. | No app launch, microphone recording, transcription command or personal log read was performed. Real dictation remains unverified. |
+
+The first search attempt was blocked by the scrolling benchmark's diagnostic
+overlay, not a production search element. The initial failed result is retained
+in `results.json`; the UI-only rerun hid that fixture-only overlay and passed.
+No vendor styles or application components were patched. The IDE launch log also
+retains sandbox-environment startup errors: `SystemHealthMonitor` encountered a
+null value with the minimal environment, and Station's Unix socket path was too
+long. The completed checks establish their stated outcomes, not an error-free
+IDE startup. No plugin fix or general native-startup pass is claimed for those
+unrelated diagnostics.
+
+Cleanup is recorded in `build/native-verification-20261029/cleanup.json`: the
+sandbox IDE exited, fixture/debug/probe ports 50532, 50533 and 50534 closed and no OpenCode
+fixture database was created by the UI run. The Linux container exited and was
+removed. No production session, credentials, service registration or IDE config
+was used. Only this report changes in tracked source; diagnostic scripts, plugin
+and evidence remain under ignored build output.
+
+### Still unverified
+
+| Remaining check | Why it remains unverified / next prerequisite |
+| --- | --- |
+| macOS notification banners, audible output and Open chat action | Requires observation of actual desktop delivery with appropriate notification permissions and a configured fixture conversation. The native invocation and Cocoa transition above are only partial coverage. |
+| OS/AWT shortcut routing, native focus ownership and production multi-view bridge flows | The JCEF checks used browser-level input and a synthetic host. Exercise Cmd+F, native dialogs, settings propagation and view ownership through the normal Kotlin-backed tool window/editor chats in an isolated IDE. |
+| Desktop compositor clipping and broader UI cases | No desktop capture/control facility was available. Frame-by-frame native resizing/maximize/restore, quotas/forms/child controls and other real-editor flows remain outside this run. |
+| Agent-owned process Stop notification/resumption | The released fixture covers direct shell deletion, but this run did not stop an agent-owned running tool through the native chat UI. A dedicated tool-running provider fixture or isolated live-account scenario is still needed. OpenCode 2.2.0's ignored `reason=user` hint remains a known server limitation. |
+| Real Windows handles, PowerShell inspection and Windows desktop behavior | No Windows host/runtime was available. macOS and Docker Linux cannot validate Windows sharing violations or native Windows UI behavior. Existing injected sharing-failure tests do not replace that check. |
+| Linux desktop UI and native x86 variants | The Docker check was headless Linux ARM64 backend execution only. A desktop-enabled Linux test environment and the relevant architecture are still needed. |
+| Signed-in live providers, quota accounts, native decision-model quality and interactive OAuth | No isolated test account, credentials or paid-inference authorization was supplied. Local deterministic providers and signed-out tests do not establish those results. |
+| Real Handy recording lifecycle | Handy is installed but not running. It must be deliberately started/configured with a model and microphone permissions before a user-approved recording test. No microphone was activated. |
+| Upstream macOS companion | OpenJet has no companion publisher/socket watcher, as recorded in the 2026-10-26 review. This is not an implemented JetBrains operation with a runnable native parity check. |
+
+The existing backend differences listed in the sync review remain unchanged.
+These native results narrow the verification gaps; they do not establish full
+backend, desktop-notification or IDE interaction parity.
+
 ## Verification
 
 The opt-in integration test launches a released CLI with isolated HOME, XDG directories and database. Its provider is a local deterministic HTTP fixture. It checks authenticated health and SSE, catalogs, pending input, prompt streaming, reopened history, helper and stateless generation, archive/restore, saved-permission editing when supported, permission and form acknowledgement, fork, tail deletion, session deletion, and read-only V1 import. Steering checks interrupt a stalled turn, resume pending steering, and verify after completion and 0, 75 and 250 ms sampling delays that queued input stays parked. It has been run against OpenCode 2.0.6, 2.0.25, 2.0.26, 2.0.28, 2.0.29, 2.0.32, 2.1.1, 2.1.2, 2.1.3, 2.1.4 and 2.2.0; the steering regression has been run against 2.0.26, 2.0.28, 2.0.29, 2.0.32, 2.1.1, 2.1.2, 2.1.3, 2.1.4 and 2.2.0. From 2.1.2, the fixture also verifies that native free-model exclusions survive both projected provider catalogs. From 2.2.0, it verifies decision endpoint discovery, signed-out server-owned limits, non-chat model filtering and the renamed text-generation route and selected-model admission error.
