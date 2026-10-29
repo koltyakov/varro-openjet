@@ -36,6 +36,18 @@ the provider. No vendored files are rewritten during sync or transformed for hos
 `npm run sync:check` verifies the vendored content hash recorded in `vendor/UPSTREAM.json`.
 The upstream contract is documented in Varro's `docs/host-extensions.md`.
 
+## File citations
+
+File citations carry their owning session and directory through `vscode/open`.
+`FileReferences.kt` validates the requested range and authorizes the directory against
+the open roots and current history scope. Nested folders and project worktrees require
+fresh session records. Resolution prefers an exact session-relative path, then a bounded
+suffix search within that session, then its containing workspace. It does not search an
+unrelated workspace for a missing citation. `EditorIntegration.kt` offers a native chooser
+for ambiguous matches and selects the clamped, inclusive line range. Cancelling returns
+`cancelled`, so the webview does not mark the citation unavailable. Files without a line
+target still use their registered IDE editor.
+
 ## Layout
 
 ```

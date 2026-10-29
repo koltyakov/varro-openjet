@@ -52,19 +52,46 @@ class EditorIntegration(private val project: Project) {
     /**
      * Opens a path in the editor.
      *
-     * @return `"opened"` or `"unavailable"`, which is what the webview's
+     * @return `"opened"`, `"unavailable"` or `"cancelled"`, which is what the webview's
      *   `openPathWithResult` promise resolves to.
      */
-    fun openPath(path: String, line: Int?, kind: String?): String {
+    fun openPath(path: String, line: Int?, kind: String?, endLine: Int? = null, sessionDirectory: String? = null,
+        isCancelled: () -> Boolean = { false }): String {
         return try {
-            openResolvedPath(path, line, kind)
+            val roots = workspaceRoots()
+            val matches = FileReferences.resolve(path, sessionDirectory, roots, isCancelled)
+            if (matches.isEmpty()) return "unavailable"
+            if (isCancelled()) return "cancelled"
+            val selected = if (matches.size == 1) matches.single() else chooseReference(path, matches, sessionDirectory ?: roots.firstOrNull())
+                ?: return "cancelled"
+            if (isCancelled()) return "cancelled"
+            openResolvedPath(selected.toString(), line, kind, endLine)
         } catch (failure: Exception) {
             log.warn("Failed to open file $path", failure)
             "unavailable"
         }
     }
 
-    private fun openResolvedPath(path: String, line: Int?, kind: String?): String {
+    private fun workspaceRoots(): List<String> = ApplicationManager.getApplication().runReadAction<List<String>> {
+        (listOfNotNull(projectRoot()) + com.intellij.openapi.roots.ProjectRootManager.getInstance(project).contentRoots.map { it.path }).distinct()
+    }
+
+    private fun chooseReference(path: String, matches: List<Path>, root: String?): Path? {
+        var selected: Path? = null
+        ApplicationManager.getApplication().invokeAndWait {
+            val choices = com.intellij.openapi.ui.ComboBox(matches.map {
+                WorkspacePaths.relativeWithin(it.toString(), root) ?: it.toString()
+            }.toTypedArray())
+            val dialog = object : com.intellij.openapi.ui.DialogWrapper(project) {
+                init { title = "Choose a File for $path"; init() }
+                override fun createCenterPanel(): javax.swing.JComponent = choices
+            }
+            if (dialog.showAndGet()) selected = matches[choices.selectedIndex]
+        }
+        return selected
+    }
+
+    private fun openResolvedPath(path: String, line: Int?, kind: String?, endLine: Int?): String {
         val file = resolve(path) ?: return "unavailable"
         var result = "unavailable"
         ApplicationManager.getApplication().invokeAndWait {
@@ -81,7 +108,14 @@ class EditorIntegration(private val project: Project) {
                     openResponseFile(line,
                         openRegistered = { manager.openFile(file, true).isNotEmpty() },
                         openAtLine = { zeroBasedLine ->
-                            val editor = manager.openTextEditor(OpenFileDescriptor(project, file, zeroBasedLine, 0), true)
+                            val document = com.intellij.openapi.fileEditor.FileDocumentManager.getInstance().getDocument(file)
+                            val range = FileReferences.lineRange(zeroBasedLine + 1, endLine, document?.lineCount ?: 1)
+                            val editor = manager.openTextEditor(OpenFileDescriptor(project, file, range.first, 0), true)
+                            editor?.let {
+                                val start = it.document.getLineStartOffset(range.first)
+                                it.caretModel.moveToOffset(start)
+                                it.selectionModel.setSelection(start, if (endLine == null) start else it.document.getLineEndOffset(range.last))
+                            }
                             editor?.scrollingModel?.scrollToCaret(ScrollType.CENTER)
                             editor != null || manager.isFileOpen(file)
                         },

@@ -49,6 +49,11 @@ Inspection failures preserve records. Malformed leases do not authorize recovery
 from a marker over the existing file. Lease passwords remain host-only and survive
 handoff.
 
+A competing host can remove its completed claim during validation. Attribute reads
+must distinguish a missing file from a non-regular or non-private file. Missing claims
+mean the current attempt did not acquire ownership; directories, symlinks and public
+records still fail validation without being replaced.
+
 Restart preflight checks global status, the session inventory, and pending questions
 and permissions. On v2, deleted historical directories are skipped after checking
 global status. Busy sessions and observed pending attention still block restart
@@ -56,5 +61,6 @@ even when their directory has been deleted. Other inspection failures prevent th
 restart. Idle maintenance uses the same checks.
 
 `ServerOwnershipTest` covers cross-host handoff, crashed-host recovery, legacy
-marker recovery, PID reuse, inspection failure, and the macOS executable fallback.
+marker recovery, PID reuse, inspection failure, the macOS executable fallback, and
+100 eight-host election rounds with private-record rejection checks.
 `RestartPreflightTest` covers deleted directories and failed attention reads.

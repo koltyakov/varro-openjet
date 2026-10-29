@@ -41,6 +41,8 @@ import { showSessionActionFeedback } from './chat/SessionActionFeedback';
 
 interface MarkdownProps {
   content: string;
+  sessionID?: string;
+  directory?: string;
   cacheByContent?: boolean;
   forceStreaming?: boolean;
   lightweight?: boolean;
@@ -57,6 +59,7 @@ export type MarkdownInlineSlot = {
 
 type ParseMarkdownOptions = {
   cacheByContent: boolean;
+  directory?: string;
   disablePathLinkify?: boolean;
   disableCodeHighlighting?: boolean;
   allowMermaidHydration?: boolean;
@@ -106,6 +109,7 @@ type MarkdownHydrationFlags = {
 };
 
 type RenderMarkdownContext = {
+  directory: string;
   disablePathLinkify: boolean;
   disableCodeHighlighting: boolean;
   disableCache: boolean;
@@ -176,6 +180,7 @@ const ALLOWED_HTML_ATTRIBUTES = [
   'data-copy-text',
   'data-external',
   'data-file',
+  'data-inferred-code-path',
   'data-lang',
   'data-highlight-lang',
   'data-mermaid-source',
@@ -295,6 +300,7 @@ const PRIVATE_RENDERER_ATTRIBUTES = [
   'data-copy-text',
   'data-external',
   'data-file',
+  'data-inferred-code-path',
   'data-lang',
   'data-highlight-lang',
   'data-mermaid-source',
@@ -326,6 +332,7 @@ function escapeHtml(value: string) {
 function getRenderedMarkdownCacheKey(content: string, options: ParseMarkdownOptions) {
   return JSON.stringify([
     state.editorContext.workspacePath || '',
+    options.directory || '',
     getSessionReferenceContextKey(content),
     options.disablePathLinkify ? 'no-paths' : 'paths',
     options.disableCodeHighlighting ? 'plain-code' : 'highlight-code',
@@ -432,16 +439,17 @@ function isAbsolutePath(path: string) {
 
 function splitPathReference(
   raw: string
-): { path: string; line?: number; lineSuffix?: string } | null {
+): { path: string; line?: number; endLine?: number; lineSuffix?: string } | null {
   const trimmed = raw.trim();
   if (!trimmed) return null;
 
-  const match = trimmed.match(/^(.*?)\s+\(line (\d+(?:-\d+)?)\)$/i);
+  const match = trimmed.match(/^(.*?)\s+\(line ([1-9]\d*)(?:-([1-9]\d*))?\)$/i);
   if (match) {
     return {
       path: match[1]!,
       line: parseInt(match[2]!, 10),
-      lineSuffix: ` (line ${match[2]})`,
+      endLine: match[3] ? Math.max(Number(match[2]), Number(match[3])) : undefined,
+      lineSuffix: ` (line ${match[2]}${match[3] ? `-${match[3]}` : ''})`,
     };
   }
 
@@ -450,24 +458,28 @@ function splitPathReference(
     return {
       path: fragmentMatch[1]!,
       line: parseInt(fragmentMatch[2]!, 10),
+      endLine: fragmentMatch[3]
+        ? Math.max(Number(fragmentMatch[2]), Number(fragmentMatch[3]))
+        : undefined,
       lineSuffix: ` (line ${fragmentMatch[2]}${fragmentMatch[3] ? `-${fragmentMatch[3]}` : ''})`,
     };
   }
 
-  const colonMatch = trimmed.match(/^(.*):(\d+(?:-\d+)?)$/);
+  const colonMatch = trimmed.match(/^(.*):([1-9]\d*)(?:-([1-9]\d*))?$/);
   if (!colonMatch) return { path: trimmed };
 
   return {
     path: colonMatch[1]!,
     line: parseInt(colonMatch[2]!, 10),
-    lineSuffix: ` (line ${colonMatch[2]})`,
+    endLine: colonMatch[3] ? Math.max(Number(colonMatch[2]), Number(colonMatch[3])) : undefined,
+    lineSuffix: ` (line ${colonMatch[2]}${colonMatch[3] ? `-${colonMatch[3]}` : ''})`,
   };
 }
 
 function toAbsolutePath(path: string) {
   if (isAbsolutePath(path)) return normalizePath(path);
 
-  const workspacePath = state.editorContext.workspacePath;
+  const workspacePath = renderMarkdownContext?.directory || state.editorContext.workspacePath;
   if (!workspacePath) return normalizePath(path);
 
   const relativePath = normalizePath(path).replace(/^\.\//, '');
@@ -475,8 +487,10 @@ function toAbsolutePath(path: string) {
   return `${trimTrailingSlashes(normalizePath(workspacePath))}/${relativePath}`;
 }
 
-function buildFileLink(raw: string, label?: string) {
-  const parsed = splitPathReference(getLocalFilePath(raw) ?? raw);
+function buildFileLink(raw: string, label?: string, fromHref = false) {
+  const parsed = fromHref
+    ? parseLocalFileHref(raw)
+    : splitPathReference(getLocalFilePath(raw) ?? raw);
   if (!parsed) return null;
 
   const absolutePath = toAbsolutePath(parsed.path);
@@ -486,12 +500,20 @@ function buildFileLink(raw: string, label?: string) {
     .replace(/^<code>([\s\S]*)<\/code>$/i, '$1')
     .replace(/^`+|`+$/g, '')
     .trim();
-  const visibleLabel =
-    !plainLabel || FILE_PATH_REFERENCE_RE.test(plainLabel) ? canonicalPath : label!.trim();
-  const payload = JSON.stringify(
-    parsed.line != null ? { path: absolutePath, line: parsed.line } : { path: absolutePath }
-  );
-  const href = parsed.line != null ? `${absolutePath}:${parsed.line}` : absolutePath;
+  const visibleLabel = !fromHref
+    ? raw.trim()
+    : !plainLabel || FILE_PATH_REFERENCE_RE.test(plainLabel)
+      ? canonicalPath
+      : label!.trim();
+  const payload = JSON.stringify({
+    path: normalizePath(parsed.path),
+    line: parsed.line,
+    endLine: parsed.endLine,
+  });
+  const href =
+    parsed.line != null
+      ? `${absolutePath}:${parsed.line}${parsed.endLine != null ? `-${parsed.endLine}` : ''}`
+      : absolutePath;
   const title = `${absolutePath}${parsed.lineSuffix ?? ''}`;
 
   return {
@@ -634,7 +656,7 @@ renderer.codespan = function ({ text }: { text: string }) {
   if (!renderMarkdownContext?.disablePathLinkify && isLikelyFilePathReference(text)) {
     const link = buildFileLink(text);
     if (link) {
-      return `<a href="${escapeHtml(link.href)}" class="file-path-link" ${TRUSTED_RENDERER_ATTRIBUTE} data-file="${escapeHtml(link.payload)}" title="${escapeHtml(link.title)}">${escapeHtml(link.label)}</a>`;
+      return `<a href="${escapeHtml(link.href)}" class="file-path-link" ${TRUSTED_RENDERER_ATTRIBUTE} data-inferred-code-path data-file="${escapeHtml(link.payload)}" title="${escapeHtml(link.title)}">${escapeHtml(link.label)}</a>`;
     }
   }
 
@@ -646,7 +668,7 @@ renderer.link = function ({ href, text: rawText, title, tokens }) {
   if (renderMarkdownContext?.escapeHtml && href.startsWith('mailto:')) return text;
 
   if (isLocalFileHref(href)) {
-    const link = buildFileLink(href, rawText);
+    const link = buildFileLink(href, rawText, true);
     if (link) {
       const titleAttr = ` title="${escapeHtml(title || link.title)}"`;
       return `<a href="${escapeHtml(link.href)}" class="file-path-link" ${TRUSTED_RENDERER_ATTRIBUTE} data-file="${escapeHtml(link.payload)}"${titleAttr}>${escapeHtml(link.label)}</a>`;
@@ -801,6 +823,22 @@ function getLocalFilePath(href: string | null): string | null {
   return href;
 }
 
+function parseLocalFileHref(href: string) {
+  // Split line syntax before decoding so an encoded # or colon stays part of the filename.
+  const parsed = splitPathReference(href);
+  if (!parsed) return null;
+  let path = getLocalFilePath(parsed.path);
+  if (path === null) return null;
+  if (!/^file:\/\//i.test(parsed.path)) {
+    try {
+      path = decodeURIComponent(path);
+    } catch {
+      // Bare paths can contain literal percent signs rather than URI escapes.
+    }
+  }
+  return { ...parsed, path };
+}
+
 function isLikelyFilePathReference(raw: string, requireCanonicalSpecialName = false): boolean {
   const parsed = splitPathReference(raw);
   if (!parsed || !FILE_PATH_REFERENCE_RE.test(raw.trim())) return false;
@@ -824,29 +862,39 @@ function sanitizeAnchorHref(anchor: HTMLAnchorElement) {
   }
 
   const href = anchor.getAttribute('href')?.trim() || '';
-  const localPath = getLocalFilePath(href);
-  let filePath = localPath ? splitPathReference(localPath)?.path : undefined;
-  if (!filePath && anchor.dataset.file) {
-    // DOMPurify strips Windows drive-letter hrefs; the trusted renderer payload retains the path.
+  let reference = anchor.dataset.file ? null : parseLocalFileHref(href);
+  if (anchor.dataset.file) {
+    // Generated payloads already hold filesystem paths. Do not decode them again.
+    // They also survive DOMPurify stripping Windows drive-letter hrefs.
     try {
-      filePath = getString(asRecord(JSON.parse(anchor.dataset.file))?.path);
+      const payload = asRecord(JSON.parse(anchor.dataset.file));
+      const path = getString(payload?.path);
+      if (path) reference = { path };
     } catch {
       // A malformed optional file payload must not supply native menu context.
     }
   }
   const text = anchor.textContent || anchor.querySelector('img')?.getAttribute('alt') || '';
   anchor.setAttribute('data-vscode-context', getLinkContext(text));
-  if (filePath) {
+  if (reference) {
     anchor.setAttribute(
       'data-vscode-context',
-      getLinkContext(text, { path: toAbsolutePath(filePath) })
+      getLinkContext(text, { path: toAbsolutePath(reference.path) })
     );
-  }
-  if (isLocalFileHref(href)) {
-    anchor.setAttribute('href', localPath!);
+    if (!anchor.dataset.file) {
+      anchor.dataset.file = JSON.stringify({
+        path: reference.path,
+        line: reference.line,
+        endLine: reference.endLine,
+      });
+      anchor.setAttribute(
+        'href',
+        `${reference.path}${reference.line == null ? '' : `:${reference.line}${reference.endLine == null ? '' : `-${reference.endLine}`}`}`
+      );
+    }
     anchor.removeAttribute('data-external');
     if (anchor.classList.contains('file-path-link')) {
-      prependLinkIcon(anchor, createFileTypeIconElement(filePath), true);
+      prependLinkIcon(anchor, createFileTypeIconElement(reference.path), true);
     }
     return;
   }
@@ -979,7 +1027,12 @@ function sanitizeHtml(
   sessionContextKey: string,
   disablePathLinkify: boolean
 ): string {
-  const cacheKey = `${sessionContextKey}\u0000${disablePathLinkify ? 'no-paths' : 'paths'}\u0000${html}`;
+  const cacheKey = JSON.stringify([
+    renderMarkdownContext?.directory || '',
+    sessionContextKey,
+    disablePathLinkify,
+    html,
+  ]);
   if (!disableCache) {
     const cached = getCachedValue(sanitizeHtmlCache, cacheKey);
     if (cached !== undefined) return cached;
@@ -1006,6 +1059,18 @@ function sanitizeHtml(
     if (element.hasAttribute(TRUSTED_RENDERER_ATTRIBUTE)) continue;
     for (const attribute of PRIVATE_RENDERER_ATTRIBUTES) element.removeAttribute(attribute);
   }
+  const illustrativeBlocks = new Map<Element, boolean>();
+  for (const anchor of fragment.querySelectorAll('a[data-inferred-code-path]')) {
+    const block = anchor.closest('p, li, td, th, h1, h2, h3, h4, h5, h6');
+    if (block && !illustrativeBlocks.has(block)) {
+      illustrativeBlocks.set(block, hasIllustrativePathProse(block));
+    }
+    anchor.removeAttribute('data-inferred-code-path');
+    if (!block || !illustrativeBlocks.get(block)) continue;
+    const code = document.createElement('code');
+    code.textContent = anchor.textContent;
+    anchor.replaceWith(code);
+  }
   for (const element of Array.from(
     fragment.querySelectorAll<HTMLElement>(`[${TRUSTED_RENDERER_ATTRIBUTE}]`)
   )) {
@@ -1029,9 +1094,33 @@ function sanitizeHtml(
   return result;
 }
 
+function hasIllustrativePathProse(block: Element): boolean {
+  // Only prose supplies intent cues. A directory named examples must still be linkable.
+  const walker = document.createTreeWalker(block, NodeFilter.SHOW_TEXT);
+  let prose = '';
+  while (walker.nextNode()) {
+    const node = walker.currentNode;
+    // Keep reference positions without interpreting words inside their filenames as prose.
+    if (node.parentElement?.closest('a[data-inferred-code-path]')) prose += '\uFFFC';
+    else if (!node.parentElement?.closest('a, code, pre')) prose += node.textContent;
+  }
+  if (
+    /\b(?:for example|for instance|suppose|hypothetical(?:ly)?|illustrative)\b|\be\.g\.|\bexamples?\s*:|\b(?:example|sample|placeholder)\s+(?:paths?|files?|filenames?|references?)\b/i.test(
+      prose
+    )
+  ) {
+    return true;
+  }
+  // Require the comparison between paths, not an instruction such as "You can open A and B".
+  return /\uFFFC[^\uFFFC]*?(?:\b(?:becomes?|instead of|rather than|versus)\b|\b(?:can|could|would|might)\b[^\uFFFC]*?\b(?:copy|display|resolve|open|show|point)\b)[^\uFFFC]*?\uFFFC/i.test(
+    prose
+  );
+}
+
 function renderMarkdownHtml(
   content: string,
   options?: {
+    directory?: string;
     disablePathLinkify?: boolean;
     disableCodeHighlighting?: boolean;
     disableCache?: boolean;
@@ -1041,6 +1130,7 @@ function renderMarkdownHtml(
 ): string {
   const previousRenderMarkdownContext = renderMarkdownContext;
   renderMarkdownContext = {
+    directory: options?.directory || state.editorContext.workspacePath || '',
     disablePathLinkify: options?.disablePathLinkify === true,
     disableCodeHighlighting: options?.disableCodeHighlighting === true,
     disableCache: options?.disableCache === true,
@@ -1760,6 +1850,7 @@ class StableMarkdownAppend {
 function parseMarkdown(content: string, options: ParseMarkdownOptions): string {
   if (!options.cacheByContent) {
     return renderMarkdownHtml(content, {
+      directory: options.directory,
       disablePathLinkify: options.disablePathLinkify,
       disableCodeHighlighting: options.disableCodeHighlighting,
       disableCache: true,
@@ -1773,6 +1864,7 @@ function parseMarkdown(content: string, options: ParseMarkdownOptions): string {
   if (cached !== undefined) return cached;
 
   const html = renderMarkdownHtml(content, {
+    directory: options.directory,
     disablePathLinkify: options.disablePathLinkify,
     disableCodeHighlighting: options.disableCodeHighlighting,
     allowMermaidHydration: options.allowMermaidHydration,
@@ -2239,6 +2331,19 @@ function hydrateRenderedMarkdown(root: HTMLDivElement | undefined, flags: Markdo
 }
 
 export function MarkdownRenderer(props: MarkdownProps) {
+  const sessionDirectory = createMemo(() => {
+    const sessionID = props.sessionID ?? state.activeSessionId;
+    return props.directory || state.sessions.find((entry) => entry.id === sessionID)?.directory;
+  });
+  function openFileReference(payload: { path: string; line?: number; endLine?: number }) {
+    const sessionID = props.sessionID ?? state.activeSessionId;
+    return openPathWithResult({
+      ...payload,
+      kind: 'file',
+      sessionID: sessionID ?? undefined,
+      directory: sessionDirectory(),
+    });
+  }
   // oxlint-disable-next-line no-unassigned-vars
   let ref: HTMLDivElement | undefined;
   // oxlint-disable-next-line no-unassigned-vars
@@ -2268,12 +2373,14 @@ export function MarkdownRenderer(props: MarkdownProps) {
   let lastAppliedDisablePathLinkify = !!props.disablePathLinkify;
   let lastAppliedEscapeHtml = !!props.escapeHtml;
   let lastAppliedWorkspacePath = state.editorContext.workspacePath || '';
+  let lastAppliedDirectory = sessionDirectory();
   let lastAppliedSessionContextKey = getSessionReferenceContextKey(props.content || '');
   let lastAppliedStableContent = initialSegments.stableContent;
   let lastAppliedTailContent = initialSegments.tailContent;
   let lastAppliedStableHtml = initialSegments.stableContent
     ? parseMarkdown(initialSegments.stableContent, {
         cacheByContent: false,
+        directory: lastAppliedDirectory,
         disablePathLinkify: !!props.disablePathLinkify,
         disableCodeHighlighting: lw(),
         allowMermaidHydration: lw(),
@@ -2282,6 +2389,7 @@ export function MarkdownRenderer(props: MarkdownProps) {
     : '';
   const initialTailParseOptions = {
     cacheByContent: initialSegments.stableContent.length === 0 && initialCacheByContent,
+    directory: lastAppliedDirectory,
     disablePathLinkify: !!props.disablePathLinkify,
     disableCodeHighlighting: initialSegments.hasUnclosedFence || lw(),
     allowMermaidHydration: lw() && !initialSegments.hasUnclosedFence,
@@ -2498,14 +2606,17 @@ export function MarkdownRenderer(props: MarkdownProps) {
         ? getStreamingMarkdownSegments(content, lastAppliedScanState)
         : getMarkdownRenderSegments(content, cacheByContent, lastAppliedScanState);
       const workspacePath = state.editorContext.workspacePath || '';
+      const directory = sessionDirectory();
       const sessionContextKey = getSessionReferenceContextKey(content);
       const stableContentChanged =
         workspacePath !== lastAppliedWorkspacePath ||
+        directory !== lastAppliedDirectory ||
         sessionContextKey !== lastAppliedSessionContextKey ||
         segments.stableContent !== lastAppliedStableContent ||
         renderModeChanged;
       const tailContentChanged =
         workspacePath !== lastAppliedWorkspacePath ||
+        directory !== lastAppliedDirectory ||
         sessionContextKey !== lastAppliedSessionContextKey ||
         segments.tailContent !== lastAppliedTailContent ||
         // Completion reveals unfinished tail syntax; settled blocks are already final.
@@ -2514,6 +2625,7 @@ export function MarkdownRenderer(props: MarkdownProps) {
       const appendOnlyStableDelta =
         !renderModeChanged &&
         workspacePath === lastAppliedWorkspacePath &&
+        directory === lastAppliedDirectory &&
         sessionContextKey === lastAppliedSessionContextKey
           ? stableMarkdownAppend.getDelta(
               lastAppliedStableContent,
@@ -2524,6 +2636,7 @@ export function MarkdownRenderer(props: MarkdownProps) {
       const appendedStableHtml = appendOnlyStableDelta
         ? parseMarkdown(appendOnlyStableDelta, {
             cacheByContent: false,
+            directory,
             disablePathLinkify,
             disableCodeHighlighting: isLightweight,
             allowMermaidHydration: isLightweight,
@@ -2538,6 +2651,7 @@ export function MarkdownRenderer(props: MarkdownProps) {
               ? `${lastAppliedStableHtml}${appendedStableHtml}`
               : parseMarkdown(segments.stableContent, {
                   cacheByContent: false,
+                  directory,
                   disablePathLinkify,
                   disableCodeHighlighting: isLightweight,
                   allowMermaidHydration: isLightweight,
@@ -2546,6 +2660,7 @@ export function MarkdownRenderer(props: MarkdownProps) {
             : lastAppliedStableHtml;
       const tailParseOptions = {
         cacheByContent: segments.stableContent.length === 0 && cacheByContent,
+        directory,
         disablePathLinkify,
         disableCodeHighlighting: segments.hasUnclosedFence || isLightweight,
         allowMermaidHydration: isLightweight && !segments.hasUnclosedFence,
@@ -2615,6 +2730,7 @@ export function MarkdownRenderer(props: MarkdownProps) {
         lastAppliedTailContent = segments.tailContent;
       }
       lastAppliedWorkspacePath = workspacePath;
+      lastAppliedDirectory = directory;
       lastAppliedSessionContextKey = sessionContextKey;
       lastAppliedScanState = segments.scanState;
       lastAppliedCacheByContent = cacheByContent;
@@ -2643,6 +2759,7 @@ export function MarkdownRenderer(props: MarkdownProps) {
     const disablePathLinkify = !!props.disablePathLinkify;
     const escapeRawHtml = !!props.escapeHtml;
     const workspacePath = state.editorContext.workspacePath;
+    const directory = sessionDirectory();
     const sessionContextKey = getSessionReferenceContextKey(content);
     if (rafId !== null) {
       pendingContent = content;
@@ -2651,6 +2768,7 @@ export function MarkdownRenderer(props: MarkdownProps) {
     pendingContent = content;
     rafId = requestAnimationFrame(flushPending);
     void workspacePath;
+    void directory;
     void sessionContextKey;
     void cacheByContent;
     void forceStreaming;
@@ -2756,15 +2874,21 @@ export function MarkdownRenderer(props: MarkdownProps) {
     }
 
     // SAFETY: The surrounding shape or discriminator check establishes the HTMLElement contract used below.
-    const link = (e.target as HTMLElement).closest<HTMLAnchorElement>('a.file-path-link');
+    const link = (e.target as HTMLElement).closest<HTMLAnchorElement>('a[data-file]');
     if (link) {
       e.preventDefault();
+      // The host forwards bubbled anchor clicks even when default is prevented.
+      e.stopPropagation();
       if (link.classList.contains('is-unavailable')) return;
       try {
         const payload = JSON.parse(link.dataset.file || '{}');
-        void openPathWithResult({ path: payload.path, line: payload.line, kind: 'file' })
+        void openFileReference({
+          path: payload.path,
+          line: payload.line,
+          endLine: payload.endLine,
+        })
           .then((status) => {
-            if (status === 'opened') return;
+            if (status !== 'unavailable') return;
             link.classList.add('is-unavailable');
             link.setAttribute('aria-disabled', 'true');
             link.removeAttribute('href');
@@ -2810,9 +2934,14 @@ export function MarkdownRenderer(props: MarkdownProps) {
 
     if (anchor && isLocalFileHref(anchor.getAttribute('href'))) {
       e.preventDefault();
+      e.stopPropagation();
       const payload = splitPathReference(anchor.getAttribute('href') || '');
       if (payload?.path) {
-        void openPathWithResult({ path: payload.path, line: payload.line, kind: 'file' });
+        void openFileReference({
+          path: payload.path,
+          line: payload.line,
+          endLine: payload.endLine,
+        });
       }
     }
   }

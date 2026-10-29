@@ -314,8 +314,7 @@ class OpenCodeCli(
     companion object {
         /** Message shown when the CLI cannot be found anywhere. */
         const val MISSING_CLI_MESSAGE: String =
-            "OpenCode CLI was not found. Install it with `npm install -g @opencode/cli`, " +
-                "or set the OpenCode command in Settings | Tools | Varro."
+            "OpenCode CLI not found. Install OpenCode v2 with: npm i -g @opencode/cli."
 
         private val VERSION_PATTERN = Regex("""\d+\.\d+\.\d+(?:-[0-9A-Za-z.\-]+)?""")
 
@@ -331,7 +330,7 @@ class OpenCodeCli(
 
         fun isMissingCliFailure(text: String): Boolean {
             val normalized = text.lowercase()
-            return MISSING_CLI_MARKERS.any { normalized.contains(it) }
+            return normalized.contains(MISSING_CLI_MESSAGE.lowercase()) || MISSING_CLI_MARKERS.any { normalized.contains(it) }
         }
 
         /**

@@ -663,8 +663,29 @@ class VarroProjectService(private val project: Project) : Disposable {
 
                 // --- Editor integration -----------------------------------------
                 "vscode/open" -> {
-                    val path = payload.str("path") ?: return
-                    val status = editor.openPath(path, payload.int("line"), payload.str("kind"))
+                    val status = try {
+                        val generation = server.requestGeneration()
+                        val options = varro.server.RequestOptions(timeoutMs = 15_000, maxResponseBytes = 2 * 1024 * 1024,
+                            cancellableBody = true, isCancelled = { isCancelled() || generation != server.requestGeneration() })
+                        FileReferences.open(payload ?: error("Missing file request"), authorizeDirectory = { id, directory ->
+                            require(id !in store.hiddenSessionIds) { "Session not found" }
+                            val authorized = FileReferences.authorizeDirectory(id, directory, transferRoots(), store.sessionHistoryScope,
+                                readSession = {
+                                    server.transport.request("GET", "/session/${java.net.URLEncoder.encode(id, Charsets.UTF_8)}",
+                                        options = options.copy(unscoped = true)).data.asObjectOrNull()
+                                },
+                                readProject = { root ->
+                                    server.transport.request("GET", "/project/current", options = options.copy(directory = root)).data.asObjectOrNull()
+                                })
+                            options.checkCancelled()
+                            authorized
+                        }, open = { path, line, endLine, kind, directory ->
+                            editor.openPath(path, line, kind, endLine, directory, options.isCancelled)
+                        })
+                    } catch (failure: Exception) {
+                        log.warn("Failed to open file reference", failure)
+                        "unavailable"
+                    }
                     payload.int("requestId")?.let { requestId ->
                         host?.post(
                             "vscode/open-result",

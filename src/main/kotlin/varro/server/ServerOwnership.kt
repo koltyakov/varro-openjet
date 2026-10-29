@@ -507,8 +507,10 @@ internal class ServerOwnership(
         }.getOrNull()
 
         private fun validatePrivateRecord(path: Path) {
-            if (!Files.exists(path, NOFOLLOW_LINKS)) return
-            check(Files.isRegularFile(path, NOFOLLOW_LINKS)) { "OpenCode ownership record is not a regular private file" }
+            // A competing owner can remove its claim between filesystem reads. Unlike
+            // isRegularFile, readAttributes distinguishes disappearance from an unsafe file.
+            val attributes = Files.readAttributes(path, java.nio.file.attribute.BasicFileAttributes::class.java, NOFOLLOW_LINKS)
+            check(attributes.isRegularFile) { "OpenCode ownership record is not a regular private file" }
             if (path.fileSystem.supportedFileAttributeViews().contains("unix")) {
                 val uid = Files.getAttribute(Path.of(System.getProperty("user.home")), "unix:uid")
                 val mode = Files.getAttribute(path, "unix:mode", NOFOLLOW_LINKS) as Int

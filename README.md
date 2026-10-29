@@ -23,6 +23,8 @@ Download the plugin ZIP from [GitHub Releases](https://github.com/koltyakov/varr
 
 Varro finds OpenCode on `PATH`, reuses a local service or starts one when needed. Set an explicit CLI path, server port or startup policy in **Settings > Tools > Varro**.
 
+If no providers are configured, Varro opens Models and the provider connection dialog after connecting to OpenCode. You can sign in there without running a terminal command.
+
 Automatic CLI updates are enabled by default for Varro-managed servers. You can disable them in settings.
 
 ## Using Varro

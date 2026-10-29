@@ -93,15 +93,45 @@ class ServerOwnershipTest {
         val path = shared.resolve("varro-opencode-server-4096.json")
         privateFile(Path.of("$path.managed"), Json.stringify(marker()))
         val managers = List(8) { ServerOwnership(4096, shared, legacy, identity) }
-        val start = java.util.concurrent.CountDownLatch(1)
         val pool = java.util.concurrent.Executors.newFixedThreadPool(managers.size)
         try {
-            val results = managers.map { manager -> pool.submit<Boolean> { start.await(); manager.refresh(4096) } }
-            start.countDown()
-            assertEquals(1, results.count { it.get(5, java.util.concurrent.TimeUnit.SECONDS) })
-            assertNotNull(ServerOwnership.record(path))
-            assertFalse(Files.exists(Path.of("$path.claim")))
-        } finally { pool.shutdownNow() }
+            repeat(100) {
+                Files.deleteIfExists(path)
+                val ready = java.util.concurrent.CountDownLatch(managers.size)
+                val round = java.util.concurrent.CountDownLatch(1)
+                val results = managers.map { manager -> pool.submit<Boolean> {
+                    ready.countDown(); round.await(); manager.refresh(4096)
+                } }
+                assertTrue(ready.await(5, java.util.concurrent.TimeUnit.SECONDS))
+                round.countDown()
+                assertEquals(1, results.count { it.get(5, java.util.concurrent.TimeUnit.SECONDS) })
+                assertNotNull(ServerOwnership.record(path))
+                assertFalse(Files.exists(Path.of("$path.claim")))
+            }
+        } finally {
+            pool.shutdownNow()
+            assertTrue(pool.awaitTermination(5, java.util.concurrent.TimeUnit.SECONDS))
+        }
+    }
+
+    @Test fun `claim races do not relax rejection of directories symlinks or public files`() = fixture { shared, legacy, identity ->
+        val manager = ServerOwnership(4096, shared, legacy, identity)
+        val claim = Path.of("${manager.path}.claim")
+        Files.createDirectory(claim)
+        assertThrows(IllegalStateException::class.java) { manager.beginLaunch() }
+        assertTrue(Files.isDirectory(claim))
+        Files.delete(claim)
+        if (claim.fileSystem.supportedFileAttributeViews().contains("posix")) {
+            val target = privateFile(shared.resolve("target"), "{}")
+            Files.createSymbolicLink(claim, target)
+            assertThrows(IllegalStateException::class.java) { manager.beginLaunch() }
+            assertTrue(Files.isSymbolicLink(claim))
+            Files.delete(claim)
+            privateFile(claim, "{}")
+            Files.setPosixFilePermissions(claim, PosixFilePermissions.fromString("rw-r--r--"))
+            assertThrows(IllegalStateException::class.java) { manager.beginLaunch() }
+            assertEquals("{}", Files.readString(claim))
+        }
     }
 
     @Test fun `removed runtime config does not block handoff or relax process verification`() = fixture { shared, legacy, identity ->

@@ -1240,6 +1240,18 @@ export function RichComposerArea(props: {
               removeSessionReferenceAtSelection(e.data ?? '')
             ) {
               e.preventDefault();
+              return;
+            }
+            if (e.data?.includes('\n')) {
+              // Native multiline insertion otherwise creates block nodes instead of controlled BRs.
+              const selection = getSelectionOffsets() ?? {
+                start: props.value.length,
+                end: props.value.length,
+              };
+              e.preventDefault();
+              const nextValue = `${props.value.slice(0, selection.start)}${e.data}${props.value.slice(selection.end)}`;
+              revealCaretAfterControlledInput = true;
+              props.onInput(nextValue, selection.start + e.data.length);
             }
             return;
           }
