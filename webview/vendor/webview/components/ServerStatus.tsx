@@ -204,15 +204,9 @@ export function ServerStatus() {
     <div class="server-status-surface">
       <Show when={serverStatus().state === 'starting'}>
         <div class="flex items-center gap-2">
-          <span class="h-2 w-2 rounded-full bg-vscode-accent animate-pulse-soft" />
-          <span
-            class="h-2 w-2 rounded-full bg-vscode-accent animate-pulse-soft"
-            style={{ 'animation-delay': '0.3s' }}
-          />
-          <span
-            class="h-2 w-2 rounded-full bg-vscode-accent animate-pulse-soft"
-            style={{ 'animation-delay': '0.6s' }}
-          />
+          <span class="loading-dot" />
+          <span class="loading-dot" style={{ 'animation-delay': '0.3s' }} />
+          <span class="loading-dot" style={{ 'animation-delay': '0.6s' }} />
         </div>
         <div>
           <p class="text-[13px] font-medium text-vscode-fg">Connecting to OpenCode...</p>

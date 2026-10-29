@@ -129,15 +129,9 @@ function WorkspaceLoading() {
   return (
     <div class="server-status-surface" role="status" aria-label="Loading workspace">
       <div class="flex items-center gap-[8px]" aria-hidden="true">
-        <span class="h-[8px] w-[8px] rounded-full bg-vscode-accent animate-pulse-soft" />
-        <span
-          class="h-[8px] w-[8px] rounded-full bg-vscode-accent animate-pulse-soft"
-          style={{ 'animation-delay': '0.3s' }}
-        />
-        <span
-          class="h-[8px] w-[8px] rounded-full bg-vscode-accent animate-pulse-soft"
-          style={{ 'animation-delay': '0.6s' }}
-        />
+        <span class="loading-dot" />
+        <span class="loading-dot" style={{ 'animation-delay': '0.3s' }} />
+        <span class="loading-dot" style={{ 'animation-delay': '0.6s' }} />
       </div>
     </div>
   );

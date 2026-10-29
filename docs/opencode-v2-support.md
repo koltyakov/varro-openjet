@@ -1,6 +1,6 @@
 # OpenCode V2 support
 
-OpenJet supports V1 from 1.16.0 and V2 from 2.0.5. The webview and shared sources were synced from Varro's `main` branch at `75c523daedbb`, version 0.33.25. Tested baselines are V1 1.19.5 and V2 2.2.1. The Kotlin adapter handles released-server contracts, including generated skill, shell and synthetic transcript records. Synthetic text appears as automatic-action notices; canonical subagent completion metadata produces linked subagent activities. Pending and running V2 patch calls render as active edits. Assistant history preserves automatic retry metadata for recovery notices. History attachments use deferred references with Kotlin-generated thumbnails and on-demand original reads.
+OpenJet supports V1 from 1.16.0 and V2 from 2.0.5. The webview and shared sources were synced from Varro's `main` branch at `01f3cf89ecbc`, version 0.33.25. Tested baselines are V1 1.19.5 and V2 2.2.1. The Kotlin adapter handles released-server contracts, including generated skill, shell and synthetic transcript records. Synthetic text appears as automatic-action notices; canonical subagent completion metadata produces linked subagent activities. Pending and running V2 patch calls render as active edits. Assistant history preserves automatic retry metadata for recovery notices. History attachments use deferred references with Kotlin-generated thumbnails and on-demand original reads.
 
 V2 sessions support `/pause` and a Resume action in the transcript. Pausing parks queued messages and interrupts with `resume=false`. Pause markers persist in the shared Varro session annotations, and session summaries and usage reports exclude paused time. Commit-message generation uses the stateless endpoint when the server advertises it, falling back to a helper session when the endpoint or selected model is unavailable before generation starts.
 
@@ -1726,6 +1726,43 @@ No new required Kotlin host or consumed-contract implementation gap remains in
 the reviewed changes. The pre-existing differences above remain; unrelated backend
 behavior and optional OpenCode UI implementations were inventoried, not reverified
 for full parity. No production session, credential, database or service registration
+was used for testing.
+
+## Loading-dot sync follow-up, 2026-10-29
+
+Reviewed the complete six-file diff from Varro
+`75c523daedbbe819c54125077a99fc53962fd7ec` through
+`01f3cf89ecbc5ca2b9074cff36aa24e99114ba04`, still version 0.33.25.
+The sole commit replaces utility-sized startup dots in `src/webview/App.tsx`
+and `components/ServerStatus.tsx` with the shared `.loading-dot` rule in
+`styles/messages.css`. Startup and transcript dots now have fixed 8-pixel
+dimensions, minimum dimensions, a square aspect ratio and no flex shrinking.
+Sources are vendored unchanged.
+
+Upstream `src/extension`, `src/shared` and `package.json` have no changes.
+No endpoint, message, configuration, persistence, server-adapter or
+platform-specific host behavior changed, so no Kotlin port is required.
+SDK 1.19.5, client 2.2.1, browser dependencies, Node/npm pins and support floors
+are unchanged. The preceding review's OpenCode release comparison remains
+applicable; there is no new released range to review.
+
+Vendor integrity, all 102 OpenJet browser host tests, TypeScript checking and
+browser bundling passed with pinned Node 24.22.2 and npm 12.2.1. All 34 upstream
+App/ServerStatus unit tests passed. Both new upstream Chromium regressions passed,
+checking connecting and workspace dots at font sizes 10, 13 and 16 pixels in
+320-by-120 and 1280-by-900 viewports. These are isolated browser fixtures, not
+JCEF sandbox verification.
+
+The full Kotlin/build and exact published V2 2.2.1 compatibility run is pending.
+
+No new required backend or consumed-contract gap remains in the reviewed delta.
+The preceding review's remaining-differences table still applies, including its
+upstream/OpenJet paths and user impact: shell-stop notifications, permission-review
+caching, pending snapshots, annotation roots, accepted AVIF decoding limits,
+Windows inspector warm-up, quota coordination/adapters, optional client controls
+and frontend notices. None changed here or was reverified for full parity.
+No sandbox IDE, native Windows/Linux, live provider, OAuth or Handy interaction
+was performed. No production session, credential, database or service registration
 was used for testing.
 
 ## Verification

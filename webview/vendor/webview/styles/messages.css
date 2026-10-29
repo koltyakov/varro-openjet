@@ -1884,9 +1884,15 @@ body:is(.vscode-high-contrast, .vscode-high-contrast-light) .assistant-activity-
   min-height: 80px;
 }
 
+.loading-dot,
 .chat-messages-loading-dot {
+  display: inline-block;
+  flex: 0 0 auto;
   width: 8px;
   height: 8px;
+  min-width: 8px;
+  min-height: 8px;
+  aspect-ratio: 1;
   border-radius: 50%;
   background: var(--color-vscode-accent);
   animation: pulse-soft 1.5s ease-in-out infinite;
