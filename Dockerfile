@@ -29,7 +29,7 @@ RUN apt-get update \
 # field. The NodeSource `setup_22.x` script floats to the newest 22.x, so the
 # container and a Volta-pinned host would drift apart and rewrite
 # package-lock.json against each other on every build.
-ARG NODE_VERSION=24.22.1
+ARG NODE_VERSION=24.22.2
 ARG NPM_VERSION=12.2.1
 ARG BUILD_ENV_HASH=unknown
 RUN set -eux; \

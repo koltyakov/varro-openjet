@@ -108,6 +108,27 @@ class NativeDecisionsTest {
         assertEquals(false, old.status().bool("supported")); assertNotNull(old.model)
     }
 
+    @Test fun `experimental client namespaces do not change native decision HTTP discovery`() {
+        for (operationID in listOf("generate.decisions", "experimental.generate.decisions")) {
+            val namespacedSpec = spec.deepCopy().asJsonObject.apply {
+                obj("paths").obj("/api/experimental/generate/decisions").obj("post")!!.addProperty("operationId", operationID)
+            }
+            val calls = mutableListOf<String>()
+            val native = NativeDecisions({ 2 }, { "native/judge" }) { method, path, _, _ ->
+                calls += "$method $path"
+                OpenCodeResponse(when (path) {
+                    "/openapi.json" -> namespacedSpec
+                    "/api/model?types=decision" -> catalog
+                    "/api/experimental/generate/decisions" -> answers()
+                    else -> error("Unexpected request $path")
+                })
+            }
+            assertEquals(true, native.status().bool("supported"))
+            assertEquals("allow", native.judgePermission(native.model!!, permission, JsonArray()).str("decision"))
+            assertEquals(listOf("POST /api/experimental/generate/decisions"), calls.filter { it.startsWith("POST") })
+        }
+    }
+
     @Test fun `decision provider selection validates catalog and hidden reviewer remains active`() {
         val settings = VarroSettings()
         var changes = 0

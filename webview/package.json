@@ -27,7 +27,7 @@
     "solid-js": "^1.9.17"
   },
   "devDependencies": {
-    "@opencode/client": "^2.2.0",
+    "@opencode/client": "^2.2.1",
     "@types/node": "26.6.6",
     "@tailwindcss/vite": "4.3.3",
     "iconoir": "7.12.1",
@@ -45,7 +45,7 @@
     "seroval": "1.6.8"
   },
   "volta": {
-    "node": "24.22.1",
+    "node": "24.22.2",
     "npm": "12.2.1"
   },
   "allowScripts": {
