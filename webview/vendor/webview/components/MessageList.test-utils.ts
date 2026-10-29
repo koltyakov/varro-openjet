@@ -6,6 +6,7 @@ import {
   setShowFileDiffs,
   setShowEmptyStateHistogram,
   setShowThinkingPreference,
+  requestMessageListScrollToBottom,
   state,
   stopLoading,
 } from '../lib/state';
@@ -231,6 +232,28 @@ export function settleBottomFollow(
     animationFrames.flush(startedAt + frame * 16);
     if (Math.abs(list.scrollHeight - list.clientHeight - list.scrollTop) < 0.01) return;
   }
+}
+
+export async function measureTranscriptRows(
+  list: HTMLElement,
+  animationFrames: ReturnType<typeof installQueuedAnimationFrameMocks>
+) {
+  // Geometry fixtures that use absolute row offsets need a measured history, not the cold
+  // provisional prefix. Visit it through the normal scroll path before exercising reflow.
+  list.dispatchEvent(new WheelEvent('wheel', { bubbles: true, deltaY: -1 }));
+  const step = Math.max(100, list.clientHeight);
+  const extent = Math.max(list.scrollHeight, state.messages.length * 160);
+  for (let top = 0; top <= extent; top += step) {
+    list.scrollTop = top;
+    list.dispatchEvent(new Event('scroll'));
+    await Promise.resolve();
+    animationFrames.flush();
+    await Promise.resolve();
+  }
+  requestMessageListScrollToBottom();
+  await Promise.resolve();
+  settleBottomFollow(animationFrames, list);
+  await Promise.resolve();
 }
 
 export function installControllableIntersectionObserver() {

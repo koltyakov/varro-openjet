@@ -67,12 +67,18 @@ export function getAssistantDialogSummaryMap(
   const pauseTimes = new Map(options?.pauses?.map((pause) => [pause.messageId, pause.pausedAt]));
   const rangeStart = options?.range?.start ?? 0;
   const rangeEnd = options?.range?.end ?? messages.length;
-  const entriesById = new Map<string, MessageEntry>(options?.entriesById);
-  for (let index = options?.entriesById ? rangeStart : 0; index < messages.length; index += 1) {
-    const entry = messages[index]!;
-    // Preserve Array.find's first-match behavior if malformed history contains duplicate IDs.
-    if (!entriesById.has(entry.info.id)) entriesById.set(entry.info.id, entry);
-  }
+  // An unfinished dialog has no summary. Do not copy its full history lookup on every delta.
+  let messageLookup: Map<string, MessageEntry> | undefined;
+  const getEntriesById = () => {
+    if (messageLookup) return messageLookup;
+    messageLookup = new Map<string, MessageEntry>(options?.entriesById);
+    for (let index = options?.entriesById ? rangeStart : 0; index < messages.length; index += 1) {
+      const entry = messages[index]!;
+      // Preserve Array.find's first-match behavior if malformed history contains duplicate IDs.
+      if (!messageLookup.has(entry.info.id)) messageLookup.set(entry.info.id, entry);
+    }
+    return messageLookup;
+  };
   const sessions = options?.sessions || [];
   const sessionsById = new Map(sessions.map((session) => [session.id, session]));
   const sessionsByParentId = new Map<string, TaskSessionInfo[]>();
@@ -83,11 +89,6 @@ export function getAssistantDialogSummaryMap(
     if (children) children.push(session);
     else sessionsByParentId.set(parentId, [session]);
   }
-  const taskSessionLookup: TaskSessionLookup = {
-    messagesById: entriesById,
-    sessionsById,
-    sessionsByParentId,
-  };
   let childRunsByParentId = options?.childRunsByParentId ?? null;
   let currentMessages: AssistantMessage[] = [];
   let currentPrimaryMessageIds: string[] = [];
@@ -122,6 +123,12 @@ export function getAssistantDialogSummaryMap(
       return;
     }
 
+    const entriesById = getEntriesById();
+    const taskSessionLookup: TaskSessionLookup = {
+      messagesById: entriesById,
+      sessionsById,
+      sessionsByParentId,
+    };
     const lastEntry = entriesById.get(lastMessage.id);
     const permissionRejected =
       lastEntry?.parts.some(

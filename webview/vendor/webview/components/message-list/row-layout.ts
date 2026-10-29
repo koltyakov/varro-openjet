@@ -39,6 +39,25 @@ export type MessageBlockBoundary = {
   signature: string;
 };
 
+export function sameMessageBlockBoundaries(
+  previous: ReadonlyMap<string, MessageBlockBoundary>,
+  next: ReadonlyMap<string, MessageBlockBoundary>
+) {
+  if (previous.size !== next.size) return false;
+  for (const [messageId, boundary] of next) {
+    const earlier = previous.get(messageId);
+    if (
+      !earlier ||
+      earlier.startsBordered !== boundary.startsBordered ||
+      earlier.endsBordered !== boundary.endsBordered ||
+      earlier.signature !== boundary.signature
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
 type MessageBlockBoundaryOptions = {
   delayedActivityPartKeys?: ReadonlySet<string>;
   dialogSummaryMessageIds?: ReadonlySet<string>;

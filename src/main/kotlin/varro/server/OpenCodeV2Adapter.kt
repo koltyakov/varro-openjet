@@ -283,7 +283,8 @@ internal class OpenCodeV2Adapter(
                 val shell = data("GET", scoped(target)).asObjectOrNull() ?: error("Invalid background process")
                 check(shell.obj("metadata").str("sessionID") == id) { "404 Background process not found" }
                 if (method == "DELETE") {
-                    raw("DELETE", scoped("$target?reason=user"))
+                    // Released V2 APIs do not support silent cancellation; deletion may notify the owning session.
+                    raw("DELETE", scoped(target))
                     backgroundServices.cancel(shellID)
                     backgroundWork.observe("shell.deleted", Json.obj("id" to shellID), directory)
                     notifyBackgroundChange(id, directory)

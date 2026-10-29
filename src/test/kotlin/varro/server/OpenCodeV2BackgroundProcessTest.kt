@@ -219,14 +219,14 @@ class OpenCodeV2BackgroundProcessTest {
         assertEquals(false, state.read("ses_one").bool("shell_one"))
     }
 
-    @Test fun `failed process stop leaves service tracking intact and successful stop clears it`() {
+    @Test fun `supported process stop route retains tracking on failure and clears it on success`() {
         for (directory in listOf(null, "/one")) {
             var fail = true
             val options = RequestOptions(directory = directory)
             val native = OpenCodeV2Adapter({ method, path, body, _ ->
                 if (method == "DELETE") {
-                    assertEquals("/api/shell/shell_one?reason=user" +
-                        if (directory == null) "" else "&location%5Bdirectory%5D=%2Fone", path)
+                    assertEquals("/api/shell/shell_one" +
+                        if (directory == null) "" else "?location%5Bdirectory%5D=%2Fone", path)
                     assertNull(body)
                     if (fail) error("Stop failed")
                 }

@@ -15,6 +15,7 @@ import {
   createSessionWorkspaceMetadata,
 } from '../../../shared/protocol';
 import { DEFAULT_PROVIDER_LIMIT_POLL_INTERVAL_SECONDS } from '../../../shared/provider-limit-config';
+import { getFollowupActionTitle } from '../../../shared/followups';
 import { getResolvedAgentPermissionRules } from '../../../shared/permission-rules';
 import { isPlaceholderSessionTitle } from '../../../shared/session-title';
 import { isSameWorkspacePath } from '../../../shared/workspace-path';
@@ -36,7 +37,9 @@ import { uiStore } from '../../lib/stores/ui-store';
 import { toApprovedPermissionReference, toPlainJudgeModel } from '../../lib/judge-request';
 import { resetMessageEditState } from '../../lib/message-edit-state';
 import { registerPermissionRemovalIntent } from '../../lib/message-list-layout';
+import { collectSteeringMessages } from '../../lib/message-steering';
 import { isWorkspaceDirectoryText } from '../../lib/part-utils';
+import { parseSkillAttachment } from '../../lib/skill-reference';
 import { resolveTaskSessionId } from '../../lib/task-session';
 import { normalizePermissionEvent } from '../../lib/session-event-reducer';
 import { flushPendingStreamingDeltasFor } from '../../lib/streaming-deltas';
@@ -779,8 +782,10 @@ async function fetchSessionMessages(
   if (!resetHistoryWindow) {
     const promptCursor = getSessionHistoryPromptCursor(sessionId);
     const loadedMessageIds = new Set(messages.map((entry) => entry.info.id));
+    const steeringIds = collectSteeringMessages(getSessionHistoryPromptEntries(sessionId)).ids;
     const hasBoundaryPrompt = getSessionHistoryPrompts(sessionId).some(
-      (entry) => !loadedMessageIds.has(entry.info.id) && hasPreviewablePromptContent(entry)
+      (entry) =>
+        !loadedMessageIds.has(entry.info.id) && hasPreviewablePromptContent(entry, steeringIds)
     );
     if (promptCursor && !hasBoundaryPrompt) {
       void loadSessionBoundaryPrompts(
@@ -801,11 +806,20 @@ const promptHistoryPageLoads = new Map<
   { revision: number; cursor: string; promise: ReturnType<typeof client.session.messages> }
 >();
 
-function hasPreviewablePromptContent(entry: MessageEntry) {
+function hasPreviewablePromptContent(entry: MessageEntry, steeringIds: ReadonlySet<string>) {
+  if (
+    entry.info.role !== 'user' ||
+    entry.info.pendingDelivery ||
+    steeringIds.has(entry.info.id) ||
+    getFollowupActionTitle(entry.info, entry.parts) !== null
+  ) {
+    return false;
+  }
   return entry.parts.some(
     (part) =>
       part.type === 'file' ||
       (part.type === 'text' &&
+        (!part.synthetic || parseSkillAttachment(part.text) !== null) &&
         part.text
           .replace(/\r\n?/g, '\n')
           .split('\n')
@@ -866,6 +880,9 @@ function loadOlderSessionPrompts(
         )
       );
       if (prompts.length > 0) {
+        // Steering, follow-up actions, and automatic notices cannot own the sticky header. Keep walking
+        // older pages until the original prompt is available, even for multi-page turns.
+        const steeringIds = collectSteeringMessages(getSessionHistoryPromptEntries(sessionId)).ids;
         const loadedMessageIds = new Set([
           ...knownLoadedMessageIds,
           ...appStore.state.messages
@@ -874,7 +891,9 @@ function loadOlderSessionPrompts(
         ]);
         if (
           prompts.some(
-            (entry) => !loadedMessageIds.has(entry.info.id) && hasPreviewablePromptContent(entry)
+            (entry) =>
+              !loadedMessageIds.has(entry.info.id) &&
+              hasPreviewablePromptContent(entry, steeringIds)
           )
         ) {
           return true;

@@ -343,8 +343,12 @@ input:focus-visible {
   left: 0;
   right: 0;
   pointer-events: none;
-  /* Keep the entire reserved footprint opaque while text and card height reflow. */
-  background: var(--color-vscode-list-bg);
+  /* Keep the card and solid gap opaque through reflow, then fade only the final tail. */
+  background: linear-gradient(
+    to bottom,
+    var(--color-vscode-list-bg) calc(100% - var(--latest-user-message-sticky-bottom-gap)),
+    transparent
+  );
   contain: paint;
   transform: translateZ(0);
   will-change: transform;
@@ -377,7 +381,6 @@ input:focus-visible {
 
 .latest-user-message-sticky-bottom-fade {
   height: var(--latest-user-message-sticky-bottom-gap);
-  background: var(--color-vscode-list-bg);
 }
 
 .latest-user-message-sticky {

@@ -216,6 +216,7 @@ import {
   getErrorDetailsLayoutSignatures,
   getInlinePreviewLayoutSignatures,
   getMessageBlockBoundaryMap,
+  sameMessageBlockBoundaries,
   getRenderEmptyMessageIds,
   getThinkingLayoutSignatures,
   hasVisibleProjectedText,
@@ -715,7 +716,7 @@ export function MessageList() {
   let pendingInitialScrollSessionId: string | null = null;
   let pendingInitialHistoryFillSessionId: string | null = null;
   const [initialPositioningSessionId, setInitialPositioningSessionId] = createSignal<string | null>(
-    null
+    editingMessage() ? null : state.activeSessionId
   );
   let initialScrollRafId = 0;
   let appendScrollRafId = 0;
@@ -874,7 +875,6 @@ export function MessageList() {
   const [activityExitBottomReserve, setActivityExitBottomReserve] = createSignal(0);
   const [measurementVersion, setMeasurementVersion] = createSignal(0);
   const [trackLayoutVersion, setTrackLayoutVersion] = createSignal(0);
-  const [hasBootstrappedVirtualization, setHasBootstrappedVirtualization] = createSignal(false);
   const [stickyPreviewGeometryVersion, setStickyPreviewGeometryVersion] = createSignal(0);
   const [stickyUserMessagePreview, setStickyUserMessagePreview] =
     createSignal<StickyUserMessagePreview | null>(null);
@@ -2093,39 +2093,24 @@ export function MessageList() {
       };
     })
   );
-  // Bootstrap exact heights once, then keep virtualization active as new rows arrive. Newly added
-  // rows use provisional heights until mounted instead of remounting the full transcript.
+  // Unmounted rows remain provisional. Measure the mounted range exactly before paint rather
+  // than mounting the entire initial page just to establish its offscreen heights.
   const shouldMeasureRows = createMemo(() => messages().length >= VIRTUALIZE_THRESHOLD);
 
-  function hasMeasuredEveryMessage() {
-    if (!shouldMeasureRows()) return false;
+  function hasUnmeasuredMountedRows() {
     const zeroHeightIds = knownZeroHeightMessageIds();
-    for (const id of messageIds()) {
-      // Complete render-empty projections already have an exact zero in the prefix. Waiting for
-      // another observer delivery after grouping invalidates their cache can strand bootstrap.
-      if (!measuredHeights.has(id) && !zeroHeightIds.has(id)) return false;
+    for (const [id, row] of mountedMessageRows) {
+      if (
+        !measuredHeights.has(id) &&
+        !zeroHeightIds.has(id) &&
+        !row.classList.contains('interactive-item-virtual-placeholder')
+      )
+        return true;
     }
-    return true;
+    return false;
   }
 
-  const hasMeasuredAllRows = createMemo(() => {
-    measurementVersion();
-    return hasMeasuredEveryMessage();
-  });
-
-  createEffect(() => {
-    if (!shouldMeasureRows()) {
-      setHasBootstrappedVirtualization(false);
-      return;
-    }
-    if (hasMeasuredAllRows() || estimatedRowHeights()) setHasBootstrappedVirtualization(true);
-  });
-
-  const shouldVirtualize = createMemo(
-    () =>
-      shouldMeasureRows() &&
-      (hasBootstrappedVirtualization() || hasMeasuredAllRows() || estimatedRowHeights() !== null)
-  );
+  const shouldVirtualize = shouldMeasureRows;
 
   createEffect(() => {
     const currentMessageIds = messageIds();
@@ -2906,12 +2891,18 @@ export function MessageList() {
         };
       }
       const metrics = virtualMetrics();
+      const sessionId = state.activeSessionId;
+      // Initial follow opens at the tail. Keep its range there as provisional heights become
+      // exact; selecting against scrollTop=0 would mount the head before immediately discarding it.
+      const positioningAtBottom =
+        !!sessionId && initialPositioningSessionId() === sessionId && autoScroll();
       const range = calculateVirtualRangeFromMetrics({
         metrics,
-        scrollTop: getVirtualScrollTop(scrollTop()),
+        scrollTop: positioningAtBottom
+          ? Math.max(0, metrics.totalHeight - viewportHeight())
+          : getVirtualScrollTop(scrollTop()),
         viewportHeight: viewportHeight(),
       });
-      const sessionId = state.activeSessionId;
       const pendingAnchor = sessionId ? getCurrentPendingHistoryAnchor(sessionId) : undefined;
       const structuralAnchor =
         pendingStructuralScrollAnchor?.sessionId === sessionId &&
@@ -4500,7 +4491,7 @@ export function MessageList() {
       pendingMeasurementAfterResize = false;
       pendingMeasurementAfterWidthResize = false;
       pendingMeasurementAfterContentResize = false;
-      if (shouldMeasureRows() && !hasMeasuredAllRows()) measureVisibleItems();
+      if (shouldMeasureRows() && hasUnmeasuredMountedRows()) measureVisibleItems();
       if (
         hadWidthResize &&
         !hadContentResize &&
@@ -6048,6 +6039,15 @@ export function MessageList() {
           ? BOTTOM_FOLLOW_SETTLE_FRAME_COUNT
           : 1;
       if (bottomFollowSettleFrames >= settleFrameCount) {
+        // The final cold-range rounding can add one pixel inside the normal follow tolerance.
+        // Finish initial positioning at the physical bottom before revealing the transcript.
+        if (
+          initialPositioningSessionId() === sessionId &&
+          !preservesNearBottomOffset &&
+          distanceFromBottom() > 0
+        ) {
+          performScroll({ force: true, immediate: true });
+        }
         bottomFollowResumePending = false;
         const shouldFillInitialViewport =
           pendingInitialHistoryFillSessionId === sessionId &&
@@ -7843,6 +7843,10 @@ export function MessageList() {
     const candidate = stickyUserMessagePreviewCandidate();
     const current = untrack(stickyUserMessagePreview);
 
+    // Navigation already handed the overlay to its source. Coalesced viewport geometry can
+    // still nominate the old preview while measurements settle; do not paint it again.
+    if (!current && stickyNavigationOwnsScroll()) return;
+
     if (current && shouldDeferStickyDuringUpwardHandoff()) return;
 
     if (
@@ -7947,7 +7951,6 @@ export function MessageList() {
     resetPendingHistoryGeneration();
     cancelScheduledStickyPreviewFrame();
     cancelWidthResize();
-    setHasBootstrappedVirtualization(false);
     setAppendBottomReserve(0);
     if (appendReserveReconcileFrame) cancelAnimationFrame(appendReserveReconcileFrame);
     appendReserveReconcileFrame = 0;
@@ -9343,19 +9346,18 @@ export function MessageList() {
       range: { start, end, nextUserRequestCreated },
     });
   });
-  const assistantDialogSummaryMap = createMemo(() => {
-    messageStructureVersion();
-    messageInfoVersion();
-    const suppressTrailingSummary = trailingSummaryMessageId() === null;
-    const sessions = projectDialogSessions();
-    const dialogMessages = assistantDialogMessages();
-    const collectLeadingSummaryStats = collectingLeadingDialogStats();
-    const pauses = readSessionPauses(
-      state.sessions.find((session) => session.id === state.activeSessionId)?.metadata
-    );
-    return untrack(() =>
-      mergeSegmentMaps(
-        mergeSegmentMaps(frozenDialogSummaries(), recentDialogSummaries()),
+  const tailAssistantDialogSummaryMap = createMemo(
+    () => {
+      messageStructureVersion();
+      messageInfoVersion();
+      const suppressTrailingSummary = trailingSummaryMessageId() === null;
+      const sessions = projectDialogSessions();
+      const dialogMessages = assistantDialogMessages();
+      const collectLeadingSummaryStats = collectingLeadingDialogStats();
+      const pauses = readSessionPauses(
+        state.sessions.find((session) => session.id === state.activeSessionId)?.metadata
+      );
+      return untrack(() =>
         getAssistantDialogSummaryMap(dialogMessages, undefined, {
           sessions,
           primarySessionId: state.activeSessionId ?? undefined,
@@ -9365,9 +9367,17 @@ export function MessageList() {
           entriesById: dialogHistoryEntriesById(),
           range: { start: dialogHistoryEnd(), end: dialogMessages.length },
         })
-      )
-    );
-  });
+      );
+    },
+    new Map<string, AssistantDialogSummaryInfo>(),
+    { equals: sameValues }
+  );
+  const historyDialogSummaries = createMemo(() =>
+    mergeSegmentMaps(frozenDialogSummaries(), recentDialogSummaries())
+  );
+  const assistantDialogSummaryMap = createMemo(() =>
+    mergeSegmentMaps(historyDialogSummaries(), tailAssistantDialogSummaryMap())
+  );
   const trailingAssistantDialogSummary = createMemo<{
     message: MessageEntry;
     summary: AssistantDialogSummaryInfo;
@@ -9575,9 +9585,10 @@ export function MessageList() {
   const historyMessageBlockBoundaryMap = mergeHistorySegmentMaps(
     historyMessageBlockBoundarySegments.map(({ boundaries }) => boundaries)
   );
-  const messageBlockBoundaryMap = createMemo(() =>
-    mergeSegmentMaps(
-      historyMessageBlockBoundaryMap(),
+  // Paced text can change without changing row boundaries. Compare the bounded tail before
+  // merging it with history, so those updates do not copy and invalidate the full transcript.
+  const tailMessageBlockBoundaryMap = createMemo(
+    () =>
       getMessageBlockBoundarySegment(
         tailCompactActivityMessages(),
         tailAssistantActivityGroupMap(),
@@ -9587,8 +9598,12 @@ export function MessageList() {
           modelChanges: new Set(modelChangeMap().keys()),
           dialogSummaries: new Set(rowAssistantDialogSummaryMap().keys()),
         }
-      )
-    )
+      ),
+    new Map(),
+    { equals: sameMessageBlockBoundaries }
+  );
+  const messageBlockBoundaryMap = createMemo(() =>
+    mergeSegmentMaps(historyMessageBlockBoundaryMap(), tailMessageBlockBoundaryMap())
   );
   const historyBorderedAdjacency = chainHistorySegments<
     ReturnType<typeof getBorderedAdjacencyLayoutSegment>
@@ -9719,19 +9734,10 @@ export function MessageList() {
       return row?.classList.contains('interactive-item-virtual-placeholder') ? undefined : row;
     };
     let previousMeasurementVersion = -1;
-    let bootstrapFrames = 0;
     let settleFrames = 0;
     while (state.activeSessionId === sessionId && isCurrent()) {
       const messageIndex = messages().findIndex((entry) => entry.info.id === preview.id);
       if (messageIndex < 0) return null;
-
-      if (shouldMeasureRows() && !shouldVirtualize()) {
-        previousMeasurementVersion = -1;
-        bootstrapFrames += 1;
-        if (bootstrapFrames >= 60) return null;
-        await waitForAnimationFrame();
-        continue;
-      }
 
       const row = findRow();
       if (!row) {
