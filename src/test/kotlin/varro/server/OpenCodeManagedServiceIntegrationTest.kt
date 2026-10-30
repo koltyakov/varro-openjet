@@ -13,6 +13,59 @@ import java.util.concurrent.TimeUnit
 class OpenCodeManagedServiceIntegrationTest {
     @JvmField @Rule val temporary = TemporaryFolder()
 
+    @Test fun `offline maintenance reserves ownership and restores service after success and failure`() {
+        val binary = System.getenv("VARRO_OPENCODE_TEST_BINARY")
+        assumeTrue("Set VARRO_OPENCODE_TEST_BINARY to a released v2 CLI", !binary.isNullOrBlank())
+        val root = temporary.newFolder().toPath()
+        val workspace = Files.createDirectories(root.resolve("workspace"))
+        val environment = System.getenv().filterKeys { it.equals("PATH", true) || it.equals("SystemRoot", true) } + mapOf(
+            "HOME" to root.toString(), "USERPROFILE" to root.toString(), "LOCALAPPDATA" to root.resolve("local").toString(),
+            "APPDATA" to root.resolve("appdata").toString(), "TMPDIR" to root.toString(), "TEMP" to root.toString(),
+            "XDG_CONFIG_HOME" to root.resolve("config").toString(), "XDG_DATA_HOME" to root.resolve("data").toString(),
+            "XDG_STATE_HOME" to root.resolve("state").toString(), "XDG_CACHE_HOME" to root.resolve("cache").toString(),
+            "OPENCODE_DB" to root.resolve("fixture.db").toString(), "VARRO_TEST_STATE_ROOT" to root.toString(),
+        )
+        val settings = varro.settings.VarroSettings().apply {
+            serverCommand = binary!!; serverPort = ServerSocket(0).use { it.localPort }; serverAutoUpdate = false
+        }
+        val server = OpenCodeServer(settings, serverStateDirectory = root.resolve("servers"), cliEnvironment = environment) { workspace.toString() }
+        val listeners = mutableSetOf<ProcessHandle>()
+        fun listener(): ProcessHandle {
+            val registration = OpenCodeConnection.registration(root.resolve("servers/opencode-service/opencode/service.json"))!!
+            System.getenv("VARRO_OPENCODE_TEST_VERSION")?.let { assertEquals(it, registration.version) }
+            return ProcessHandle.of(registration.pid).orElseThrow().also { listeners.add(it) }
+        }
+        try {
+            server.ensureStarted()
+            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30)
+            while (server.currentStatus() !is ServerStatus.Running && System.nanoTime() < deadline) Thread.sleep(50)
+            assertTrue(server.currentStatus().toString(), server.currentStatus() is ServerStatus.Running)
+            val original = listener()
+            assertEquals("preserved", server.withStoppedServer {
+                assertFalse(original.isAlive)
+                assertEquals(OpenCodeServer.RestartOutcome.BUSY, server.restart(false))
+                assertThrows(IllegalStateException::class.java) { server.withStoppedServer { error("Must not enter") } }
+                "preserved"
+            })
+            assertTrue(server.transport.checkHealth())
+            val replacement = listener()
+            assertNotEquals(original.pid(), replacement.pid())
+            val failure = assertThrows(IllegalStateException::class.java) {
+                server.withStoppedServer { assertFalse(replacement.isAlive); error("Fixture maintenance failed") }
+            }
+            assertEquals("Fixture maintenance failed", failure.message)
+            assertTrue(server.transport.checkHealth()); listener()
+        } finally {
+            runCatching { listener() }
+            server.dispose()
+            listeners.filter { it.isAlive }.forEach { handle ->
+                handle.destroy()
+                runCatching { handle.onExit().get(10, TimeUnit.SECONDS) }
+                if (handle.isAlive) { handle.destroyForcibly(); handle.onExit().get(5, TimeUnit.SECONDS) }
+            }
+        }
+    }
+
     @Test fun `managed private service survives Desktop registration and a second editor reload`() {
         val binary = System.getenv("VARRO_OPENCODE_TEST_BINARY")
         assumeTrue("Set VARRO_OPENCODE_TEST_BINARY to a released v2 CLI", !binary.isNullOrBlank())

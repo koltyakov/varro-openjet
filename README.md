@@ -60,6 +60,8 @@ Quota badges show remaining allowances and reset times when available. Supported
 
 Open usage reports from the tool-window menu for prompt counts, tokens, cache usage and assistant duration by provider and model.
 
+Tools > Varro also provides all-time usage CSV export, confirmed cleanup of old sessions with usage preservation and optional parent transcripts, and separate offline database compaction. See [session cleanup and usage export](docs/session-cleanup.md) for archive locations, safeguards and limits.
+
 ### Network and credentials
 
 OpenCode handles model requests. Attached context goes to the selected provider. Quota polling contacts providers directly; credentials stay in the IDE host, not the chat webview.

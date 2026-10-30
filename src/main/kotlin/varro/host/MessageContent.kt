@@ -42,6 +42,7 @@ internal object MessageContent {
         val path = path(part, directory) ?: return part
         if (part.str("type") == "file" && part.str("url") != null) return copy(part).apply {
             addProperty("url", "varro-content:$path")
+            ChatAnnotations.preview(part)?.let { add("annotation", it) }
         }
         if (part.str("type") == "reasoning" && part.obj("time")?.hasNonNull("end") == true && part.str("text").orEmpty().length > 512) {
             return copy(part).apply {

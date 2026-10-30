@@ -38,11 +38,11 @@ The upstream contract is documented in Varro's `docs/host-extensions.md`.
 
 ## File citations
 
-File citations carry their owning session and directory through `vscode/open`.
+File citations first use `POST /varro/citation-paths` for exact metadata checks, with bounded positive/negative caches and session-directory authorization. Missing names and relative aliases outside the root remain plain code. Validated links use `exact: true`, so a later deletion cannot redirect a click to a namesake. File citations carry their owning session and directory through `vscode/open`.
 `FileReferences.kt` validates the requested range and authorizes the directory against
 the open roots and current history scope. Nested folders and project worktrees require
-fresh session records. Resolution prefers an exact session-relative path, then a bounded
-suffix search within that session, then its containing workspace. It does not search an
+fresh session records. Legacy non-exact open actions prefer an exact session-relative path, then a five-second, 20,000-entry
+suffix search within that session, then its containing workspace. Discovery respects generated-directory defaults and JetBrains project exclusions. It does not search an
 unrelated workspace for a missing citation. `EditorIntegration.kt` offers a native chooser
 for ambiguous matches and selects the clamped, inclusive line range. Cancelling returns
 `cancelled`, so the webview does not mark the citation unavailable. Files without a line
@@ -183,6 +183,8 @@ read does not fall back to a local account.
 | `attention-notifications.ts`, `native-notifications.ts` | `host/AttentionNotifications.kt`, `host/ProjectNotifications.kt` |
 | Recycle bin and transcript export | `host/SessionTrash.kt`, `host/SessionTranscript.kt` |
 | Session summaries and usage reports | `host/SessionSummaryService.kt`, `host/LocalSessionSummary.kt`, `host/UsageReport.kt`, `host/LocalUsageDatabase.kt` |
+| Session cleanup, usage/timing archives and CSV export | `host/HistoryMaintenance.kt`, `host/SessionCleanup.kt`, `host/LegacySessionCleanup.kt`, `host/UsageArchive.kt`, `host/OriginalUsageTiming.kt`, `host/TranscriptArchive.kt`, `host/ArtifactCleanup.kt`, `host/UsageCsv.kt` |
+| Offline database maintenance and diagnostics | `server/OpenCodeServer.kt`, `server/OfflineMaintenancePreflight.kt`, `host/DatabaseMaintenance.kt`, `host/AboutDatabase.kt` |
 | `package.json` `contributes.configuration` | `settings/VarroSettings.kt`, `VarroConfigurable.kt` |
 
 ## Webview hosting

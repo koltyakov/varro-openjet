@@ -23,6 +23,10 @@ internal class LocalSessionSummary(private val path: Path) {
                 ProgressHandler.setHandler(database, 1_000, object : ProgressHandler() {
                     override fun progress(): Int = if (System.nanoTime() < deadline) 0 else 1
                 })
+                // V2 history, including separately stored 2.2.2 parts and inherited forks,
+                // is hydrated by the API. Never substitute a dormant V1 namesake.
+                val tables = HistoryDatabase.tables(database)
+                if ("session_v2" in tables && HistoryDatabase.scalar(database, "SELECT count(*) FROM session_v2 WHERE id=?", sessionId) != 0L) return null
                 val sessions = linkedMapOf<String, JsonObject>()
                 database.prepareStatement(
                     "WITH RECURSIVE tree(id) AS (SELECT id FROM session WHERE id = ? " +

@@ -116,6 +116,18 @@ class UsageAction : VarroAction() {
     override fun perform(project: Project, service: VarroProjectService, event: AnActionEvent) = service.generateUsageReport()
 }
 
+class ExportUsageCsvAction : VarroAction() {
+    override fun perform(project: Project, service: VarroProjectService, event: AnActionEvent) = service.exportUsageCsv()
+}
+
+class DeleteOldSessionsAction : VarroAction() {
+    override fun perform(project: Project, service: VarroProjectService, event: AnActionEvent) = service.deleteOldSessions()
+}
+
+class CompactDatabaseAction : VarroAction() {
+    override fun perform(project: Project, service: VarroProjectService, event: AnActionEvent) = service.compactDatabase()
+}
+
 class ImportLegacySessionAction : VarroAction() {
     override fun perform(project: Project, service: VarroProjectService, event: AnActionEvent) = service.importLegacySession()
 }

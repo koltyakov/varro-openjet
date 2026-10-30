@@ -56,16 +56,24 @@ class EditorIntegration(private val project: Project) {
      *   `openPathWithResult` promise resolves to.
      */
     fun openPath(path: String, line: Int?, kind: String?, endLine: Int? = null, sessionDirectory: String? = null,
-        isCancelled: () -> Boolean = { false }): String {
+        isCancelled: () -> Boolean = { false }, exact: Boolean = false): String {
         return try {
             val roots = workspaceRoots()
-            val matches = FileReferences.resolve(path, sessionDirectory, roots, isCancelled)
+            val matches = FileReferences.resolve(path, sessionDirectory, roots, exactOnly = exact, excluded = { candidate ->
+                ApplicationManager.getApplication().runReadAction<Boolean> {
+                    LocalFileSystem.getInstance().findFileByNioFile(candidate)?.let {
+                        ProjectFileIndex.getInstance(project).isExcluded(it)
+                    } == true
+                }
+            }, cancelled = isCancelled)
             if (matches.isEmpty()) return "unavailable"
             if (isCancelled()) return "cancelled"
             val selected = if (matches.size == 1) matches.single() else chooseReference(path, matches, sessionDirectory ?: roots.firstOrNull())
                 ?: return "cancelled"
             if (isCancelled()) return "cancelled"
             openResolvedPath(selected.toString(), line, kind, endLine)
+        } catch (_: java.util.concurrent.CancellationException) {
+            "cancelled"
         } catch (failure: Exception) {
             log.warn("Failed to open file $path", failure)
             "unavailable"

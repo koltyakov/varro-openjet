@@ -680,7 +680,7 @@ class VarroProjectService(private val project: Project) : Disposable {
                             options.checkCancelled()
                             authorized
                         }, open = { path, line, endLine, kind, directory ->
-                            editor.openPath(path, line, kind, endLine, directory, options.isCancelled)
+                            editor.openPath(path, line, kind, endLine, directory, options.isCancelled, exact = payload.bool("exact") == true)
                         })
                     } catch (failure: Exception) {
                         log.warn("Failed to open file reference", failure)
@@ -1168,10 +1168,18 @@ class VarroProjectService(private val project: Project) : Disposable {
         )
     }
 
+    private val historyMaintenance by lazy { HistoryMaintenance(project, server) { message, error ->
+        notify(message, if (error) NotificationType.ERROR else NotificationType.INFORMATION)
+    } }
+    fun exportUsageCsv() = historyMaintenance.exportCsv()
+    fun deleteOldSessions() = historyMaintenance.cleanup()
+    fun compactDatabase() = historyMaintenance.compact()
+
     fun showAbout() {
         val ide = com.intellij.openapi.application.ApplicationInfo.getInstance()
         ApplicationManager.getApplication().executeOnPooledThread {
             val diagnostics = server.readVersionInfo(refresh = true)
+            val database = AboutDatabase.markdown(LocalUsageDatabase.defaultPath(), server.isAttachOnly())
             if (project.isDisposed) return@executeOnPooledThread
             editor.openText(
                 """
@@ -1186,6 +1194,8 @@ class VarroProjectService(private val project: Project) : Disposable {
                 - Server PID: ${diagnostics?.processId ?: "Unknown"}
                 - Webview revision: ${WebviewAssets.assetVersion}
 
+                __DATABASE_DETAILS__
+
                 ## Links
 
                 - [Varro OpenJet and issue tracker](https://github.com/koltyakov/varro-openjet)
@@ -1194,7 +1204,7 @@ class VarroProjectService(private val project: Project) : Disposable {
 
                 Licensed under MIT. Settings are under Settings | Tools | Varro.
                 IDE diagnostics are available under Help | Show Log in Finder/Explorer.
-                """.trimIndent(),
+                """.trimIndent().replace("__DATABASE_DETAILS__", database),
                 "About Varro OpenJet.md", "markdown",
                 previewOnly = true,
             )

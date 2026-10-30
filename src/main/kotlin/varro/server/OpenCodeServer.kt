@@ -38,16 +38,18 @@ class OpenCodeServer(
     serverStateDirectory: java.nio.file.Path? = null,
     initialSavedPermissions: com.google.gson.JsonArray = com.google.gson.JsonArray(),
     persistSavedPermissions: (com.google.gson.JsonArray) -> Unit = {},
+    cliEnvironment: Map<String, String> = System.getenv(),
     private val workspaceCwd: () -> String?,
 ) : Disposable {
 
     private val log = logger<OpenCodeServer>()
 
-    private enum class Phase { IDLE, STARTING, RESTARTING, DISPOSING }
+    private enum class Phase { IDLE, STARTING, MAINTENANCE, RESTARTING, DISPOSING }
 
     val cli: OpenCodeCli = OpenCodeCli(
         configuredCommand = { settings.serverCommand },
         workingDirectory = workspaceCwd,
+        environment = cliEnvironment,
     )
 
     private val process = OpenCodeProcess(
@@ -62,6 +64,8 @@ class OpenCodeServer(
     private val phase = AtomicReference(Phase.IDLE)
     private val disposeGeneration = AtomicInteger(0)
     private val startInFlight = AtomicBoolean(false)
+    private val offlineRunning = AtomicBoolean(false)
+    private val offlineResult = AtomicReference<java.util.concurrent.CompletableFuture<*>?>(null)
     private val serverVersion = AtomicReference<String?>(null)
     private var versionInfo: OpenCodeVersionInfo? = null
     private val versionInfoEpoch = AtomicInteger(0)
@@ -99,6 +103,7 @@ class OpenCodeServer(
         updateEventStreamState = ::applyEventStreamState,
         emitEvent = { event -> eventListeners.forEach { runCatching { it(event) } } },
         getAuthorization = { authentication.authorization(url()) ?: process.authorization() },
+        sessionStateDirectory = serverStateDirectory?.resolveSibling("annotations"),
         verifyConnection = process::verifyConnection,
         initialSavedPermissions = initialSavedPermissions,
         persistSavedPermissions = persistSavedPermissions,
@@ -194,6 +199,7 @@ class OpenCodeServer(
      */
     fun ensureStarted() {
         if (status.get() is ServerStatus.Running) return
+        if (phase.get() != Phase.IDLE) return
         if (!startInFlight.compareAndSet(false, true)) return
         scheduler.execute {
             try {
@@ -204,16 +210,16 @@ class OpenCodeServer(
         }
     }
 
-    private fun runStart() {
+    private fun runStart(claimHeld: Boolean = false) {
         val generation = disposeGeneration.get()
         phase.compareAndSet(Phase.IDLE, Phase.STARTING)
         setStatus(ServerStatus.Starting)
 
-        var recoveryClaimHeld = false
+        var recoveryClaimHeld = claimHeld
         try {
             // A replacement listener can open before its owner publishes the new credentials.
             // Recovering followers must wait for that publication before registration or HTTP reads.
-            if (followsManagedRegistration && settings.serverAutoStart) {
+            if (followsManagedRegistration && settings.serverAutoStart && !recoveryClaimHeld) {
                 if (!awaitLaunchClaim(generation)) return
                 recoveryClaimHeld = true
             }
@@ -579,6 +585,89 @@ class OpenCodeServer(
 
     enum class RestartOutcome { RESTARTED, NOT_MANAGED, BUSY, BLOCKED }
 
+    /** Reserve local and shared restart admission until offline SQLite work has closed. */
+    fun <T> withStoppedServer(operation: () -> T): T {
+        check(!isAttachOnly() && status.get() is ServerStatus.Running) { "Offline maintenance requires a connected local managed server" }
+        check(phase.compareAndSet(Phase.IDLE, Phase.MAINTENANCE)) { "OpenCode is already starting, restarting or updating" }
+        val result = java.util.concurrent.CompletableFuture<T>()
+        offlineResult.set(result)
+        try {
+            scheduler.execute {
+                offlineRunning.set(true)
+                var stopped = false
+                var failure: Throwable? = null
+                var value: T? = null
+                try {
+                    check(phase.get() == Phase.MAINTENANCE) { "OpenCode was disposed before maintenance started" }
+                    fun requireIdle() {
+                        check(!hasHostWork() && transport.isIdleForOfflineMaintenance()) { "Active host work prevents offline maintenance" }
+                        if (transport.apiVersion == 2) OfflineMaintenancePreflight.requireIdle { path, options -> transport.request("GET", path, options = options) }
+                        else check(readRestartBlockers().get("totalSessionCount").asInt == 0) { "Active work or pending decisions prevent offline maintenance" }
+                    }
+                    requireIdle()
+                    check(process.refreshOwnership(takeover = true)) { "Offline maintenance requires verified process ownership" }
+                    check(awaitLaunchClaim(disposeGeneration.get())) { "OpenCode connection changed" }
+                    requireIdle()
+                    check(phase.compareAndSet(Phase.MAINTENANCE, Phase.RESTARTING)) { "OpenCode was disposed before maintenance started" }
+                    disposeGeneration.incrementAndGet()
+                    transport.stopEventStream()
+                    transport.abortRequests()
+                    transport.clearPendingAttentionRequests()
+                    process.stop()
+                    stopped = true
+                    serverVersion.set(null)
+                    transport.resetProtocol()
+                    setStatus(ServerStatus.Stopped)
+                    value = operation()
+                } catch (error: Throwable) {
+                    failure = error
+                } finally {
+                    if (stopped && phase.compareAndSet(Phase.RESTARTING, Phase.STARTING)) {
+                        // Cancellation must not strand the server offline. All SQLite resources are closed first.
+                        Thread.interrupted()
+                        cli.clearCache()
+                        runStart(claimHeld = true)
+                        if (status.get() !is ServerStatus.Running) {
+                            val restartFailure = IllegalStateException("OpenCode restart after maintenance failed: ${status.get()}")
+                            failure?.let(restartFailure::addSuppressed)
+                            failure = restartFailure
+                        }
+                    }
+                    try { process.endLaunch() } catch (error: Throwable) {
+                        if (failure == null) failure = error else failure.addSuppressed(error)
+                    }
+                    phase.compareAndSet(Phase.RESTARTING, Phase.IDLE)
+                    phase.compareAndSet(Phase.MAINTENANCE, Phase.IDLE)
+                    if (phase.get() == Phase.DISPOSING) {
+                        try { process.disconnect() } catch (error: Throwable) {
+                            if (failure == null) failure = error else failure.addSuppressed(error)
+                        }
+                        if (failure == null) failure = java.util.concurrent.CancellationException("OpenCode was disposed during maintenance")
+                    }
+                    offlineRunning.set(false)
+                    offlineResult.compareAndSet(result, null)
+                    failure?.let { result.completeExceptionally(it) } ?: run {
+                        @Suppress("UNCHECKED_CAST")
+                        result.complete(value as T)
+                    }
+                }
+            }
+        } catch (failure: Exception) {
+            offlineResult.compareAndSet(result, null)
+            phase.compareAndSet(Phase.RESTARTING, Phase.IDLE)
+            phase.compareAndSet(Phase.MAINTENANCE, Phase.IDLE)
+            throw failure
+        }
+        var interrupted = false
+        try {
+            while (true) {
+                try { return result.get() }
+                catch (_: InterruptedException) { interrupted = true }
+                catch (failure: java.util.concurrent.ExecutionException) { throw failure.cause ?: failure }
+            }
+        } finally { if (interrupted) Thread.currentThread().interrupt() }
+    }
+
     /** Repoints REST scoping and the event stream at another workspace root. */
     fun activateDirectory(directory: String?) {
         val normalized = OpenCodeRequestScope.normalizeDirectory(directory)
@@ -651,8 +740,11 @@ class OpenCodeServer(
         phase.set(Phase.DISPOSING)
         disposeGeneration.incrementAndGet()
         transport.dispose()
-        runCatching { process.disconnect() }.onFailure { log.warn("Could not relinquish OpenCode ownership", it) }
         scheduler.shutdownNow()
+        if (!offlineRunning.get()) {
+            offlineResult.getAndSet(null)?.completeExceptionally(java.util.concurrent.CancellationException("OpenCode was disposed before maintenance started"))
+            runCatching { process.disconnect() }.onFailure { log.warn("Could not relinquish OpenCode ownership", it) }
+        }
         runCatching { scheduler.awaitTermination(2, TimeUnit.SECONDS) }
         statusListeners.clear()
         eventListeners.clear()

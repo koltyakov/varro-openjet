@@ -73,6 +73,20 @@ class OpenCodeV2FailureTest {
         assertNull(OpenCodeV2Projection.normalizeError(Json.array(listOf("error"))))
     }
 
+    @Test fun `released Go and ChatGPT limit diagnostics survive history and live projection`() {
+        for ((type, message) in listOf(
+            "provider.go-limit" to "OpenCode Go weekly usage limit reached. Switch to a free model, or turn on Extra Usage on the Go page in OpenCode Console to keep going.",
+            "provider.chatgpt-limit" to "ChatGPT subscription sharing usage limit reached.",
+        )) {
+            val failure = Json.obj("type" to type, "message" to message, "status" to 429)
+            val history = OpenCodeV2Projection.message(idle(failure), "ses_fixture", context = context).obj("info").obj("error").obj("data")
+            val live = OpenCodeV2Events.project(Json.obj("id" to "limit", "type" to "session.execution.failed", "created" to 1000,
+                "data" to Json.obj("sessionID" to "ses_fixture", "error" to failure)), context)
+                .single { it.str("type") == "session.error" }.obj("properties").obj("error").obj("data")
+            for (error in listOf(history, live)) { assertEquals(message, error.str("message")); assertEquals(429, error.int("statusCode")) }
+        }
+    }
+
     @Test fun `history and live execution errors have bounded diagnostics before idle`() {
         val message = "Integration.Authorization: Request failed: 401 " + "x".repeat(20000)
         val failure = Json.obj("type" to "integration", "message" to message)

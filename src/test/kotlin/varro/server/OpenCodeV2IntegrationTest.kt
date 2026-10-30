@@ -384,7 +384,25 @@ class OpenCodeV2IntegrationTest {
             assertEquals("Legacy fixture prompt", importedMessages[0].asJsonObject.arr("parts")!![0].asJsonObject.str("text"))
             assertArrayEquals(original, Files.readAllBytes(legacyPath))
             transport.request("DELETE", "/session/$imported")
-            transport.request("DELETE", "/session/$id")
+            if (OpenCodeCli.compareVersions(version, "2.2.3") >= 0) {
+                val usage = varro.host.UsageArchive(root.resolve("test.db")) { Json.obj() }
+                val cleanup = varro.host.SessionCleanup(usage, 2, { true },
+                    { method, path, options -> transport.request(method, path, options = options) },
+                    { error("The fixture has no dormant V1 history to maintain offline") })
+                cleanup.locked {
+                    val inventory = cleanup.inventory()
+                    assertTrue(inventory.legacy.isEmpty())
+                    assertTrue(inventory.sessions.any { it.id == id })
+                    val target = inventory.sessions.single { it.id == id }
+                    val tree = varro.host.SessionCleanup.tree(target, inventory.sessions.associateBy { it.id })
+                    val result = cleanup.run(varro.host.SessionCleanup.Inventory(tree, emptyList()), System.currentTimeMillis() + 1000, true)
+                    assertEquals(tree.size, result.deleted)
+                    assertFalse(result.cancelled)
+                    assertTrue(Files.exists(usage.archivePath))
+                    assertTrue(Files.exists(usage.transcriptPath))
+                    assertTrue(varro.host.UsageCsv.read(root.resolve("test.db"), readAnnotations = { Json.obj() }).rows > 0)
+                }
+            } else transport.request("DELETE", "/session/$id")
             assertFalse(transport.request("GET", "/session").data!!.asJsonArray.any { it.asObjectOrNull().str("id") == id })
             if (OpenCodeCli.compareVersions(version, "2.0.32") >= 0) verifyAttachedQuotaCredentials(transport, root)
         } finally {

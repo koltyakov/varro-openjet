@@ -61,6 +61,7 @@ class RestProxy(
     private val log = logger<RestProxy>()
     private val modelPricing = ModelPricingCatalog()
     private val remoteImages = RemoteImages()
+    private val citationPaths = CitationPaths()
     private val sideQuestions = SideQuestions(server.transport::request, { server.transport.apiVersion },
         { server.currentStatus() is varro.server.ServerStatus.Running }, { server.requestGeneration() to server.url() },
         { (listOfNotNull(project.basePath) + context.context.arr("workspaceFolders")?.mapNotNull { it.asObjectOrNull().text("path") }.orEmpty()).distinct() })
@@ -273,7 +274,9 @@ class RestProxy(
             return sessionPage(path, request, isCancelled)
         }
 
-        val result = server.transport.request(method = method, path = path, body = body, options = RequestOptions(isCancelled = isCancelled,
+        val outgoing = if (method == "POST" && sessionId != null && request.segments.size == 3 && request.segments[2] in setOf("prompt_async", "message", "command"))
+            CitationPaths.withGuidance(body, transferDirectory ?: request.query["directory"]?.firstOrNull() ?: server.workspaceDirectory()) else body
+        val result = server.transport.request(method = method, path = path, body = outgoing, options = RequestOptions(isCancelled = isCancelled,
             directory = sessionId?.let { transfers?.get(it).str("directory") })).data
         if (method == "POST" && sessionId != null && request.segments.size == 3 && request.segments[2] in setOf("prompt_async", "message", "command")) {
             runCatching { services.clearFollowups(sessionId, transferDirectory ?: request.query["directory"]?.firstOrNull()
@@ -346,6 +349,18 @@ class RestProxy(
         fun q(key: String): String? = query[key]?.firstOrNull()?.takeIf { it.isNotBlank() }
 
         return when {
+            pathname == ApiRoutes.Endpoints.CITATION_PATHS -> citationPaths.validate(body, server.workspaceDirectory(), { session, directory ->
+                val roots = (listOfNotNull(project.basePath) + context.context.arr("workspaceFolders")?.mapNotNull { it.asObjectOrNull().text("path") }.orEmpty()).distinct()
+                if (session == null) roots.any { WorkspacePaths.isSame(it, directory) }
+                else {
+                    require(session !in store.hiddenSessionIds) { "Session not found" }
+                    val options = RequestOptions(unscoped = true, timeoutMs = 15_000, maxResponseBytes = 2 * 1024 * 1024,
+                        cancellableBody = true, isCancelled = isCancelled)
+                    FileReferences.authorizeDirectory(session, directory, roots, store.sessionHistoryScope,
+                        { server.transport.request("GET", "/session/${encode(session)}", options = options).data.asObjectOrNull() },
+                        { root -> server.transport.request("GET", "/project/current", options = options.copy(unscoped = false, directory = root)).data.asObjectOrNull() })
+                }
+            }, isCancelled)
             pathname == ApiRoutes.Endpoints.REMOTE_IMAGE -> {
                 val record = body.asObjectOrNull()
                 val automatic = record.bool("automatic") == true

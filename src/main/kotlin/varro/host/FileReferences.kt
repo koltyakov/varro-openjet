@@ -53,7 +53,8 @@ internal object FileReferences {
         }
     }
 
-    fun resolve(path: String, sessionDirectory: String?, roots: List<String>, cancelled: () -> Boolean = { false }): List<Path> {
+    fun resolve(path: String, sessionDirectory: String?, roots: List<String>, exactOnly: Boolean = false,
+        excluded: (Path) -> Boolean = { false }, cancelled: () -> Boolean = { false }): List<Path> {
         if (cancelled() || Thread.currentThread().isInterrupted) throw CancellationException("File lookup cancelled")
         val input = path.trim()
         if (input.isEmpty()) return emptyList()
@@ -61,12 +62,13 @@ internal object FileReferences {
         val root = (sessionDirectory ?: roots.firstOrNull())?.let(Path::of)
         val exact = (if (parsed.isAbsolute) parsed else root?.resolve(parsed) ?: parsed).normalize()
         if (Files.exists(exact)) return listOf(exact)
+        if (exactOnly) return emptyList()
         val suffix = if (parsed.isAbsolute) parsed.fileName?.toString().orEmpty()
             else input.replace('\\', '/').replace(Regex("^(\\./)+"), "")
         if (suffix.matches(Regex("[\\w.@+ -]+(?:/[\\w.@+ -]+)*")) && suffix.split('/').none { it == "." || it == ".." }) {
             val searchRoot = if (parsed.isAbsolute) exact.parent?.takeIf { it.parent != null } else root
             if (searchRoot != null) {
-                val matches = find(searchRoot, suffix, cancelled)
+                val matches = find(searchRoot, suffix, excluded, cancelled)
                 if (matches.isNotEmpty()) return matches
             }
         }
@@ -83,19 +85,21 @@ internal object FileReferences {
         return emptyList()
     }
 
-    private fun find(root: Path, suffix: String, cancelled: () -> Boolean): List<Path> {
-        val ignored = setOf(".git", ".next", ".nuxt", ".output", "node_modules", "dist", "build", "coverage", "out")
+    private fun find(root: Path, suffix: String, excluded: (Path) -> Boolean, cancelled: () -> Boolean): List<Path> {
+        val ignored = setOf(".git", ".next", ".nuxt", ".output", ".turbo", "node_modules", "dist", "build", "coverage", "out")
+        val deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(5)
         val pending = ArrayDeque<Path>().apply { add(root) }
         val matches = mutableListOf<Path>()
         var visited = 0
         while (pending.isNotEmpty()) {
-            if (cancelled() || Thread.currentThread().isInterrupted) throw CancellationException("File lookup cancelled")
+            if (cancelled() || Thread.currentThread().isInterrupted || System.nanoTime() >= deadline) throw CancellationException("File lookup cancelled")
             val directory = pending.removeFirst()
             try {
                 Files.newDirectoryStream(directory).use { entries ->
                     for (entry in entries) {
-                        if (cancelled() || Thread.currentThread().isInterrupted) throw CancellationException("File lookup cancelled")
+                        if (cancelled() || Thread.currentThread().isInterrupted || System.nanoTime() >= deadline) throw CancellationException("File lookup cancelled")
                         if (++visited > 20_000) return emptyList()
+                        if (excluded(entry)) continue
                         if (Files.isDirectory(entry, NOFOLLOW_LINKS)) {
                             if (entry.fileName.toString() !in ignored) pending.add(entry)
                         } else if (entry.toString().replace('\\', '/').endsWith("/$suffix")) {

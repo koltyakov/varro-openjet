@@ -224,6 +224,12 @@
                     text="Varro Settings" icon="AllIcons.General.Settings"/>
             <action id="Varro.Usage" class="varro.actions.UsageAction"
                     text="OpenCode Usage Report"/>
+            <action id="Varro.ExportUsageCsv" class="varro.actions.ExportUsageCsvAction"
+                    text="Export All-Time Usage to CSV"/>
+            <action id="Varro.DeleteOldSessions" class="varro.actions.DeleteOldSessionsAction"
+                    text="Delete Old OpenCode Sessions"/>
+            <action id="Varro.CompactDatabase" class="varro.actions.CompactDatabaseAction"
+                    text="Compact OpenCode Database"/>
             <action id="Varro.ImportLegacySession" class="varro.actions.ImportLegacySessionAction"
                     text="Import OpenCode v1 Session into v2"
                     description="Copy a local v1 conversation into OpenCode v2"/>

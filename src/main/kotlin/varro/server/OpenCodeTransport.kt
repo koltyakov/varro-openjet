@@ -148,6 +148,8 @@ class OpenCodeTransport(
     fun isQuiet(): Boolean = activeRequestCount.get() == 0 && pendingAttentionRequests.isEmpty() &&
         System.currentTimeMillis() - lastMutationAt.get() >= 60_000
 
+    internal fun isIdleForOfflineMaintenance(): Boolean = activeRequestCount.get() == 0 && pendingAttentionRequests.isEmpty()
+
     fun attentionCount(): Int = pendingAttentionRequests.values.toSet().size
     fun pendingAttentionSessionIDs(): Set<String> = pendingAttentionRequests.values.toSet()
     val hasGlobalSessionStatus: Boolean get() = apiVersion == 2
