@@ -357,6 +357,15 @@ The memory cache holds at most 64 successful thumbnails and 4 MiB of accounted s
 
 Metadata reads and V1 xAI refreshed-auth writes go through `OpenCodeTransport`, preserving workspace scope. V1 reads `auth.json` from OpenCode's XDG data directory. Like upstream Varro, V2 opens `opencode.db` read-only, using `OPENCODE_DB` when set or the OpenCode XDG data directory otherwise. `OpenCodeV2QuotaCredentials` selects by active status, newest creation time, then descending ID. It scopes queries to the requested provider's integration and shared credential aliases, maps integration IDs to providers, and preserves OAuth account metadata. V2 never substitutes stale V1 credentials, and OpenCode owns its OAuth rotation. Metadata-only and local IPC adapters do not need the OpenCode credential store. Adapters also support provider configuration/environment and provider credential files. Local Claude credential refresh compares the previous refresh token and replaces the file atomically while preserving unrelated fields. Credentials never enter the webview.
 
+The official `claude-agent` provider instead reads Claude Code's login, in order:
+`CLAUDE_CODE_OAUTH_TOKEN`, macOS Keychain's `Claude Code-credentials` entry, then
+`~/.claude/.credentials.json`. Keychain lookup has a two-second timeout and a
+256 KiB output limit. It never substitutes the separate OpenCode Anthropic account,
+refreshes a token or writes credentials. Quota authentication failures direct the
+user to `claude auth login`, which the native terminal allowlist accepts.
+Credential identity is re-read before cache reuse, including after a failed poll.
+Attach-only connections do not read local Claude credentials or start local login.
+
 V2 Console/Go providers and providers with the `opencode` integration first request
 `/api/experimental/usage/limits` with their workspace directory and a 1 MiB response limit.
 This works in attach-only mode and precedes all local credential reads. Only the exact generic

@@ -13,7 +13,10 @@ internal class QuotaAdapters(
     private val credentials: QuotaCredentials,
     private val setAuth: ((String, JsonObject) -> Unit)?,
 ) {
-    fun poll(provider: JsonObject, auth: JsonObject, model: String?, now: Long): JsonObject? {
+    fun poll(
+        provider: JsonObject, auth: JsonObject, model: String?, now: Long,
+        claudeAgentToken: String? = if (provider.str("id") == "claude-agent") credentials.claudeAgentToken() else null,
+    ): JsonObject? {
         val id = provider.str("id") ?: return null
         fun available(windows: List<JsonObject>, plan: String? = null, creditBalance: Double? = null): JsonObject = Json.obj(
             "providerID" to id, "modelID" to model, "checkedAt" to now, "source" to "provider",
@@ -40,7 +43,8 @@ internal class QuotaAdapters(
                 ) throw QuotaFailure("Claude Code quota endpoint returned an invalid response")
                 status!!.deepCopy().apply { addProperty("modelID", model) }
             }
-            "anthropic" -> {
+            "anthropic", "claude-agent" -> {
+                val claudeAgent = id == "claude-agent"
                 val windows = mutableListOf<JsonObject>()
                 val statusFile = credentials.home.resolve(".onwatch/data/anthropic-statusline.json")
                 if (Files.isRegularFile(statusFile) && now - Files.getLastModifiedTime(statusFile).toMillis() in 0..300_000) {
@@ -64,14 +68,18 @@ internal class QuotaAdapters(
                         }
                     }
                 }
-                val openCode = auth.obj(id)?.takeIf { it.str("type") == "oauth" }
-                val local = if (openCode == null) credentials.read(credentials.claudePath).obj("claudeAiOauth") else null
-                var access = openCode.string("access") ?: local.string("accessToken")
+                val openCode = if (claudeAgent) null else auth.obj(id)?.takeIf { it.str("type") == "oauth" }
+                val local = if (!claudeAgent && openCode == null) credentials.read(credentials.claudePath).obj("claudeAiOauth") else null
+                var access = if (claudeAgent) claudeAgentToken else openCode.string("access") ?: local.string("accessToken")
                 if (access == null && windows.isNotEmpty()) return available(windows)
+                if (access == null && claudeAgent) throw QuotaFailure("Claude Code OAuth credentials are unavailable. Run claude auth login to sign in.", 401)
                 if (access == null) throw QuotaFailure("No Anthropic OAuth credentials available. Connect Anthropic in OpenCode or Claude Code.", 401)
                 val headers = mapOf("anthropic-beta" to "oauth-2025-04-20", "User-Agent" to "claude-code/2.1.69")
                 try {
                     var response = send("https://api.anthropic.com/api/oauth/usage", access, headers)
+                    if (claudeAgent && response.code in setOf(401, 403)) {
+                        throw QuotaFailure("Anthropic usage endpoint rejected credentials (${response.code}). Run claude auth login to sign in again.", response.code)
+                    }
                     val refresh = local.string("refreshToken")
                     if (response.code == 401 && refresh != null) {
                         val refreshed = json("https://console.anthropic.com/v1/oauth/token", body = Json.obj(

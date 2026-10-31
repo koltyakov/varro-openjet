@@ -99,6 +99,7 @@ class ProviderQuotaBackend(
                 if (attached && auth.obj("openai").str("type") != "oauth") return status(key, "unsupported",
                     "OpenAI subscription limits require an active Codex OAuth connection on the OpenCode server.")
                 val token = if (attached) auth.obj("openai").str("access") else credentials.token(provider, auth)
+                val claudeAgentToken = if (key.provider == "claude-agent") credentials.claudeAgentToken() else null
                 // Re-read identity before using a quota cache, so logging in with a new
                 // account cannot show the previous account's remaining allowance.
                 identity = if (attached) QuotaCredentials.fingerprint("attached-v2", Json.stringify(provider), Json.stringify(auth))
@@ -106,7 +107,7 @@ class ProviderQuotaBackend(
                     Json.stringify(if (key.provider == "anthropic" && auth.obj("anthropic").str("type") != "oauth") credentials.read(credentials.claudePath) else null),
                     Json.stringify(if (key.provider == "openai") credentials.codex(auth) else null),
                     if (key.provider in setOf("google", "gemini")) credentials.gemini(key.provider, auth).orEmpty() else "",
-                    token.orEmpty(),
+                    token.orEmpty(), claudeAgentToken.orEmpty(),
                     if (key.provider == "github-copilot" && token == null) credentials.copilotFallback().orEmpty() else "")
                 cache[key]?.takeIf { it.identity == identity && it.expires > clock() }?.let { return it.status }
                 val writeAuth: ((String, JsonObject) -> Unit)? = if (v2) null else { id, value ->
@@ -115,7 +116,7 @@ class ProviderQuotaBackend(
                     request("PUT", "/auth/$id", value, key.directory)
                 }
                 val adapters = QuotaAdapters(http, credentials, writeAuth)
-                adapters.poll(provider, auth, key.model, clock()) ?: run {
+                adapters.poll(provider, auth, key.model, clock(), claudeAgentToken) ?: run {
                     var windows = directWindows(provider.obj("models").obj(key.model.orEmpty()), clock())
                         .ifEmpty { directWindows(provider, clock()) }
                     if (windows.isEmpty()) {

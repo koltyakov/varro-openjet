@@ -8,7 +8,7 @@ internal data class OpenCodeStatusPresentation(val text: String, val tooltip: St
     companion object {
         // Match the SDK/client versions in the pinned upstream Varro manifest.
         private const val VERIFIED_V1 = "1.19.5"
-        private const val VERIFIED_V2 = "2.2.3"
+        private const val VERIFIED_V2 = "2.2.5"
 
         fun from(info: OpenCodeVersionInfo, extensionVersion: String, autoUpdates: Boolean, now: Long = System.currentTimeMillis()): OpenCodeStatusPresentation {
             val cli = info.cliVersion.takeUnless { info.attachOnly }

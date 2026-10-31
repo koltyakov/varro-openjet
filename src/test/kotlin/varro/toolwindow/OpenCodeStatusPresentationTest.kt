@@ -9,29 +9,29 @@ import java.nio.file.Path
 
 class OpenCodeStatusPresentationTest {
     private val now = 1_800_000_000_000L
-    private fun info(cli: String? = "2.2.3", server: String? = "2.2.3", startedAt: Long? = null, attached: Boolean = false) =
+    private fun info(cli: String? = "2.2.5", server: String? = "2.2.5", startedAt: Long? = null, attached: Boolean = false) =
         OpenCodeVersionInfo("http://127.0.0.1:4096", cli, server, startedAt, attached)
 
     private fun render(info: OpenCodeVersionInfo = info(), updates: Boolean = true) =
         OpenCodeStatusPresentation.from(info, "0.6.0", updates, now)
 
     @Test fun `shows CLI server port and plugin versions`() {
-        assertEquals("OpenCode 2.2.3", render().text)
-        assertEquals("OpenCode CLI: 2.2.3\nOpenCode Server: 2.2.3\nServer port: 4096\n\nVarro OpenJet: 0.6.0", render().tooltip)
+        assertEquals("OpenCode 2.2.5", render().text)
+        assertEquals("OpenCode CLI: 2.2.5\nOpenCode Server: 2.2.5\nServer port: 4096\n\nVarro OpenJet: 0.6.0", render().tooltip)
     }
 
     @Test fun `marks older CLIs and reflects the auto update setting`() {
         val status = render(info(cli = "2.0.23", server = "2.0.23"), updates = false)
         assertEquals("OpenCode 2.0.23*", status.text)
-        assertTrue(status.tooltip.contains("New CLI version: OpenCode 2.2.3 is not installed yet.\nAuto-updates are off."))
+        assertTrue(status.tooltip.contains("New CLI version: OpenCode 2.2.5 is not installed yet.\nAuto-updates are off."))
         assertTrue(render(info(cli = "2.0.23")).tooltip.contains("Auto-updates are on."))
-        assertTrue(status.tooltip.endsWith("Verified w/ OpenCode 2.2.3"))
+        assertTrue(status.tooltip.endsWith("Verified w/ OpenCode 2.2.5"))
     }
 
     @Test fun `shows the running version and stale server warning after CLI upgrade`() {
-        val status = render(info(cli = "2.2.4"))
-        assertEquals("OpenCode 2.2.3*", status.text)
-        assertTrue(status.tooltip.contains("CLI updated to OpenCode 2.2.4; server 2.2.3 is stale."))
+        val status = render(info(cli = "2.2.6"))
+        assertEquals("OpenCode 2.2.5*", status.text)
+        assertTrue(status.tooltip.contains("CLI updated to OpenCode 2.2.6; server 2.2.5 is stale."))
         assertFalse(status.tooltip.contains("New CLI version:"))
     }
 
@@ -40,13 +40,13 @@ class OpenCodeStatusPresentationTest {
         assertEquals("OpenCode 1.18.34*", render(info(cli = "1.18.34", server = "1.18.34")).text)
         assertTrue(render(info(cli = "1.18.35", server = "1.18.35")).tooltip.contains("New CLI version: OpenCode 1.19.5"))
         assertTrue(render(info(cli = "1.16.0", server = "1.16.0")).tooltip.endsWith("Verified w/ OpenCode 1.19.5"))
-        assertTrue(render(info(cli = "2.3.0", server = "2.3.0")).tooltip.endsWith("Verified w/ OpenCode 2.2.3"))
+        assertTrue(render(info(cli = "2.3.0", server = "2.3.0")).tooltip.endsWith("Verified w/ OpenCode 2.2.5"))
     }
 
     @Test fun `external connections hide local CLI versions and update markers`() {
         val status = render(info(cli = "1.0.0", attached = true))
-        assertEquals("OpenCode 2.2.3", status.text)
-        assertEquals("Server address: http://127.0.0.1:4096\nServer IP: 127.0.0.1\nOpenCode Server: 2.2.3\nServer port: 4096\n\nVarro OpenJet: 0.6.0", status.tooltip)
+        assertEquals("OpenCode 2.2.5", status.text)
+        assertEquals("Server address: http://127.0.0.1:4096\nServer IP: 127.0.0.1\nOpenCode Server: 2.2.5\nServer port: 4096\n\nVarro OpenJet: 0.6.0", status.tooltip)
         assertFalse(status.tooltip.contains("CLI"))
         assertFalse(status.tooltip.contains("Auto-updates"))
     }
@@ -54,7 +54,7 @@ class OpenCodeStatusPresentationTest {
     @Test fun `handles unknown versions and default ports`() {
         assertEquals("OpenCode", render(info(cli = null, server = null)).text)
         assertTrue(render(info(cli = null, server = null)).tooltip.contains("OpenCode CLI: unknown\nOpenCode Server: unknown"))
-        assertEquals("OpenCode 2.2.3", render(info(server = null)).text)
+        assertEquals("OpenCode 2.2.5", render(info(server = null)).text)
         assertTrue(render(info().copy(url = "https://example.com")).tooltip.contains("Server port: 443"))
         assertTrue(render(info().copy(url = "http://example.com")).tooltip.contains("Server port: 80"))
     }
@@ -94,10 +94,10 @@ class OpenCodeStatusPresentationTest {
     }
 
     @Test fun `the previous V2 baselines receive the current update hint`() {
-        for (version in listOf("2.0.26", "2.0.27", "2.0.28", "2.0.29", "2.0.30", "2.0.31", "2.0.32", "2.1.0", "2.1.1", "2.1.2", "2.1.3", "2.1.4", "2.2.0", "2.2.1", "2.2.2")) {
+        for (version in listOf("2.0.26", "2.0.27", "2.0.28", "2.0.29", "2.0.30", "2.0.31", "2.0.32", "2.1.0", "2.1.1", "2.1.2", "2.1.3", "2.1.4", "2.2.0", "2.2.1", "2.2.2", "2.2.3", "2.2.4")) {
             val status = render(info(cli = version, server = version))
             assertEquals("OpenCode $version*", status.text)
-            assertTrue(status.tooltip.contains("New CLI version: OpenCode 2.2.3 is not installed yet."))
+            assertTrue(status.tooltip.contains("New CLI version: OpenCode 2.2.5 is not installed yet."))
         }
         for (version in listOf("1.19.3", "1.19.4")) {
             assertTrue(render(info(cli = version, server = version)).tooltip.contains("New CLI version: OpenCode 1.19.5"))

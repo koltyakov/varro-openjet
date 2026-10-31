@@ -30,6 +30,49 @@ class ProviderQuotaBackendTest {
     )))
     private fun response(json: String, code: Int = 200) = QuotaResponse(code, json.toByteArray())
 
+    @Test fun `Claude Agent file and Keychain rotation bypass caches without reading OpenCode credentials`() {
+        for (source in listOf("file", "keychain")) {
+            var account = "first"
+            val creds = QuotaCredentials(temporary.newFolder().toPath(), emptyMap()) {
+                if (source == "keychain") """{"claudeAiOauth":{"accessToken":"$account-token"}}""" else null
+            }
+            Files.createDirectories(creds.authPath.parent)
+            Files.writeString(creds.authPath, "invalid V1 auth")
+            Files.writeString(creds.v2DatabasePath, "invalid V2 database")
+            Files.createDirectories(creds.claudePath.parent)
+            fun writeFile() = Files.writeString(creds.claudePath, """{"claudeAiOauth":{"accessToken":"$account-token"}}""")
+            writeFile()
+            var polls = 0
+            var now = 1_800_000_000_000L
+            ProviderQuotaBackend(creds, { _, path, _, _ ->
+                assertEquals("/config/providers", path)
+                metadata("claude-agent")
+            }, QuotaHttp {
+                polls++
+                assertEquals("Bearer $account-token", it.headers["Authorization"])
+                if (account == "first") response("""{"five_hour":{"utilization":20}}""") else response("{}", 401)
+            }, clock = { now }, apiVersion = { 2 }).use { backend ->
+                assertEquals("available", backend.get("claude-agent", "opus", null).str("status"))
+                assertEquals("available", backend.get("claude-agent", "opus", null).str("status"))
+                assertEquals(1, polls)
+                account = "second"
+                writeFile()
+                val next = backend.get("claude-agent", "opus", null)
+                assertEquals("unsupported", next.str("status"))
+                assertFalse(next.has("windows"))
+                assertTrue(next.str("note")!!.contains("claude auth login"))
+                assertEquals(2, polls)
+                now += 60_001
+                assertEquals("unsupported", backend.get("claude-agent", "opus", null).str("status"))
+                assertEquals(3, polls)
+                account = "third"
+                writeFile()
+                assertEquals("unsupported", backend.get("claude-agent", "opus", null).str("status"))
+                assertEquals(4, polls)
+            }
+        }
+    }
+
     @Test fun `the runtime no longer packages the Node quota helper`() {
         assertNull(ProviderQuotaBackend::class.java.getResource("/quota/provider-quota.mjs"))
     }
@@ -199,7 +242,7 @@ class ProviderQuotaBackendTest {
     }
 
     @Test fun `other attached providers and V1 do not read server or local credentials`() {
-        for ((version, provider) in listOf(1 to "openai", 2 to "anthropic", 2 to "openrouter")) {
+        for ((version, provider) in listOf(1 to "openai", 2 to "anthropic", 2 to "openrouter", 2 to "claude-agent")) {
             ProviderQuotaBackend(credentials(), { _, path, _, _ ->
                 assertEquals(2, version)
                 assertEquals("/config/providers", path)

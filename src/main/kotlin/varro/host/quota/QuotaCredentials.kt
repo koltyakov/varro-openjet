@@ -8,9 +8,15 @@ import java.nio.file.StandardCopyOption
 import java.nio.file.StandardOpenOption
 import java.nio.channels.FileChannel
 import java.security.MessageDigest
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.TimeUnit
 
 /** Credentials never leave the host except in requests to their provider. */
-class QuotaCredentials(val home: Path, val environment: Map<String, String>) {
+class QuotaCredentials(
+    val home: Path,
+    val environment: Map<String, String>,
+    private val readClaudeKeychain: () -> String? = ::readClaudeKeychain,
+) {
     val authPath: Path = Path.of(environment["XDG_DATA_HOME"]?.takeIf { it.isNotBlank() }
         ?: home.resolve(".local/share").toString()).resolve("opencode/auth.json")
     val claudePath: Path = home.resolve(".claude/.credentials.json")
@@ -29,6 +35,15 @@ class QuotaCredentials(val home: Path, val environment: Map<String, String>) {
     }
 
     fun authStore(): JsonObject = read(authPath) ?: JsonObject()
+
+    /** Claude Agent uses Claude Code's account, never OpenCode's Anthropic credentials. */
+    fun claudeAgentToken(): String? {
+        environment["CLAUDE_CODE_OAUTH_TOKEN"]?.trim()?.takeIf { it.isNotEmpty() }?.let { return it }
+        runCatching { Json.parseOrNull(readClaudeKeychain().orEmpty()).asObjectOrNull().obj("claudeAiOauth").string("accessToken") }
+            .getOrNull()?.let { return it }
+        // Missing, inaccessible or malformed Claude credentials are a signed-out state.
+        return runCatching { read(claudePath).obj("claudeAiOauth").string("accessToken") }.getOrNull()
+    }
 
     val v2DatabasePath: Path get() = environment["OPENCODE_DB"]?.trim()?.takeIf { it.isNotEmpty() }?.let(Path::of)
         ?: authPath.resolveSibling("opencode.db")
@@ -107,6 +122,30 @@ class QuotaCredentials(val home: Path, val environment: Map<String, String>) {
     companion object {
         const val OAUTH_DUMMY = "opencode-oauth-dummy-key"
         private val CLAUDE_WRITE_LOCK = Any()
+
+        /** Read-only lookup, with no shell and bounded time/output. Never log credential output. */
+        private fun readClaudeKeychain(): String? {
+            if (!System.getProperty("os.name").lowercase().contains("mac")) return null
+            val process = ProcessBuilder("/usr/bin/security", "find-generic-password", "-s", "Claude Code-credentials", "-w")
+                .redirectError(ProcessBuilder.Redirect.DISCARD).start()
+            process.outputStream.close()
+            val output = CompletableFuture.supplyAsync {
+                process.inputStream.use { stream ->
+                    val bytes = stream.readNBytes(256 * 1024 + 1)
+                    bytes.takeIf { it.size <= 256 * 1024 }?.toString(Charsets.UTF_8)
+                }
+            }
+            try {
+                val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2)
+                if (!process.waitFor(2, TimeUnit.SECONDS) || process.exitValue() != 0) return null
+                val remaining = deadline - System.nanoTime()
+                return if (remaining > 0) output.get(remaining, TimeUnit.NANOSECONDS) else null
+            } finally {
+                if (process.isAlive) process.destroyForcibly()
+                process.inputStream.close()
+                output.cancel(true)
+            }
+        }
 
         internal fun fingerprint(vararg values: String): String = MessageDigest.getInstance("SHA-256")
             .digest(values.joinToString("\u0000").toByteArray()).joinToString("") { "%02x".format(it) }

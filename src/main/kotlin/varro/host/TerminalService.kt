@@ -132,6 +132,7 @@ class TerminalService(private val project: Project) {
             "bun add -g @opencode/cli@latest",
             "yarn global add @opencode/cli@latest",
             "opencode auth login",
+            "claude auth login",
             "opencode auth",
             "opencode providers logout",
             "opencode upgrade",

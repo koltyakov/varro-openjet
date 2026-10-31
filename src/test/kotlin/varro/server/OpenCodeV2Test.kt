@@ -268,6 +268,26 @@ class OpenCodeV2Test {
         }
     }
 
+    @Test fun `Claude Agent registers through Claude Code external login without OAuth`() {
+        val integration = Json.obj("id" to "claude-agent", "methods" to listOf(
+            Json.obj("id" to "claude-login", "type" to "external", "label" to "Claude Code login (claude auth login)")))
+        var sent: JsonObject? = null
+        val native = adapter { method, path, body -> when (path) {
+            "/api/provider" -> Json.obj("data" to emptyList<Any>())
+            "/api/integration" -> Json.obj("data" to listOf(integration))
+            "/api/provider/claude-agent" -> Json.obj("data" to Json.obj("integrationID" to "claude-agent"))
+            "/api/integration/claude-agent" -> Json.obj("data" to integration)
+            "/api/integration/claude-agent/connect/external" -> { assertEquals("POST", method); sent = body.asObjectOrNull(); null }
+            else -> error("Unexpected request $path")
+        } }
+        val methods = native.request("GET", "/provider/auth", null, RequestOptions()).data.asObjectOrNull().arr("claude-agent")!!
+        assertEquals("external", methods.single().asJsonObject.str("type"))
+        assertEquals("Claude Code login (claude auth login)", methods.single().asJsonObject.str("label"))
+        assertEquals(Json.obj("url" to "", "method" to "complete", "instructions" to ""), native.request(
+            "POST", "/provider/claude-agent/oauth/authorize", Json.obj("method" to 0), RequestOptions()).data)
+        assertEquals("claude-login", sent.str("methodID"))
+    }
+
     @Test fun `external credentials accept custom profiles without starting OAuth`() {
         val integration = Json.obj("id" to "amazon-bedrock", "methods" to listOf(
             Json.obj("id" to "env", "type" to "env"),

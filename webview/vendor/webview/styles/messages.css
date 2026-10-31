@@ -2360,6 +2360,27 @@ body:is(.vscode-light, .vscode-high-contrast-light) .chat-empty-logo {
   white-space: nowrap;
 }
 
+.rendered-markdown .link-leading-content.file-icon-selected {
+  position: relative;
+  isolation: isolate;
+}
+
+/* Native selection fills the line box, which is taller than text-range glyph bounds. */
+.rendered-markdown .file-icon-selected::before {
+  content: '';
+  position: absolute;
+  z-index: -1;
+  pointer-events: none;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: var(--file-selection-width);
+  background: var(
+    --vscode-editor-selectionBackground,
+    color-mix(in srgb, var(--color-vscode-accent) 30%, transparent)
+  );
+}
+
 .rendered-markdown a:not(.file-path-link):hover .link-leading-label,
 .rendered-markdown a:not(.file-path-link):active .link-leading-label {
   text-decoration: underline;
@@ -2396,10 +2417,6 @@ body:is(.vscode-light, .vscode-high-contrast-light) .chat-empty-logo {
   padding: 0;
   background: transparent;
   border: 0;
-}
-
-.rendered-markdown code.citation-path .file-path-icon {
-  visibility: hidden;
 }
 
 .rendered-markdown a.file-path-link:hover {
@@ -2711,7 +2728,8 @@ body:is(.vscode-high-contrast, .vscode-high-contrast-light) .remote-markdown-ima
   object-fit: contain;
 }
 
-.rendered-markdown code {
+.rendered-markdown code,
+.inline-code-text {
   font-family: var(--font-mono);
   font-size: 0.89em;
   color: var(--color-vscode-preformat-fg);

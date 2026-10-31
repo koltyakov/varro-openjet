@@ -21,6 +21,72 @@ class QuotaAdaptersTest {
     private val now = 1_800_000_000_000L
     private data class Fixture(val id: String, val endpoint: String, val payload: String, val remaining: Int, val quotaId: String)
 
+    @Test fun `Claude Agent credentials prefer environment then Keychain then file without using Anthropic auth`() {
+        for (source in listOf("env", "keychain", "file", "missing", "invalid-keychain", "unavailable-keychain")) {
+            val home = temporary.newFolder().toPath()
+            var keychainReads = 0
+            val creds = QuotaCredentials(home, if (source == "env") mapOf("CLAUDE_CODE_OAUTH_TOKEN" to "env-token") else emptyMap()) {
+                keychainReads++
+                when (source) {
+                    "env" -> error("Environment token must bypass Keychain")
+                    "keychain" -> """{"claudeAiOauth":{"accessToken":"keychain-token"}}"""
+                    "invalid-keychain" -> "not JSON"
+                    "unavailable-keychain" -> throw IllegalStateException("Keychain unavailable")
+                    else -> null
+                }
+            }
+            Files.createDirectories(creds.claudePath.parent)
+            val contents = if (source == "missing") "not JSON" else """{"claudeAiOauth":{"accessToken":"file-token","refreshToken":"claude-owned"}}"""
+            Files.writeString(creds.claudePath, contents)
+            var requests = 0
+            val adapters = QuotaAdapters(QuotaHttp { request ->
+                requests++
+                assertEquals("https://api.anthropic.com/api/oauth/usage", request.url)
+                val expected = if (source in setOf("env", "keychain")) "$source-token" else "file-token"
+                assertEquals("Bearer $expected", request.headers["Authorization"])
+                QuotaResponse(200, """{"five_hour":{"utilization":20},"seven_day":{"utilization":30}}""".toByteArray())
+            }, creds) { _, _ -> fail("Claude Code owns credential rotation") }
+            val provider = Json.obj("id" to "claude-agent")
+            val auth = Json.obj("anthropic" to Json.obj("type" to "oauth", "access" to "separate-account"))
+            if (source == "missing") {
+                val failure = assertThrows(QuotaFailure::class.java) { adapters.poll(provider, auth, null, now) }
+                assertEquals(401, failure.code)
+                assertTrue(failure.message!!.contains("claude auth login"))
+                assertEquals(0, requests)
+            } else {
+                val result = adapters.poll(provider, auth, "opus", now)!!
+                assertEquals("claude-agent", result.str("providerID"))
+                assertEquals("opus", result.str("modelID"))
+                assertEquals(listOf(80, 70), result.arr("windows")!!.map { it.asJsonObject.int("remaining") })
+                assertEquals(1, requests)
+            }
+            assertEquals(if (source == "env") 0 else 1, keychainReads)
+            assertEquals(contents, Files.readString(creds.claudePath))
+        }
+    }
+
+    @Test fun `expired Claude Agent credentials never refresh or write Claude-owned secrets`() {
+        for (code in listOf(401, 403)) {
+            val creds = QuotaCredentials(temporary.newFolder().toPath(), emptyMap()) { null }
+            Files.createDirectories(creds.claudePath.parent)
+            val contents = """{"claudeAiOauth":{"accessToken":"expired","refreshToken":"claude-owned"}}"""
+            Files.writeString(creds.claudePath, contents)
+            var requests = 0
+            val adapters = QuotaAdapters(QuotaHttp { request ->
+                requests++
+                assertEquals("https://api.anthropic.com/api/oauth/usage", request.url)
+                QuotaResponse(code, byteArrayOf())
+            }, creds) { _, _ -> fail("Must not write credentials") }
+            val failure = assertThrows(QuotaFailure::class.java) {
+                adapters.poll(Json.obj("id" to "claude-agent"), JsonObject(), null, now)
+            }
+            assertEquals(code, failure.code)
+            assertTrue(failure.message!!.contains("claude auth login"))
+            assertEquals(1, requests)
+            assertEquals(contents, Files.readString(creds.claudePath))
+        }
+    }
+
     @Test fun `provider fixtures preserve provider-specific quota semantics`() {
         val fixtures = listOf(
             Fixture("anthropic", "https://api.anthropic.com/api/oauth/usage", """{"five_hour":{"utilization":17,"resets_at":"2027-01-01T00:00:00Z"}}""", 83, "five_hour"),
