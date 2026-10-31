@@ -46,6 +46,8 @@ data class RequestOptions(
     val isCancelled: () -> Boolean = { false },
     /** Shared by every HTTP operation in an adapter request, using a monotonic clock. */
     val deadlineNanos: Long? = null,
+    /** Local database maintenance must compare and address exact native stored paths. */
+    val nativePaths: Boolean = false,
 ) {
     fun checkCancelled() {
         if (isCancelled()) throw java.util.concurrent.CancellationException("OpenCode request cancelled")
@@ -85,8 +87,10 @@ class OpenCodeTransport(
     private val verifyConnection: (Boolean) -> Unit = {},
     initialSavedPermissions: com.google.gson.JsonArray = com.google.gson.JsonArray(),
     persistSavedPermissions: (com.google.gson.JsonArray) -> Unit = {},
+    canAliasWorkspacePaths: () -> Boolean = { true },
 ) {
     private val log = logger<OpenCodeTransport>()
+    private val pathAliases = OpenCodePathAliases(canAliasWorkspacePaths)
     @Volatile var apiVersion: Int = 1
         private set
     @Volatile var healthFailure: String? = null
@@ -193,7 +197,7 @@ class OpenCodeTransport(
                 bounded.copy(directory = bounded.directory ?: if (bounded.unscoped) null else workspaceDirectoryForRequest(method, path)))
             else performRequest(method, path, body, bounded)
             if (allowances.isNotEmpty()) savedPermissions.approved(allowances, bounded)
-            if (apiVersion == 2) observeSessions(method, path, response.data)
+            if (apiVersion == 2 && !bounded.nativePaths) observeSessions(method, path, response.data)
             runCatching { onRequestSucceeded(method, path) }
                 .onFailure { log.warn("Request observer failed", it) }
             return response
@@ -218,7 +222,8 @@ class OpenCodeTransport(
         } else {
             options.directory ?: workspaceDirectoryForRequest(method, path)
         }
-        val scoped = OpenCodeRequestScope.scope(getUrl(), path, directory, legacyDirectoryDecoding = apiVersion == 1)
+        val scoped = OpenCodeRequestScope.scope(getUrl(), if (options.nativePaths) path else pathAliases.toServerRequestPath(path),
+            if (options.nativePaths) directory else pathAliases.toServerDirectory(directory), legacyDirectoryDecoding = apiVersion == 1)
 
         val normalizedMethod = method.uppercase()
         val builder = HttpRequest.newBuilder(URI.create(scoped.url))
@@ -229,7 +234,7 @@ class OpenCodeTransport(
 
         val publisher = if (body != null && normalizedMethod != "GET" && normalizedMethod != "HEAD") {
             builder.header("Content-Type", "application/json")
-            HttpRequest.BodyPublishers.ofString(Json.stringify(body))
+            HttpRequest.BodyPublishers.ofString(Json.stringify(if (options.nativePaths) body else pathAliases.toServer(body)))
         } else {
             HttpRequest.BodyPublishers.noBody()
         }
@@ -282,7 +287,7 @@ class OpenCodeTransport(
             }
         }
         checkActive()
-        val data = Json.parseOrNull(text)
+        val data = Json.parseOrNull(text).let { if (options.nativePaths) it else pathAliases.fromServer(it) }
 
         if (response.statusCode() !in 200..299) {
             throw OpenCodeRequestException(
@@ -308,8 +313,8 @@ class OpenCodeTransport(
             null
         }
         val pathname = path.substringBefore('?')
-        if (pathname == "/session" || SESSION_BY_ID_ROUTE.matches(pathname) ||
-            (normalizedMethod == "POST" && pathname.matches(Regex("/session/[^/]+/fork")))) {
+        if (!options.nativePaths && (pathname == "/session" || SESSION_BY_ID_ROUTE.matches(pathname) ||
+            (normalizedMethod == "POST" && pathname.matches(Regex("/session/[^/]+/fork"))))) {
             val sessions = if (data?.isJsonArray == true) data.asJsonArray.toList() else listOfNotNull(data)
             sessions.forEach { value -> value.asObjectOrNull()?.let { session ->
                 val id = session.str("id")
@@ -459,6 +464,7 @@ class OpenCodeTransport(
         if (eventStreamServerUrl.getAndSet(serverUrl) != serverUrl) lastEventId.set("")
         resetEventStream()
         eventStreamDirectory.set(directory)
+        pathAliases.toServerDirectory(directory)
         if (promoteDirectoryImmediately) requestWorkspaceDirectory.set(directory)
 
         val handle = StreamHandle(eventStreamGeneration.incrementAndGet())
@@ -609,7 +615,7 @@ class OpenCodeTransport(
             return
         }
 
-        val parsed = runCatching { Json.parse(data.toString()) }.getOrElse {
+        val parsed = runCatching { pathAliases.fromServer(Json.parse(data.toString()))!! }.getOrElse {
             log.warn("Ignoring malformed event stream payload: ${it.message}")
             return
         }
@@ -655,6 +661,7 @@ class OpenCodeTransport(
         }
         requestWorkspaceDirectory.set(directory)
         eventStreamDirectory.set(directory)
+        pathAliases.toServerDirectory(directory)
         return true
     }
 

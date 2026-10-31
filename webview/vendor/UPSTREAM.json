@@ -22,9 +22,9 @@
     "**/*.test-support.ts"
   ],
   "revision": {
-    "commit": "1b96a544f15db20f5914109da6830a449d9c45e8",
+    "commit": "627a88c5bad01135891121b6203f2478ed453b6d",
     "localChanges": false,
-    "describedAt": "2026-10-31T05:14:08.263Z"
+    "describedAt": "2026-10-31T15:35:24.114Z"
   },
   "opencodeDependencies": {
     "sdk": "^1.19.5",

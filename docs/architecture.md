@@ -398,6 +398,17 @@ These differences are separate from the V2 credential-source fix and remain unpo
 
 **Project roots.** The catalog uses the JetBrains project's primary root and content roots. The history scope can be `directory`, `descendants` or `project`.
 
+On macOS and Linux, `OpenCodePathAliases` sends managed servers the physical,
+symlink-resolved workspace path so terminal OpenCode and the IDE share session
+history. The transport translates directory query parameters and path values in
+JSON requests, then restores the IDE spelling in responses and SSE events before
+adapter projection. Matching uses whole path segments and the longest known root;
+multiline tool output is unchanged. Windows and attach-only connections retain
+exact paths, including when a managed connection becomes attach-only.
+Local database cleanup and transcript archival use `RequestOptions.nativePaths`
+to retain exact stored paths for inventory checks and requests. Those reads do
+not replace the transport's IDE-spelled session-directory observations.
+
 **Server ownership.** Varro products coordinate through the shared leases and launch claims described above. Lifecycle operations require independently verified current-host ownership; external and credential-only servers cannot be stopped. Managed startup retries subsequent ports after a port-in-use failure.
 
 **CLI maintenance.** `IdleMaintenance` installs background CLI updates only for managed servers when enabled and idle. Busy sessions, queued messages and active Ralph runs prevent maintenance. The updated CLI is used on the next start.

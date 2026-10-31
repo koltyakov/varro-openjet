@@ -136,7 +136,7 @@ internal class SessionCleanup(
     }
 
     private fun read(path: String, check: () -> Unit): JsonElement? { check(); return request("GET", path, options(check)).data.also { check() } }
-    private fun options(check: () -> Unit) = RequestOptions(unscoped = true, timeoutMs = 30_000, cancellableBody = true,
+    private fun options(check: () -> Unit) = RequestOptions(unscoped = true, nativePaths = true, timeoutMs = 30_000, cancellableBody = true,
         maxResponseBytes = 64L * 1024 * 1024, isCancelled = { check(); false })
     private fun sessionPath(session: CleanupSession, suffix: String = "") = "/session/${encode(session.id)}$suffix" +
         if (version == 1) "?directory=${encode(session.directory)}" else ""

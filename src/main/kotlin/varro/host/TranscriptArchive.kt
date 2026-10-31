@@ -165,7 +165,7 @@ internal class TranscriptArchive(private val usage: UsageArchive) {
             check()
             val query = if (version == 2) "limit=200&" + (cursor?.let { "cursor=${encode(it)}" } ?: "order=desc") else "directory=${encode(session.directory)}"
             val path = "/${if (version == 2) "api/" else ""}session/${encode(session.id)}/message?$query"
-            val response = request("GET", path, RequestOptions(unscoped = true, timeoutMs = 30_000, deadlineNanos = deadline,
+            val response = request("GET", path, RequestOptions(unscoped = true, nativePaths = true, timeoutMs = 30_000, deadlineNanos = deadline,
                 maxResponseBytes = MAX_BYTES, cancellableBody = true, isCancelled = { check(); false })).data
             val page = response.asObjectOrNull()
             val data = if (version == 2) page.arr("data") else response.asArrayOrNull()

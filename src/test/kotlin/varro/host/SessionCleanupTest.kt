@@ -28,6 +28,7 @@ class SessionCleanupTest {
         var deletionFailure: String? = null
         var confirmations = 0
         fun request(method: String, path: String, options: RequestOptions): OpenCodeResponse {
+            assertTrue("Cleanup must retain exact database paths", options.nativePaths)
             options.checkCancelled(); calls.add("$method $path")
             val id = path.substringBefore('?').split('/').getOrNull(2)
             if (method == "DELETE") {

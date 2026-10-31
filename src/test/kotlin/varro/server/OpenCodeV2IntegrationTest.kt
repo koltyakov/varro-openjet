@@ -16,6 +16,51 @@ import java.util.concurrent.atomic.AtomicReference
 class OpenCodeV2IntegrationTest {
     @JvmField @Rule val temporary = TemporaryFolder()
 
+    private fun verifySymlinkedWorkspace(root: java.nio.file.Path, workspace: java.nio.file.Path, port: Int,
+        password: AtomicReference<String?>, version: String) {
+        if (System.getProperty("os.name").startsWith("Windows", true)) return
+        val physical = workspace.toRealPath().toString()
+        val logical = Files.createSymbolicLink(root.resolve("workspace-alias"), workspace.toRealPath()).toString()
+        val events = CopyOnWriteArrayList<com.google.gson.JsonElement>()
+        val url = "http://127.0.0.1:$port"
+        fun transport(directory: String, managed: Boolean) = OpenCodeTransport({ url }, { directory },
+            { ServerStatus.Running(url) }, { false }, {}, events::add,
+            { password.get()?.let(OpenCodeConnection::authorization) }, root.resolve("alias-annotations"),
+            canAliasWorkspacePaths = { managed })
+        val editor = transport(logical, true)
+        val terminal = transport(physical, false)
+        try {
+            assertTrue(editor.checkHealth()); assertTrue(terminal.checkHealth())
+            editor.startEventStream()
+            waitFor("Aliased event stream did not connect") {
+                events.any { it.asObjectOrNull().str("type") == "server.connected" }
+            }
+            val created = editor.request("POST", "/session", Json.obj("title" to "Symlink fixture")).data.asObjectOrNull()!!
+            val id = created.str("id")!!
+            try {
+                assertEquals(logical, created.str("directory"))
+                assertEquals(physical, terminal.request("GET", "/session/$id").data.asObjectOrNull().str("directory"))
+                val listed = editor.request("GET", "/session").data!!.asJsonArray
+                assertTrue(listed.any { it.asObjectOrNull().str("id") == id && it.asObjectOrNull().str("directory") == logical })
+                val native = terminal.request("GET", "/api/session?directory=${java.net.URLEncoder.encode(physical, Charsets.UTF_8)}").data.asObjectOrNull().arr("data")!!
+                assertTrue(native.any { it.asObjectOrNull().str("id") == id })
+                waitFor("Created session event did not restore the editor path") {
+                    events.any { it.asObjectOrNull().obj("properties").obj("info").let { info ->
+                        info.str("id") == id && info.str("directory") == logical
+                    } }
+                }
+                // Cleanup's database identity check needs the physical server record, not the UI alias.
+                if (OpenCodeCli.compareVersions(version, "2.2.3") >= 0) {
+                    val cleanup = varro.host.SessionCleanup(varro.host.UsageArchive(root.resolve("test.db")) { Json.obj() },
+                        2, { true }, { method, path, options -> editor.request(method, path, options = options) },
+                        { error("This fixture must not stop the server") })
+                    assertEquals(physical, cleanup.inventory().sessions.single { it.id == id }.directory)
+                    assertEquals(logical, editor.observedSessionDirectories()[id])
+                }
+            } finally { editor.request("DELETE", "/session/$id") }
+        } finally { editor.dispose(); terminal.dispose() }
+    }
+
     @Test(timeout = 180_000) fun `released server supports authenticated lifecycle history and pending input`() {
         val binary = System.getenv("VARRO_OPENCODE_TEST_BINARY")
         assumeTrue("Set VARRO_OPENCODE_TEST_BINARY to a released v2 CLI", !binary.isNullOrBlank())
@@ -135,6 +180,7 @@ class OpenCodeV2IntegrationTest {
                 assertTrue(capabilities.savedPermissionEditing)
             }
             assertNotNull(password.get())
+            verifySymlinkedWorkspace(root, workspace, port, password, version)
             if (OpenCodeCli.compareVersions(version, "2.1.2") >= 0) verifyFreeModelExclusions(transport, root)
             if (OpenCodeCli.compareVersions(version, "2.2.0") >= 0) {
                 val requestsBefore = providerRequests.get()
