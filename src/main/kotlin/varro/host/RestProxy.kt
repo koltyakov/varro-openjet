@@ -104,6 +104,7 @@ class RestProxy(
         fun resolveWorkspacePath(path: String): JsonObject?
         fun readOpenCodeConfig(): JsonObject
         fun updateModelRouting(body: JsonElement?): JsonObject
+        fun mcpDefaults(method: String, body: JsonElement?): JsonObject
         fun disableProvider(body: JsonElement?): JsonElement
         fun readOpenCodePermissions(): JsonObject
         fun updateOpenCodePermissions(body: JsonElement?): JsonObject
@@ -349,7 +350,8 @@ class RestProxy(
         fun q(key: String): String? = query[key]?.firstOrNull()?.takeIf { it.isNotBlank() }
 
         return when {
-            pathname == ApiRoutes.Endpoints.CITATION_PATHS -> citationPaths.validate(body, server.workspaceDirectory(), { session, directory ->
+            pathname == ApiRoutes.Endpoints.CITATION_PATHS || pathname == ApiRoutes.Endpoints.CITATION_SYMBOLS -> {
+                val authorize: (String?, String) -> Boolean = { session, directory ->
                 val roots = (listOfNotNull(project.basePath) + context.context.arr("workspaceFolders")?.mapNotNull { it.asObjectOrNull().text("path") }.orEmpty()).distinct()
                 if (session == null) roots.any { WorkspacePaths.isSame(it, directory) }
                 else {
@@ -360,7 +362,10 @@ class RestProxy(
                         { server.transport.request("GET", "/session/${encode(session)}", options = options).data.asObjectOrNull() },
                         { root -> server.transport.request("GET", "/project/current", options = options.copy(unscoped = false, directory = root)).data.asObjectOrNull() })
                 }
-            }, isCancelled)
+                }
+                if (pathname == ApiRoutes.Endpoints.CITATION_SYMBOLS) context.citationSymbols.find(body, server.workspaceDirectory(), authorize, isCancelled)
+                else citationPaths.validate(body, server.workspaceDirectory(), authorize, isCancelled)
+            }
             pathname == ApiRoutes.Endpoints.REMOTE_IMAGE -> {
                 val record = body.asObjectOrNull()
                 val automatic = record.bool("automatic") == true
@@ -406,6 +411,8 @@ class RestProxy(
             }
 
             pathname == ApiRoutes.Endpoints.OPENCODE_CONFIG -> services.readOpenCodeConfig()
+
+            pathname == ApiRoutes.Endpoints.MCP_DEFAULTS -> services.mcpDefaults(method, body)
 
             pathname == ApiRoutes.Endpoints.OPENCODE_CONFIG_MODEL_ROUTING ->
                 services.updateModelRouting(body)

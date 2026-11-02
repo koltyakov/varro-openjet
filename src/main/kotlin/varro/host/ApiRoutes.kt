@@ -42,6 +42,8 @@ object ApiRoutes {
         const val COPIED_SELECTION_MATCH = "$NAMESPACE/copied-selection/match"
         const val WORKSPACE_PATH_RESOLVE = "$NAMESPACE/workspace-path/resolve"
         const val CITATION_PATHS = "$NAMESPACE/citation-paths"
+        const val CITATION_SYMBOLS = "$NAMESPACE/citation-symbols"
+        const val MCP_DEFAULTS = "$NAMESPACE/mcp-defaults"
         const val PERMISSION_JUDGE = "$NAMESPACE/permission/judge"
         const val PERMISSION_JUDGE_MODEL = "$NAMESPACE/permission/judge/model"
         const val PERMISSION_SESSION_ALLOW = "$NAMESPACE/permission/session-allow"
@@ -214,6 +216,7 @@ object ApiRoutes {
         route("/auth/:id", methodsNoQuery("PUT", "DELETE")),
         route("/command", methodsNoQuery("GET")),
         route("/mcp", methodsNoQuery("GET")),
+        route(Endpoints.MCP_DEFAULTS, methodsNoQuery("GET", "POST")),
         route("/lsp", methodsNoQuery("GET")),
         route("/vcs/status", methodsNoQuery("GET")),
         route("/agent", methodsNoQuery("GET")),
@@ -258,6 +261,7 @@ object ApiRoutes {
         route(Endpoints.WORKSPACE_FILE_PICK, methodsNoQuery("GET")),
         route(Endpoints.COPIED_SELECTION_MATCH, methodsNoQuery("POST")),
         route(Endpoints.CITATION_PATHS, methodsNoQuery("POST")),
+        route(Endpoints.CITATION_SYMBOLS, methodsNoQuery("POST")),
         route(Endpoints.WORKSPACE_PROBLEMS, methodsNoQuery("GET")),
         route(Endpoints.SESSION_TRANSFER_HIDE) { request, _ ->
             request.method == "POST" && request.optionalDirectory()

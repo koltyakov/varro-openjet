@@ -112,14 +112,16 @@ class UsageReport(
         appendLine("# OpenCode Usage Report")
         appendLine()
         appendLine("Generated ${Instant.ofEpochMilli(now)}. Retained history across all projects, $sessionCount sessions scanned.")
+        appendLine()
+        appendLine("Token counts use compact notation. Cache rate is cache read / (input + cache read + cache write), calculated from summed token counts. A dash in Cache rate means no recorded input tokens.")
         windows.forEachIndexed { index, (title, _) ->
             appendLine("\n## $title\n")
             if (groups[index].isEmpty()) {
                 appendLine("_No token usage._")
                 return@forEachIndexed
             }
-            appendLine("| Provider | Model | Prompts | Total | Duration | Input | Output | Reasoning | Cache read | Cache write |")
-            appendLine("| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |")
+            appendLine("| Provider | Model | Prompts | Total | Duration | Input | Output | Reasoning | Cache read | Cache write | Cache rate |")
+            appendLine("| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |")
             val total = Total()
             groups[index].entries.sortedWith(compareByDescending<Map.Entry<String, Total>> { it.value.prompts.size }
                 .thenByDescending { it.value.total }.thenBy { it.key }).forEach { (route, usage) ->
@@ -172,7 +174,14 @@ class UsageReport(
             durationCount += other.durationCount
         }
         fun row(provider: String, model: String) =
-            "| ${escape(provider)} | ${escape(model)} | ${integer(prompts.size.toLong())} | ${integer(total)} | ${duration()} | ${integer(input)} | ${integer(output)} | ${integer(reasoning)} | ${integer(cacheRead)} | ${integer(cacheWrite)} |"
+            "| ${escape(provider)} | ${escape(model)} | ${integer(prompts.size.toLong())} | ${tokens(total)} | ${duration()} | ${tokens(input)} | ${tokens(output)} | ${tokens(reasoning)} | ${tokens(cacheRead)} | ${tokens(cacheWrite)} | ${cacheRate()} |"
+
+        private fun tokens(value: Long) = tokenNumberFormat.get().format(value)
+
+        private fun cacheRate(): String {
+            val prompt = input.toDouble() + cacheRead + cacheWrite
+            return if (prompt > 0) String.format(Locale.US, "%.1f%%", cacheRead / prompt * 100) else "-"
+        }
 
         private fun duration(): String {
             if (durationCount == 0) return "-"
@@ -189,6 +198,12 @@ class UsageReport(
     }
 
     companion object {
+        private val tokenNumberFormat = ThreadLocal.withInitial {
+            java.text.NumberFormat.getCompactNumberInstance(Locale.US, java.text.NumberFormat.Style.SHORT).apply {
+                maximumFractionDigits = 1
+                roundingMode = java.math.RoundingMode.HALF_UP
+            }
+        }
         private const val DAY = 86_400_000L
         private fun encode(value: String) = URLEncoder.encode(value, Charsets.UTF_8)
     }

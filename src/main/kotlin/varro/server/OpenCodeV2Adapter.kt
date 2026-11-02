@@ -100,7 +100,8 @@ internal class OpenCodeV2Adapter(
         if (route.startsWith("/api/")) return result(raw(method, scoped(path), body))
         when (route) {
             "/global/health" -> return result(Json.obj("healthy" to true, "version" to raw("GET", "/api/info").asObjectOrNull().str("version")))
-            "/global/dispose" -> { raw("POST", scoped("/api/location/reload"), Json.obj()); return result(true) }
+            "/global/dispose" -> { raw("POST", "/api/location/reload", Json.obj()); return result(true) }
+            "/instance/dispose" -> { raw("DELETE", scoped("/api/debug/location")); return result(true) }
             "/config", "/global/config" -> {
                 require(method == "GET") { "OpenCode v2 configuration updates must target a configuration file" }
                 val response = raw("GET", scoped("/api/config"))

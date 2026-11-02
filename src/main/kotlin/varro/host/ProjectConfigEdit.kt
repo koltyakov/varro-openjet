@@ -16,6 +16,7 @@ internal object ProjectConfigEdit {
         synchronized(locks[(path.hashCode() and Int.MAX_VALUE) % locks.size]) {
             val original = read(path)
             val updated = edit(original.orEmpty())
+            if (updated == original.orEmpty()) return
             Files.createDirectories(path.parent)
             val temporary = Files.createTempFile(path.parent, ".openjet-config-", ".tmp")
             try {

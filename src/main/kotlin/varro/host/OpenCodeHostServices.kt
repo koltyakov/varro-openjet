@@ -171,6 +171,36 @@ class OpenCodeHostServices(
 
     override fun updateModelRouting(body: JsonElement?): JsonObject = modelRouting.update(body)
 
+    override fun mcpDefaults(method: String, body: JsonElement?): JsonObject {
+        val environment = server.cli.serverEnvironment()
+        val global = Path.of(environment["XDG_CONFIG_HOME"] ?: Path.of(System.getProperty("user.home"), ".config").toString(), "opencode")
+        val defaults = McpDefaults(Path.of(server.workspaceDirectory() ?: project.basePath ?: error("Project has no workspace directory")),
+            global, server.transport.apiVersion == 2, beforeWrite = { path ->
+                // The UI only knows this view's sessions. Include other projects and pending input.
+                require(server.readRestartBlockers().get("totalSessionCount").asInt == 0) {
+                    "OpenCode has active work or pending decisions. Wait for it to finish before changing MCP defaults."
+                }
+                val documents = com.intellij.openapi.fileEditor.FileDocumentManager.getInstance()
+                require(documents.unsavedDocuments.none { document -> documents.getFile(document)?.path?.let {
+                    varro.server.WorkspacePaths.isSame(it, path.toString()) || runCatching { Path.of(it).toRealPath() == path }.getOrDefault(false)
+                } == true }) { "$path has unsaved changes; save before changing MCP defaults" }
+            }, refresh = { globalScope ->
+                if (globalScope && server.transport.apiVersion == 1) {
+                    // Released V1's global dispose does not invalidate its cached global config.
+                    require(server.restart(false) == OpenCodeServer.RestartOutcome.RESTARTED) {
+                        "MCP defaults were saved, but OpenCode could not restart safely. Restart the managed server when it is idle."
+                    }
+                } else if (globalScope) server.transport.request("POST", "/global/dispose", options = RequestOptions(unscoped = true))
+                else server.transport.request("POST", "/instance/dispose", options = RequestOptions(directory = server.workspaceDirectory()))
+            })
+        if (server.isAttachOnly()) {
+            if (method != "GET") requireLocalConfig()
+            return defaults.attached(server.transport.request("GET", "/config").data.asObjectOrNull()
+                ?: error("OpenCode returned an invalid MCP configuration"))
+        }
+        return if (method == "GET") defaults.read() else defaults.update(body)
+    }
+
     private val projectProviderConfig by lazy { ProjectProviderConfig(
         Path.of(project.guessProjectDir()?.path ?: project.basePath ?: error("Project has no workspace directory")),
     ) }

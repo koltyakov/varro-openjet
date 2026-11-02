@@ -473,6 +473,7 @@ export const VARRO_API_ENDPOINTS = {
   openCodeConfigModelRouting: `${VARRO_API_NAMESPACE}/opencode-config/model-routing`,
   openCodeConfigDisableProvider: `${VARRO_API_NAMESPACE}/opencode-config/disable-provider`,
   openCodeConfigPermissions: `${VARRO_API_NAMESPACE}/opencode-config/permissions`,
+  mcpDefaults: `${VARRO_API_NAMESPACE}/mcp-defaults`,
   session: `${VARRO_API_NAMESPACE}/session`,
   sessionTrash: `${VARRO_API_NAMESPACE}/session-trash`,
   sessionHistoryScope: `${VARRO_API_NAMESPACE}/session-history-scope`,
@@ -482,6 +483,7 @@ export const VARRO_API_ENDPOINTS = {
   workspaceProblems: `${VARRO_API_NAMESPACE}/workspace-problems`,
   workspacePathResolve: `${VARRO_API_NAMESPACE}/workspace-path/resolve`,
   citationPaths: `${VARRO_API_NAMESPACE}/citation-paths`,
+  citationSymbols: `${VARRO_API_NAMESPACE}/citation-symbols`,
   copiedSelectionMatch: `${VARRO_API_NAMESPACE}/copied-selection/match`,
   permissionJudge: `${VARRO_API_NAMESPACE}/permission/judge`,
   permissionJudgeModel: `${VARRO_API_NAMESPACE}/permission/judge/model`,
@@ -491,6 +493,13 @@ export const VARRO_API_ENDPOINTS = {
   permissionProjectAllow: `${VARRO_API_NAMESPACE}/permission/project-allow`,
   decisionProviders: `${VARRO_API_NAMESPACE}/decision-providers`,
 } as const;
+
+export interface McpDefaults {
+  global: Record<string, boolean>;
+  project: Record<string, boolean>;
+  effective: Record<string, boolean>;
+  editable: boolean;
+}
 
 export interface ModelPricing {
   input?: number;

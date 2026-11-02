@@ -37,7 +37,7 @@ internal object JsoncEdit {
         return result
     }
 
-    fun set(raw: String, path: List<String>, value: JsonElement): String {
+    fun set(raw: String, path: List<String>, value: JsonElement?): String {
         val text = raw.takeIf { it.isNotBlank() } ?: "{}\n"
         val parts = tokens(text)
         fun end(start: Int): Int {
@@ -66,8 +66,17 @@ internal object JsoncEdit {
             }
             match?.let { (valueStart, valueEnd) ->
                 if (keys.size > 1) return edit(valueStart, keys.drop(1))
+                if (value == null) {
+                    val keyStart = valueStart - 2
+                    val followingComma = parts.getOrNull(valueEnd)?.value == ","
+                    val precedingComma = parts.getOrNull(keyStart - 1)?.value == ","
+                    val from = if (!followingComma && precedingComma) parts[keyStart - 1].range.first else parts[keyStart].range.first
+                    val to = if (followingComma) parts[valueEnd].range.last + 1 else parts[valueEnd - 1].range.last + 1
+                    return text.removeRange(from, to)
+                }
                 return text.replaceRange(parts[valueStart].range.first, parts[valueEnd - 1].range.last + 1, value.toString())
             }
+            if (value == null) return text
             val nested = keys.drop(1).asReversed().fold(value) { child, key -> Json.obj(key to child) }
             val comma = if (parts[i - 1].value in listOf("{", ",")) "" else ","
             return text.replaceRange(parts[i].range.first, parts[i].range.first, "$comma\n  ${Json.toElement(keys.first())}: $nested\n")

@@ -28,6 +28,14 @@ class OpenCodeV2Test {
         OpenCodeV2SessionState(temporary.newFolder().toPath()),
     )
 
+    @Test fun `global config reload is unscoped and project disposal targets only its location`() {
+        val calls = mutableListOf<Pair<String, String>>()
+        val native = adapter { method, path, _ -> calls.add(method to path); Json.obj() }
+        native.request("POST", "/global/dispose", null, RequestOptions(directory = "/repo"))
+        native.request("POST", "/instance/dispose", null, RequestOptions(directory = "/repo"))
+        assertEquals(listOf("POST" to "/api/location/reload", "DELETE" to "/api/debug/location?location%5Bdirectory%5D=%2Frepo"), calls)
+    }
+
     @Test fun `command discovery uses native precedence and retains noncolliding skills without config templates`() {
         val native = adapter { _, path, _ -> when (path) {
             "/api/command?location%5Bdirectory%5D=%2Frepo" -> Json.obj("data" to listOf(Json.obj("name" to "audit", "description" to "Native audit", "subagent" to true, "private" to "omitted")))

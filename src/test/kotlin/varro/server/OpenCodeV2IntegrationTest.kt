@@ -16,6 +16,39 @@ import java.util.concurrent.atomic.AtomicReference
 class OpenCodeV2IntegrationTest {
     @JvmField @Rule val temporary = TemporaryFolder()
 
+    private fun verifyMcpDefaults(root: java.nio.file.Path, transport: OpenCodeTransport) {
+        val workspace = Files.createDirectories(root.resolve("mcp-workspace"))
+        val globalDirectory = root.resolve("config/opencode")
+        val globalFile = globalDirectory.resolve("opencode.json")
+        val original = Files.readString(globalFile)
+        val config = Json.parse(original).asJsonObject.apply {
+            add("mcp", Json.obj("servers" to Json.obj("fixture-docs" to Json.obj(
+                "type" to "remote", "url" to "http://127.0.0.1:1/mcp", "disabled" to true,
+            ))))
+        }
+        Files.writeString(globalFile, config.toString())
+        fun reload() { transport.request("POST", "/global/dispose", options = RequestOptions(directory = workspace.toString())) }
+        val defaults = varro.host.McpDefaults(workspace, globalDirectory, true, refresh = { global ->
+            transport.request("POST", if (global) "/global/dispose" else "/instance/dispose", options = RequestOptions(directory = workspace.toString()))
+        })
+        fun configured() = transport.request("GET", "/config", options = RequestOptions(directory = workspace.toString()))
+            .data.asObjectOrNull().obj("mcp").obj("servers").obj("fixture-docs")!!
+        try {
+            reload()
+            assertEquals(true, configured().bool("disabled"))
+            assertEquals(false, defaults.read().obj("effective").bool("fixture-docs"))
+            defaults.update(Json.obj("name" to "fixture-docs", "scope" to "project", "enabled" to true))
+            assertEquals(false, configured().bool("disabled"))
+            assertEquals("http://127.0.0.1:1/mcp", configured().str("url"))
+            defaults.update(Json.obj("name" to "fixture-docs", "scope" to "project", "enabled" to null))
+            assertEquals(true, configured().bool("disabled"))
+            assertEquals(Json.obj(), defaults.read().obj("project"))
+        } finally {
+            Files.writeString(globalFile, original)
+            reload()
+        }
+    }
+
     private fun verifySymlinkedWorkspace(root: java.nio.file.Path, workspace: java.nio.file.Path, port: Int,
         password: AtomicReference<String?>, version: String) {
         if (System.getProperty("os.name").startsWith("Windows", true)) return
@@ -180,6 +213,7 @@ class OpenCodeV2IntegrationTest {
                 assertTrue(capabilities.savedPermissionEditing)
             }
             assertNotNull(password.get())
+            if (OpenCodeCli.compareVersions(version, "2.0.27") >= 0) verifyMcpDefaults(root, transport)
             verifySymlinkedWorkspace(root, workspace, port, password, version)
             if (OpenCodeCli.compareVersions(version, "2.1.2") >= 0) verifyFreeModelExclusions(transport, root)
             if (OpenCodeCli.compareVersions(version, "2.2.0") >= 0) {

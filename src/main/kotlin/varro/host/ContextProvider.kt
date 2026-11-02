@@ -43,6 +43,8 @@ import java.util.concurrent.atomic.AtomicReference
  */
 class ContextProvider(private val project: Project, private val hasConsumers: () -> Boolean = { true }) : Disposable {
 
+    internal val citationSymbols = CitationSymbols({ name, _ -> IndexedCitationSymbols.lookup(project, name) })
+
     private val current = AtomicReference(JsonObject())
     private val refreshRequested = AtomicBoolean(false)
     private val refreshAlarm = Alarm(Alarm.ThreadToUse.SWING_THREAD, this)
@@ -323,7 +325,7 @@ class ContextProvider(private val project: Project, private val hasConsumers: ()
     private fun languageId(file: VirtualFile): String =
         file.fileType.name.lowercase().ifBlank { file.extension ?: "plaintext" }
 
-    override fun dispose() = Unit
+    override fun dispose() = citationSymbols.close()
 
     companion object {
         private const val MAX_EDITOR_TEXT = 100_000

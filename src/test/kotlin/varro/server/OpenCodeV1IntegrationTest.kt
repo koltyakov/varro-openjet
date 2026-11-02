@@ -27,17 +27,22 @@ class OpenCodeV1IntegrationTest {
             "npm" to "@ai-sdk/openai-compatible", "name" to "Fixture", "options" to Json.obj("baseURL" to "http://127.0.0.1:1/v1", "apiKey" to "fixture-only"),
             "models" to Json.obj("model" to Json.obj("name" to "Fixture", "reasoning" to true,
                 "reasoning_options" to listOf(Json.obj("type" to "effort", "values" to listOf("low", "high"))),
-                "limit" to Json.obj("context" to 32000, "output" to 1024))))))))
+                 "limit" to Json.obj("context" to 32000, "output" to 1024))))))))
+        val global = Files.createDirectories(root.resolve("config/opencode"))
+        Files.writeString(global.resolve("opencode.json"), Json.obj("mcp" to Json.obj("fixture-docs" to Json.obj(
+            "type" to "remote", "url" to "http://127.0.0.1:1/mcp", "enabled" to false,
+        ))).toString())
         val version = ProcessBuilder(binary!!, "--version").directory(root.toFile()).apply { environment().clear(); environment().putAll(environment) }.start()
         val installed = version.inputStream.bufferedReader().readText().trim()
         assertTrue(version.waitFor(15, TimeUnit.SECONDS)); assertEquals(0, version.exitValue())
         assertEquals(System.getenv("VARRO_OPENCODE_V1_TEST_VERSION") ?: "1.19.3", installed)
         val port = ServerSocket(0).use { it.localPort }
         val log = root.resolve("server.log")
-        val process = ProcessBuilder(binary, "serve", "--hostname", "127.0.0.1", "--port", port.toString())
+        fun launch() = ProcessBuilder(binary, "serve", "--hostname", "127.0.0.1", "--port", port.toString())
             .directory(workspace.toFile()).redirectErrorStream(true).redirectOutput(log.toFile()).apply {
                 environment().clear(); environment().putAll(environment)
             }.start()
+        var process = launch()
         val transport = OpenCodeTransport({ "http://127.0.0.1:$port" }, { workspace.toString() },
             { ServerStatus.Running("http://127.0.0.1:$port", EventStreamState.HEALTHY) }, { false }, {}, {},
             { OpenCodeConnection.authorization("fixture-password") }, root.resolve("annotations"))
@@ -49,6 +54,27 @@ class OpenCodeV1IntegrationTest {
             val model = transport.request("GET", "/provider").data.asObjectOrNull().arr("all")!!.mapNotNull { it.asObjectOrNull() }
                 .single { it.str("id") == "fixture" }.obj("models").obj("model")
             assertEquals(setOf("low", "high"), model.obj("variants")!!.keySet())
+            val defaults = varro.host.McpDefaults(workspace, global, false, refresh = { globalScope ->
+                if (globalScope) {
+                    // Match OpenJet's safe managed restart instead of V1's stale global cache.
+                    process.destroy()
+                    assertTrue(process.waitFor(10, TimeUnit.SECONDS))
+                    process = launch()
+                    val restartDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30)
+                    while (!transport.checkHealth() && process.isAlive && System.nanoTime() < restartDeadline) Thread.sleep(50)
+                    assertTrue(Files.readString(log), transport.checkHealth())
+                } else transport.request("POST", "/instance/dispose")
+            })
+            transport.request("POST", "/global/dispose")
+            assertEquals(false, defaults.read().obj("effective").bool("fixture-docs"))
+            defaults.update(Json.obj("name" to "fixture-docs", "scope" to "project", "enabled" to true))
+            assertEquals(true, transport.request("GET", "/config").data.asObjectOrNull().obj("mcp").obj("fixture-docs").bool("enabled"))
+            defaults.update(Json.obj("name" to "fixture-docs", "scope" to "project", "enabled" to null))
+            assertEquals(false, transport.request("GET", "/config").data.asObjectOrNull().obj("mcp").obj("fixture-docs").bool("enabled"))
+            defaults.update(Json.obj("name" to "fixture-docs", "scope" to "global", "enabled" to true))
+            assertEquals(true, transport.request("GET", "/config").data.asObjectOrNull().obj("mcp").obj("fixture-docs").bool("enabled"))
+            defaults.update(Json.obj("name" to "fixture-docs", "scope" to "global", "enabled" to false))
+            assertEquals(false, transport.request("GET", "/config").data.asObjectOrNull().obj("mcp").obj("fixture-docs").bool("enabled"))
             val session = transport.request("POST", "/session", Json.obj("title" to "Isolated V1 compatibility")).data.asObjectOrNull()!!
             val id = session.str("id")!!
             try {

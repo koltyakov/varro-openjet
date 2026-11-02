@@ -60,7 +60,7 @@ class UsageReportTest {
             add("s", first)
             merge(UsageReport.Total().apply { add("s", message()) })
         }
-        assertEquals("| provider | model | 1 | 12,513 | 1h 1m | 200 | 40 | 6 | 80 | 10 |", total.row("provider", "model"))
+        assertEquals("| provider | model | 1 | 12.5K | 1h 1m | 200 | 40 | 6 | 80 | 10 | 27.6% |", total.row("provider", "model"))
     }
 
     @Test
@@ -73,6 +73,15 @@ class UsageReportTest {
             val content = report.build(allTime)
             println("Local usage includeAllTime=$allTime: ${(System.nanoTime() - start) / 1_000_000} ms; ${content.lineSequence().first { it.startsWith("Generated") }}")
         }
+    }
+
+    @Test fun `cache rate uses summed prompt tokens rather than averaging rates or output`() {
+        val first = message().apply { add("tokens", Json.obj("input" to 100, "output" to 9_000_000, "reasoning" to 500_000, "cache" to Json.obj("read" to 900, "write" to 0))) }
+        val second = message().apply { add("tokens", Json.obj("input" to 9_000, "cache" to Json.obj("read" to 0, "write" to 0))) }
+        val total = UsageReport.Total().apply { add("s", first); add("s", second) }
+        assertTrue(total.row("p", "m"), total.row("p", "m").endsWith("| 900 | 0 | 9.0% |"))
+        assertTrue(total.row("p", "m").contains("9M | 500K"))
+        assertTrue(UsageReport.Total().row("p", "m").endsWith("| - |"))
     }
 
     @Test
@@ -90,7 +99,7 @@ class UsageReportTest {
         assertEquals(remote, local)
         assertEquals(1, starts)
         assertEquals(2, calls)
-        assertTrue(local.contains("| provider | model | 1 | 168 | 1s | 100 | 20 | 3 | 40 | 5 |"))
+        assertTrue(local.contains("| provider | model | 1 | 168 | 1s | 100 | 20 | 3 | 40 | 5 | 27.6% |"))
     }
 
     @Test
