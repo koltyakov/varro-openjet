@@ -60,7 +60,7 @@ class VarroModelStore : PersistentStateComponent<VarroModelStore.StoreState> {
             val order = if (base.get(key) != next.get(key)) next.arr(key) else merged.arr(key)
             merged.add(key, order?.deepCopy() ?: Json.array(emptyList<String>()))
         }
-        for (key in listOf("modelVariantSelections", "modelDisplayNames")) {
+        for (key in listOf("modelVariantSelections", "modelDisplayNames", "providerLimitPins")) {
             val before = base.obj(key) ?: JsonObject()
             val after = next.obj(key) ?: JsonObject()
             val values = merged.obj(key) ?: JsonObject()

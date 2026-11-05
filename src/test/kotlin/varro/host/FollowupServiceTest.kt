@@ -22,6 +22,29 @@ class FollowupServiceTest {
     private val suggestions = Json.obj("summary" to "The parser still needs a focused regression test.", "actions" to listOf(Json.obj("title" to "Fix empty tokens", "prompt" to "Fix the reported parser bug and add a regression test.")))
     private val model = Json.obj("providerID" to "provider", "modelID" to "small", "variant" to "high")
 
+    @Test(timeout = 10_000) fun `opening cache probes never wait for local or remote inference or admit a miss`() {
+        val fixture = Fixture()
+        fixture.service().use { local ->
+            assertEquals(Followups.empty(), local.suggest("s", source, model, "/repo", true, cacheOnly = true))
+            assertTrue(fixture.calls.isEmpty())
+            fixture.gate = CountDownLatch(1)
+            Executors.newVirtualThreadPerTaskExecutor().use { executor ->
+                val generation = executor.submit<JsonObject> { fixture.suggest(local) }
+                assertTrue(fixture.generating.await(2, TimeUnit.SECONDS))
+                fixture.service().use { remote ->
+                    for (reader in listOf(local, remote)) {
+                        val probe = executor.submit<JsonObject> { reader.suggest("s", source, model, "/repo", true, cacheOnly = true) }
+                        assertEquals(Followups.empty(), probe.get(1, TimeUnit.SECONDS))
+                    }
+                }
+                fixture.gate!!.countDown()
+                assertEquals(suggestions, generation.get(2, TimeUnit.SECONDS))
+                assertEquals(suggestions, local.suggest("s", source, model, "/repo", true, cacheOnly = true))
+                assertEquals(1, fixture.posts())
+            }
+        }
+    }
+
     @Test fun `stateless generation preserves model reasoning and never creates or mutates a session`() {
         val fixture = Fixture()
         fixture.service().use { service ->

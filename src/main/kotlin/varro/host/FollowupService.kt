@@ -41,12 +41,17 @@ internal class FollowupService(
     override fun close() { invalidate(); executor.shutdownNow() }
 
     fun suggest(sessionId: String, source: JsonObject, model: JsonObject, directory: String?, allowGenerate: Boolean = false,
-                isCancelled: () -> Boolean = { false }, isModelCurrent: () -> Boolean = { true }): JsonObject {
+                 isCancelled: () -> Boolean = { false }, isModelCurrent: () -> Boolean = { true }, cacheOnly: Boolean = false): JsonObject {
         if (apiVersion() != 2 || !isModelCurrent() || isCancelled()) return Followups.empty()
         val key = turnKey(sessionId, directory, source.str("userMessageId")!!)
         val digest = hash(source)
         val subscriber = Any()
         try {
+            if (cacheOnly) {
+                val cached = cache.get(key, digest) ?: return Followups.empty()
+                if (isCancelled() || !isModelCurrent()) return Followups.empty()
+                return if (cached.arr("actions")!!.isEmpty || sourceIsCurrent(sessionId, source, readOptions(directory, isCancelled))) cached else Followups.empty()
+            }
             // Waiting on another host's disk admission must not hold the local attempt monitor.
             val existing = synchronized(this) { attempts[key] }
             if (existing != null && existing.digest != digest) return Followups.empty()

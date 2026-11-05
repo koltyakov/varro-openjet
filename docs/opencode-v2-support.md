@@ -1,6 +1,6 @@
 # OpenCode V2 support
 
-OpenJet supports V1 from 1.16.0 and V2 from 2.0.5. The webview and shared sources were synced from Varro's `main` branch at `edbb9635a467`, version 0.33.34. Tested baselines are V1 1.19.5 and V2 2.2.5. The Kotlin adapter handles released-server contracts, including generated skill, shell and synthetic transcript records. Synthetic text appears as automatic-action notices; canonical subagent completion metadata produces linked subagent activities. Pending and running V2 patch calls render as active edits. Assistant history preserves automatic retry metadata for recovery notices. History attachments use deferred references with Kotlin-generated thumbnails and on-demand original reads. Chat annotations retain bounded display context before deferral. [Session cleanup and usage export](session-cleanup.md) preserve statistics and optional parent transcripts before confirmed deletions.
+OpenJet supports V1 from 1.16.0 and V2 from 2.0.5. The webview and shared sources were synced from Varro's `main` branch at `70529460ef20`, version 0.34.0. Tested baselines are V1 1.19.5 and V2 2.2.5. The Kotlin adapter handles released-server contracts, including generated skill, shell and synthetic transcript records. Synthetic text appears as automatic-action notices; canonical subagent completion metadata produces linked subagent activities. Pending and running V2 patch calls render as active edits. Assistant history preserves automatic retry metadata for recovery notices. History attachments use deferred references with Kotlin-generated thumbnails and on-demand original reads. Chat annotations retain bounded display context before deferral. [Session cleanup and usage export](session-cleanup.md) preserve statistics and optional parent transcripts before confirmed deletions.
 
 V2 sessions support `/pause` and a Resume action in the transcript. Pausing parks queued messages and interrupts with `resume=false`. Pause markers persist in the shared Varro session annotations, and session summaries and usage reports exclude paused time. Commit-message generation uses the stateless endpoint when the server advertises it, falling back to a helper session when the endpoint or selected model is unavailable before generation starts.
 
@@ -2204,6 +2204,83 @@ delta. The explicit host-policy differences and verification limits above remain
 Unrelated backend behavior and the unchanged OpenCode release range were not
 reviewed again. Tests use isolated HOME/XDG/database/workspace/service roots,
 never production sessions, credentials or service registrations.
+
+## Hex, provider pins and chat-restoration sync, 2026-11-05
+
+Compared all 12 commits and the complete 98-file change inventory from Varro
+`edbb9635a467979ab2cadaef2ca3b1051108330e` through
+`70529460ef20a1f57ec1e4bda8e2fb5e13541ef7`, version 0.34.0. This includes
+the changed extension implementations, shared protocol, package configuration
+and affected browser/E2E flows. Upstream verification tooling was checked for
+host applicability, not line-by-line audited. Vendor sources are copied without
+transformations. SDK 1.19.5, client 2.2.5 and both support floors are unchanged;
+there is no new released OpenCode range to review. This sync targets OpenJet
+0.10.0. Verification below used version 0.9.12 before the release-version change.
+
+| Upstream change | OpenJet alignment and regression coverage |
+| --- | --- |
+| `src/extension/dictation-integration.ts`, `hex-integration.ts`, `handy-integration.ts`, message routing and shared `dictation/request` / `dictation/result` | `src/main/kotlin/varro/host/DictationIntegration.kt`, `HexIntegration.kt`, `HandyIntegration.kt` and `VarroProjectService.kt` implement automatic provider choice, a shared app-level command guard, capture-owner routing, correlated results and host-wide revisions. Hex uses fixed idempotent commands, typed/versioned JSON, bounded discovery/status/command reads and capture-only polling. Unsafe Windows version pointers, malformed replies, refusals, uncertain delivery and remote/disposed hosts cannot activate another app or trigger retries. Kotlin fixtures never access installed apps or microphones. The retired Handy path setting is retained on disk but ignored and removed from the settings UI, matching upstream's automatic discovery. |
+| `src/extension/provider-limit-status-bar.ts`, `model-preferences-store.ts`, sidebar visibility and `providerLimits.statusBarDisplay` | `src/main/kotlin/varro/host/PinnedProviderLimits.kt`, `src/main/kotlin/varro/toolwindow/ProviderLimitsWidget.kt`, `src/main/kotlin/varro/store/VarroModelStore.kt`, settings and plugin registration add native pinned quotas. Provider-wide polls reuse the existing backend every 120 seconds with chats closed. Rotation is 15 seconds or all providers; hidden/listed ordering, aliases, tooltip details and visible-chat exclusions match the shared contract. Widget ticks never wait on HTTP. Tests cover concurrent pin edits and persistence, summary units/order/bounds, retries, rotation, scope, model-specific updates, disconnect and stale results. |
+| `src/extension/followup-service.ts`, `rest-proxy.ts`; `POST /varro/session/:id/followups` with `cacheOnly` | `src/main/kotlin/varro/host/FollowupService.kt` and `OpenCodeHostServices.kt` return disk-only opening probes without joining local inference, waiting for another host or generating on a miss, even when `allowGenerate` is true. Cached actions still revalidate authoritative history. The new fixture holds admitted inference open and verifies immediate local/remote misses, later cache reuse and exactly one generation. |
+| Shared queue `followupTitle`, follow-up action menus and paused admission | `src/main/kotlin/varro/host/QueuedDispatches.kt` validates labels before persistence. Tests verify unchanged prompts, labels across restart/write-ahead admission and rejection without overwriting the previous journal. `OpenCodeV2Adapter.kt` and `OpenCodeV2Projection.kt` already preserve native follow-up metadata. Browser copy/paused-queue controls are copied unchanged. |
+| Claude Agent idle provider-wide polling regression | `src/main/kotlin/varro/host/quota/QuotaAdapters.kt` already reads Claude Code OAuth quotas when the statusline is stale, without a model request or credential write. The added Kotlin regression verifies the endpoint, selected token, null model scope, fresh counters and unchanged local file. No adapter behavior change is required. |
+| Hidden-completion scroll restoration, follow-up geometry, background-subagent state and settings-load retry | Copied unchanged into `webview/vendor/webview/`. Existing Kotlin session-status/history routes supply the child state. Browser tests cover virtualized/nonvirtualized restoration, hidden/followed/detached views, cached and delayed follow-ups, preserved drafts after Models import failure and completed child activity grouping. No new OpenCode endpoint is consumed. |
+
+Marked advances to 18.1.3, Mermaid to 12.3.0, Tailwind and its Vite plugin to
+4.3.4, Iconoir to 7.12.2, Vite to 8.3.6 and Vitest to 5.1.0. Node remains
+24.22.2; npm advances to 12.2.2 in both `webview/package.json` and `Dockerfile`.
+The lockfile uses those exact tools; no browser dependency is added, and npm
+reports no unreviewed install scripts. Upstream's ImageMagick, MSAL, lint,
+jsdom and publishing dependencies are not additional OpenJet browser dependencies.
+
+VS Code status-item placement is replaced by the IntelliJ widget extension,
+including project-owned state shared with detached windows. Upstream streaming
+observer/lifecycle metrics, fixture-file cleanup guards and script-runner
+concurrency changes are verification tooling, not new Kotlin host operations.
+No production file cleanup, microphone operation or user-state migration ran.
+
+Vendor integrity, TypeScript checking, browser bundling and all 111 OpenJet
+browser host tests passed. All 882 selected upstream unit/component tests and
+all 56 selected Chromium cases passed. The six compatibility-helper, seven
+build-script and one vendor-integrity script regressions passed too. Logs use
+the `build/upstream-sync-7052946-` prefix. Chromium fixtures are not native JCEF
+or actual dictation-app verification.
+
+The final pinned-release helper run passed `check buildPlugin --rerun-tasks`
+against exact published V2 2.2.5, with published V1 1.19.5 enabled too. All
+796 enabled Kotlin tests passed, including 21 new regressions. Only the existing
+opt-in usage benchmark was skipped. The V1 adapter, V2 adapter and both
+managed-service cases ran without skips in isolated fixture state. Evidence is
+`build/upstream-sync-7052946-full-check-final.log` and
+`build/opencode-compatibility/2.2.5/verification.json`. A source/build hash
+comparison found no changes during final verification. The package is
+`build/distributions/varro-openjet-0.9.12.zip`, SHA-256
+`55a2e4b2eaff771907962e4fc8cf692442155e368645939f6691974195cd410b`.
+
+Plugin Verifier passed against that existing ZIP on all five configured IDEs,
+2025.2.6.3, 2025.3.6.1, 2026.1.5, 2026.2.3 and 263.6800.24. It reported
+existing deprecated/experimental API warnings and unresolved optional-dependency
+notices, with no compatibility errors. Its log is
+`build/upstream-sync-7052946-verifier.log`. The packaged JAR contains the new
+dictation, polling and native widget classes and widget registration. Varro
+`main` still resolved to `70529460ef20` after the final full build.
+
+Remaining differences and verification limits:
+
+| Status | Upstream files/endpoints and OpenJet code | User-visible impact |
+| --- | --- | --- |
+| Native UI and external applications unverified | Varro `src/extension/dictation-integration.ts`, `src/extension/hex-integration.ts`, `src/extension/provider-limit-status-bar.ts` and changed browser components; OpenJet `src/main/kotlin/varro/host/DictationIntegration.kt`, `src/main/kotlin/varro/host/HexIntegration.kt`, `src/main/kotlin/varro/host/PinnedProviderLimits.kt`, `src/main/kotlin/varro/toolwindow/ProviderLimitsWidget.kt`, `src/main/kotlin/varro/host/WebviewHost.kt` and `webview/vendor/webview/`. | Actual Hex/Handy microphone capture, paste delivery, IDE widget placement/visibility and JCEF restoration/focus still need sandbox interaction. No live signed-in quota account, native Windows/Linux run, interactive OAuth or companion check was performed. Windows pointer/discovery rules have deterministic fixtures only. |
+| Existing quota coordination/adapter differences | Varro `src/extension/provider-limit-service.ts`, coordinator and `src/extension/provider-limits/adapters/`; OpenJet `src/main/kotlin/varro/host/ProviderQuotaBackend.kt` and `src/main/kotlin/varro/host/quota/QuotaAdapters.kt`. | Pin polling reuses project-local coordination, so separate projects/editors can duplicate requests. Claude validation, custom probe URLs and partial xAI fallback retain the differences in [architecture](architecture.md#remaining-quota-parity-differences). The new stale-statusline regression does not resolve those older differences. |
+| Existing busy-server policy | Varro `src/extension/opencode-config-service.ts`, `src/extension/provider-file-refresh-controller.ts`; OpenJet `src/main/kotlin/varro/host/OpenCodeHostServices.kt` and `src/main/kotlin/varro/server/OpenCodeServer.kt`, `/varro/mcp-defaults`. | Busy/unverifiable changes reject for retry instead of saving ahead of deferred refresh. Released V1 global changes require a safe managed restart. This delta does not change MCP behavior. |
+| Existing cleanup, permission and annotation differences | Varro `src/extension/usage-report-service.ts`, `src/extension/session-cleanup-service.ts`, `src/extension/auto-approve-judge.ts`, `src/extension/rest-proxy.ts`, `src/extension/varro-state-paths.ts`; OpenJet `src/main/kotlin/varro/host/LocalUsageDatabase.kt`, `src/main/kotlin/varro/host/ArtifactCleanup.kt`, `src/main/kotlin/varro/host/PermissionJudge.kt`, `src/main/kotlin/varro/host/NativeDecisions.kt`, `src/main/kotlin/varro/host/RestProxy.kt`, `src/main/kotlin/varro/host/ProjectNotifications.kt`, `src/main/kotlin/varro/server/OpenCodeV2SessionState.kt`. | Large scans stay bounded, older attachment-cache copies remain, equivalent permission reviews may repeat, cross-root pending snapshots can differ and native-only roots can separate annotations/pauses/service choices. No user state was migrated. |
+| Existing optional-client/platform and notice limitations | OpenCode shell/job and optional-management APIs, Varro image codecs, Windows inspector and notices; OpenJet `src/main/kotlin/varro/server/OpenCodeV2Adapter.kt`, `src/main/kotlin/varro/host/ImageThumbnails.kt`, `src/main/kotlin/varro/host/RemoteImages.kt`, `src/main/kotlin/varro/server/ServerOwnership.kt`, `webview/vite.config.mts` and `webview/vendor/webview/`. | Shell deletion can notify/resume the assistant; optional management controls and retry countdown remain absent. AVIF may be unsupported, Windows inspection lacks persistent-helper warm-up and frontend notice collection remains incomplete. The prior KaTeX notice exclusion is retained. |
+| Existing dependency advisory | Unchanged `seroval` 1.6.8 override in `webview/package.json`. | Previously reported GHSA-f86p-h4j2-7qgj and GHSA-9wx9-5pv9-3349 are not addressed by these upstream dependency updates. No unrelated audit fix was applied. |
+
+No new required Kotlin host or consumed-contract gap remains in the reviewed
+delta. The pre-existing differences and native verification limits above remain.
+Unrelated backend behavior and the unchanged OpenCode release range were not
+reviewed again. Tests use isolated fixture HOME/XDG/database/workspace/service
+roots, never production sessions, credentials or service registrations.
 
 ## Verification
 

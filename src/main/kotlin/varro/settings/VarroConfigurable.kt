@@ -134,13 +134,8 @@ class VarroConfigurable : BoundConfigurable("Varro") {
         }
 
         group("Dictation") {
-            row("Handy path:") {
-                textField()
-                    .bindText(settings::dictationHandyPath)
-                    .comment("Optional absolute executable path. Leave empty to search standard installation locations and PATH.")
-                    .columns(40)
-            }
-            row { comment("Start Handy and configure its model and permissions first. Click the mic again to finish and keep the text; right-click to cancel. Requires a local IDE host.") }
+            row { comment("Start Hex or Handy and configure its model and permissions first. Running Hex takes priority; otherwise running Handy is used. Apps are discovered in standard installation locations and PATH.") }
+            row { comment("Click the mic again to finish and keep the text; right-click to cancel. Requires a local IDE host. Hex needs control CLI support.") }
             row { comment("Optional lifecycle logs track recording and processing. Disable Handy's Auto Submit option to review text before sending.") }
         }
 
@@ -158,6 +153,11 @@ class VarroConfigurable : BoundConfigurable("Varro") {
         }
 
         group("Models") {
+            row("Pinned provider quotas:") {
+                comboBox(listOf("rotating", "all"))
+                    .bindItem(settings::providerLimitsStatusBarDisplay.toNullableProperty())
+                    .comment("Rotate pinned providers every 15 seconds, or show all. Providers selected in visible chats are excluded. Manage pins and display names in the chat provider list.")
+            }
             row {
                 checkBox("Suggest follow-up actions after Build responses")
                     .bindSelected(settings::chatFollowupsEnabled)

@@ -62,6 +62,7 @@ class VarroProjectService(private val project: Project) : Disposable {
     private val busySessions = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
     private val proxies = java.util.concurrent.ConcurrentHashMap<WebviewHost, RestProxy>()
     @Volatile private var focusedHost: WebviewHost? = null
+    private val chatProviders = java.util.concurrent.ConcurrentHashMap<WebviewHost, String>()
 
     /**
      * The one surface that runs Full/Auto permission automation. Without an owner
@@ -138,9 +139,24 @@ class VarroProjectService(private val project: Project) : Disposable {
     private fun selectionDirectory(sessionId: String): String? =
         server.transport.observedSessionDirectories()[sessionId] ?: project.basePath
 
-    private val hostServices = OpenCodeHostServices(project, server, editor, settings, workspaceRoots = ::transferRoots) { update ->
+    private val hostServices: OpenCodeHostServices = OpenCodeHostServices(project, server, editor, settings, workspaceRoots = ::transferRoots) { update ->
+        acceptPinnedProviderUpdate(update)
         broadcast("provider-limit/updated", update)
     }
+    private val pinnedProviderLimits: PinnedProviderLimits = PinnedProviderLimits(
+        catalog = { directory -> server.transport.request("GET", "/config/providers", options = varro.server.RequestOptions(directory = directory)).data },
+        quota = hostServices::pinnedProviderLimit,
+    )
+
+    private fun acceptPinnedProviderUpdate(update: JsonObject): Unit = pinnedProviderLimits.acceptUpdate(update)
+
+    /** Called on the EDT by status widgets, including widgets in detached IDE windows. */
+    internal fun pinnedProviderLimitsDisplay(): PinnedProviderLimits.Display = pinnedProviderLimits.tick(
+        (lastStatus.get() as? ServerStatus.Running)?.let { "${it.url}:${server.requestGeneration()}" },
+        project.guessProjectDir()?.path ?: project.basePath, modelStore.modelPreferences,
+        panels.filter { it.isReady && it.component.isShowing }.mapNotNull { chatProviders[it] }.toSet(),
+        settings.providerLimitsStatusBarDisplay,
+    )
     private val ralphJournal = varro.store.JsonJournal(java.nio.file.Path.of(
         com.intellij.openapi.application.PathManager.getConfigPath(), "varro", project.locationHash, "ralph.json",
     ))
@@ -207,7 +223,10 @@ class VarroProjectService(private val project: Project) : Disposable {
             if (previous::class != status::class ||
                 (previous is ServerStatus.Running && status is ServerStatus.Running && previous.url != status.url) ||
                 (previous is ServerStatus.Error && status is ServerStatus.Error && previous.message != status.message)
-            ) hostServices.clearProviderQuotaCache()
+            ) {
+                pinnedProviderLimits.invalidate()
+                hostServices.clearProviderQuotaCache()
+            }
             broadcast("server/status", status.toJson())
             reportStatusFailure(status)
             if (status is ServerStatus.Running && previous !is ServerStatus.Running) {
@@ -224,6 +243,7 @@ class VarroProjectService(private val project: Project) : Disposable {
         ApplicationManager.getApplication().messageBus.connect(this)
             .subscribe(VarroSettings.TOPIC, VarroSettings.Listener {
                 notifications.settingsChanged()
+                pinnedProviderLimits.invalidate()
                 hostServices.clearProviderQuotaCache()
                 broadcastConfig()
                 server.updateAskAgentEnabled(
@@ -278,6 +298,7 @@ class VarroProjectService(private val project: Project) : Disposable {
         panels.add(host)
         Disposer.register(host) {
             panels.remove(host)
+            chatProviders.remove(host)
             proxies.remove(host)?.dispose()
             if (focusedHost === host) focusedHost = null
             queue.detach(viewId)
@@ -460,6 +481,7 @@ class VarroProjectService(private val project: Project) : Disposable {
         val eventSessionId = parsed.properties.text("sessionID") ?: info.text("id") ?: parsed.properties.obj("part").text("sessionID")
         if (eventSessionId in store.hiddenSessionIds) return
         if (parsed.type in setOf("catalog.updated", "global.disposed", "integration.updated", "integration.connection.updated")) {
+            pinnedProviderLimits.invalidate()
             hostServices.clearProviderQuotaCache()
         }
         if (parsed.type == "session.next.moved") {
@@ -573,9 +595,9 @@ class VarroProjectService(private val project: Project) : Disposable {
 
         try {
             when (type) {
-                "handy/request" -> {
+                "dictation/request" -> {
                     val target = host ?: return
-                    handyIntegration.handleRequest(payload, target::post)
+                    dictationIntegration.handleRequest(payload, target::post)
                 }
 
                 "ready" -> {
@@ -868,6 +890,12 @@ class VarroProjectService(private val project: Project) : Disposable {
                     broadcastEditorTabs()
                 }
                 "webview/focus" -> if (payload.bool("focused") == true) focusedHost = host
+                "commands/state" -> host?.let {
+                    if (payload.bool("canAbort") == null || payload.bool("canSwitchSessions") == null ||
+                        (payload?.has("modelVisible") == true && payload.bool("modelVisible") == null)) return
+                    val provider = payload.obj("model").text("providerID")?.takeIf { payload.bool("modelVisible") != false }
+                    if (provider == null) chatProviders.remove(it) else chatProviders[it] = provider
+                }
 
                 "permission/reveal" -> payload.text("permissionId")?.let { permissionId ->
                     notifications.revealPermission(permissionId)
@@ -882,12 +910,12 @@ class VarroProjectService(private val project: Project) : Disposable {
 
                 // Accepted and intentionally inert: these drive VS Code affordances
                 // with no JetBrains counterpart, and the webview does not wait on them.
-                "commands/state",
                 "providers/watch", "vscode/mermaid-preview",
                 "files/remove", "files/clear", "composer/images-update",
                 -> Unit
 
                 "providers/refresh", "providers/auth-changed" -> {
+                    pinnedProviderLimits.invalidate()
                     hostServices.clearProviderQuotaCache()
                     broadcast("providers/refresh", Json.obj("revalidateAuth" to (type == "providers/auth-changed")))
                     if (type == "providers/auth-changed" && server.isAttachOnly() && server.transport.apiVersion == 1) {
@@ -1346,6 +1374,7 @@ class VarroProjectService(private val project: Project) : Disposable {
     }
 
     override fun dispose() {
+        pinnedProviderLimits.close()
         streamingToolContent.clear()
         ralph.close()
         hostServices.dispose()
@@ -1363,7 +1392,7 @@ class VarroProjectService(private val project: Project) : Disposable {
         const val TOOL_WINDOW_ID = "Varro"
         const val NOTIFICATION_GROUP = "Varro Notifications"
 
-        private val handyIntegration get() = com.intellij.openapi.components.service<HandyIntegration>()
+        private val dictationIntegration get() = com.intellij.openapi.components.service<DictationIntegration>()
 
         /** OpenCode session id alphabet, matching upstream's own validation. */
         private val SESSION_ID = Regex("""^[A-Za-z0-9_-]+$""")

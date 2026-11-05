@@ -817,6 +817,8 @@ export type ModelPreferences = {
   lastSelectedModel?: ChatModelSelection;
   modelVariantSelections: Record<string, string | null>;
   providerOrder: string[];
+  /** Pinned provider IDs mapped to optional status-bar display names. */
+  providerLimitPins?: Record<string, string>;
   modelOrder: string[];
   hiddenProviders: string[];
   hiddenModels: string[];
@@ -864,6 +866,7 @@ export type QueuedMessageSnapshot = {
   messageId?: string;
   sessionId: string;
   text: string;
+  followupTitle?: string;
   agent?: string;
   paused?: boolean;
   droppedFiles: DroppedFile[];
@@ -954,21 +957,23 @@ export type RalphStatePayload = {
   activeIds: string[];
 };
 
-export type HandyAction = 'status' | 'start' | 'stop' | 'cancel';
-export type HandyRecordingState = 'idle' | 'recording' | 'processing' | 'unknown';
+export type DictationProvider = 'handy' | 'hex';
+export type DictationAction = 'status' | 'start' | 'stop' | 'cancel';
+export type DictationRecordingState = 'idle' | 'recording' | 'processing' | 'unknown';
+export type DictationStatus = {
+  available: boolean;
+  running: boolean;
+  state: DictationRecordingState;
+  provider?: DictationProvider;
+  /** Orders state observations and unsolicited updates within this host. */
+  revision?: number;
+  error?: string;
+};
 
 export type ExtensionMessage =
   | {
-      type: 'handy/result';
-      payload: {
-        requestId: string;
-        available: boolean;
-        running: boolean;
-        state: HandyRecordingState;
-        /** Orders state observations and unsolicited updates within this host. */
-        revision?: number;
-        error?: string;
-      };
+      type: 'dictation/result';
+      payload: DictationStatus & { requestId: string };
     }
   | { type: 'server/status'; payload: ServerStatus }
   | { type: 'server/restart-blocked'; payload: RestartBlockedState }
@@ -1100,8 +1105,8 @@ export type ExtensionMessage =
 
 export type WebviewMessage =
   | {
-      type: 'handy/request';
-      payload: { requestId: string; action: HandyAction };
+      type: 'dictation/request';
+      payload: { requestId: string; action: DictationAction; provider?: DictationProvider };
     }
   | { type: 'context/request' }
   | { type: 'workspace/select'; payload: { path: string; requestId: number } }
@@ -1111,6 +1116,7 @@ export type WebviewMessage =
         canAbort: boolean;
         canSwitchSessions: boolean;
         model: ChatModelSelection | null;
+        modelVisible?: boolean;
         sessionId?: string | null;
       };
     }

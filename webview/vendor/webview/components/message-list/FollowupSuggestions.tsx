@@ -1,4 +1,5 @@
 import { For, Show, createEffect, createMemo, createSignal, onCleanup, untrack } from 'solid-js';
+import { Portal } from 'solid-js/web';
 import type {
   FollowupAction,
   FollowupSource,
@@ -12,14 +13,16 @@ import {
 import { client } from '../../lib/client';
 import type { ChatModelSelection } from '../../../shared/protocol';
 import { logWarn } from '../../lib/log';
-import { getSelectedModelForSession, state } from '../../lib/state';
+import { enqueueMessage, getSelectedModelForSession, state } from '../../lib/state';
 import { deriveSelectedModelFromSession } from '../../hooks/routing-state';
 import { prepareForMessageBlockRemoval } from '../../lib/message-list-layout';
+import { writeClipboard } from '../../lib/write-clipboard';
 import { sendMessage } from '../../hooks/useOpenCode';
 import { xmarkIcon } from '../../lib/ui-icons';
 import { InlineCodeText } from '../InlineCodeText';
 import { UiIcon } from '../UiIcon';
 import { Tooltip } from '../Tooltip';
+import { FollowupActionsMenu } from './FollowupActionsMenu';
 
 type ReadyFollowups = FollowupSuggestionSet & {
   key: string;
@@ -28,16 +31,24 @@ type ReadyFollowups = FollowupSuggestionSet & {
   directory?: string;
 };
 
+const INITIAL_CACHE_LOOKUP_TIMEOUT_MS = 2_000;
+
 /** One observer for the latest live turn, outside virtualized message rows. */
 export function FollowupSuggestions(props: {
   finalMessageId: string | null;
   turnId: string | null;
   working: boolean;
   blocked: boolean;
+  onRestoreStart?: () => (() => void) | undefined;
 }) {
   const [ready, setReady] = createSignal<ReadyFollowups | null>(null);
   const [sending, setSending] = createSignal(false);
   const [error, setError] = createSignal('');
+  const [menu, setMenu] = createSignal<{
+    action: FollowupAction;
+    x: number;
+    y: number;
+  } | null>(null);
   // oxlint-disable-next-line no-unassigned-vars -- Assigned by Solid's ref binding.
   let element: HTMLDivElement | undefined;
   let previousScope = '';
@@ -119,6 +130,7 @@ export function FollowupSuggestions(props: {
   function clear() {
     if (element?.isConnected) prepareForMessageBlockRemoval(element);
     setError('');
+    setMenu(null);
     setReady(null);
   }
 
@@ -134,10 +146,11 @@ export function FollowupSuggestions(props: {
     clear();
   }
 
-  async function send(action: FollowupAction) {
+  async function send(action: FollowupAction, queue = false) {
     const value = current();
     if (sendPending || !value || !value.actions.includes(action)) return;
     sendPending = true;
+    setMenu(null);
     setSending(true);
     setError('');
     const sendScope = scope();
@@ -146,7 +159,9 @@ export function FollowupSuggestions(props: {
       if (scope() !== sendScope || sourceKey() !== value.key) return;
       if (optimisticPublished && !ready()) setReady(value);
       if (ready() === value)
-        setError('Could not send this follow-up. Your main draft has not changed.');
+        setError(
+          `Could not ${queue ? 'queue' : 'send'} this follow-up. Your main draft has not changed.`
+        );
     };
     const validateBeforeSend = async () => {
       const latest = await client.varro.followups(value.sessionId, value.source, {
@@ -166,6 +181,17 @@ export function FollowupSuggestions(props: {
     };
     try {
       if (!(await validateBeforeSend())) return;
+      if (queue) {
+        enqueueMessage({
+          id: crypto.randomUUID(),
+          sessionId: value.sessionId,
+          text: action.prompt,
+          followupTitle: action.title,
+          agent: 'build',
+          paused: true,
+        });
+        return;
+      }
       const accepted = await sendMessage(action.prompt, {
         targetSessionId: value.sessionId,
         preserveComposer: true,
@@ -253,11 +279,11 @@ export function FollowupSuggestions(props: {
     });
     const unreadOpening =
       opening?.sessionId === sessionId && !!completedAt && completedAt > opening.seenAt;
-    const allowGenerate =
+    const liveTurn =
       !!source &&
-      ((source.userMessageId === armedTurn &&
-        !historicalAssistantIds.has(source.assistantMessageId)) ||
-        unreadOpening);
+      source.userMessageId === armedTurn &&
+      !historicalAssistantIds.has(source.assistantMessageId);
+    const allowGenerate = liveTurn || unreadOpening;
     const attemptKey = `${currentScope}:${source?.userMessageId ?? ''}:${allowGenerate}`;
     if (!source || !sessionId || attempted.has(attemptKey)) return;
     attempted.add(attemptKey);
@@ -267,24 +293,64 @@ export function FollowupSuggestions(props: {
     const directory = untrack(
       () => state.sessions.find((session) => session.id === sessionId)?.directory
     );
-    void client.varro
-      .followups(sessionId, source, {
+    const model = untrack(sessionModel);
+    let finishRestore = !liveTurn ? untrack(() => props.onRestoreStart?.()) : undefined;
+    const releaseRestore = () => {
+      const finish = finishRestore;
+      finishRestore = undefined;
+      finish?.();
+    };
+    const publish = (suggestions: FollowupSuggestionSet) => {
+      if (controller.signal.aborted || scope() !== currentScope || sourceKey() !== key)
+        return false;
+      // Treat bridge output as inert plain text and enforce the same bounds as the host.
+      const validated = parseFollowupSuggestions(JSON.stringify(suggestions));
+      if (!validated.actions.length) return false;
+      setReady({ key, source, sessionId, directory, ...validated });
+      return true;
+    };
+    const load = async () => {
+      if (finishRestore) {
+        const cacheController = new AbortController();
+        const timer = setTimeout(() => {
+          cacheController.abort();
+          releaseRestore();
+        }, INITIAL_CACHE_LOOKUP_TIMEOUT_MS);
+        onCleanup(() => {
+          clearTimeout(timer);
+          cacheController.abort();
+          releaseRestore();
+        });
+        try {
+          const cached = await client.varro.followups(sessionId, source, {
+            signal: AbortSignal.any([controller.signal, cacheController.signal]),
+            directory,
+            allowGenerate: false,
+            cacheOnly: true,
+            model,
+          });
+          if (!cacheController.signal.aborted && publish(cached)) return;
+        } catch {
+          // A failed or slow cache probe falls back to normal suggestions without holding reveal.
+        } finally {
+          clearTimeout(timer);
+          releaseRestore();
+        }
+      }
+      if (controller.signal.aborted) return;
+      const suggestions = await client.varro.followups(sessionId, source, {
         signal: controller.signal,
         directory,
         allowGenerate,
-        model: untrack(sessionModel),
-      })
-      .then((suggestions) => {
-        if (controller.signal.aborted || scope() !== currentScope || sourceKey() !== key) return;
-        // Treat bridge output as inert plain text and enforce the same bounds as the host.
-        const validated = parseFollowupSuggestions(JSON.stringify(suggestions));
-        if (validated.actions.length) setReady({ key, source, sessionId, directory, ...validated });
-      })
-      .catch(() => {
-        // Optional inference must not change chat completion or log conversation text.
-        if (!controller.signal.aborted)
-          logWarn('Follow-ups request failed; check Varro output for generation diagnostics');
+        model,
       });
+      publish(suggestions);
+    };
+    void load().catch(() => {
+      // Optional inference must not change chat completion or log conversation text.
+      if (!controller.signal.aborted)
+        logWarn('Follow-ups request failed; check Varro output for generation diagnostics');
+    });
   });
 
   const current = () => {
@@ -330,6 +396,17 @@ export function FollowupSuggestions(props: {
                       type="button"
                       disabled={sending() || !current()}
                       onClick={() => void send(action)}
+                      onContextMenu={(event) => {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        if (sending() || !current()) return;
+                        const rect = event.currentTarget.getBoundingClientRect();
+                        setMenu({
+                          action,
+                          x: event.clientX || rect.left,
+                          y: event.clientY || rect.bottom,
+                        });
+                      }}
                     >
                       <InlineCodeText text={action.title} />
                     </button>
@@ -343,6 +420,25 @@ export function FollowupSuggestions(props: {
               </p>
             </Show>
           </div>
+        )}
+      </Show>
+      <Show when={menu()} keyed>
+        {(value) => (
+          <Portal>
+            <FollowupActionsMenu
+              x={value.x}
+              y={value.y}
+              onClose={() => setMenu(null)}
+              onCopy={() => {
+                void writeClipboard(value.action.prompt);
+                setMenu(null);
+              }}
+              onQueue={() => {
+                setMenu(null);
+                void send(value.action, true);
+              }}
+            />
+          </Portal>
         )}
       </Show>
     </>

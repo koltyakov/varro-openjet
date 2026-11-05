@@ -4,7 +4,6 @@ import com.google.gson.JsonObject
 import com.intellij.openapi.application.ApplicationManager
 import varro.protocol.Json
 import varro.protocol.str
-import varro.settings.VarroSettings
 import java.nio.file.Files
 import java.nio.file.Path
 import java.util.concurrent.CompletableFuture
@@ -14,17 +13,17 @@ import java.util.concurrent.TimeUnit
 /** One command guard is shared by all projects and composer views in this IDE. */
 @com.intellij.openapi.components.Service(com.intellij.openapi.components.Service.Level.APP)
 internal class HandyIntegration(
-    private val configuredPath: () -> String = { VarroSettings.getInstance().dictationHandyPath },
+    private val configuredPath: () -> String = { "" },
     private val localHost: () -> Boolean = { !IdeHostEnvironment.current.isRemoteHost() },
     private val runtime: Runtime = Runtime(),
     private val executor: Executor = Executor { ApplicationManager.getApplication().executeOnPooledThread(it) },
 ) : com.intellij.openapi.Disposable {
     enum class Action(val wireName: String) { STATUS("status"), START("start"), STOP("stop"), CANCEL("cancel") }
     data class Request(val requestId: String, val action: Action)
-    data class Status(val available: Boolean, val running: Boolean, val error: String? = null, val state: String = "idle", val revision: Long = 0) {
+    data class Status(val available: Boolean, val running: Boolean, val error: String? = null, val state: String = "idle", val revision: Long = 0, val provider: String? = null) {
         fun payload(requestId: String): JsonObject = Json.obj(
             "requestId" to requestId, "available" to available, "running" to running, "state" to state, "revision" to revision,
-        ).apply { error?.let { addProperty("error", it) } }
+        ).apply { error?.let { addProperty("error", it) }; provider?.let { addProperty("provider", it) } }
     }
 
     private val lock = Any()

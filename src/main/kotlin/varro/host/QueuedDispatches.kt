@@ -19,6 +19,9 @@ class QueuedDispatches(private val path: Path, initialMessages: JsonArray) {
     @Synchronized fun hasPending(): Boolean = claims.isNotEmpty() || dispatches().entrySet().any { it.value.asJsonObject.str("status") == "admitting" }
 
     @Synchronized fun update(viewId: String, incoming: JsonArray, mutationId: String? = null): JsonArray {
+        require(incoming.all { value -> value.asObjectOrNull()?.let {
+            !it.has("followupTitle") || Followups.title(it.str("followupTitle")) != null
+        } == true }) { "Invalid queued follow-up title" }
         val current = messages()
         val next = JsonArray()
         current.filter { owner(it.asJsonObject) != viewId }.forEach(next::add)

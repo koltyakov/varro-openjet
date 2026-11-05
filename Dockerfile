@@ -30,7 +30,7 @@ RUN apt-get update \
 # container and a Volta-pinned host would drift apart and rewrite
 # package-lock.json against each other on every build.
 ARG NODE_VERSION=24.22.2
-ARG NPM_VERSION=12.2.1
+ARG NPM_VERSION=12.2.2
 ARG BUILD_ENV_HASH=unknown
 RUN set -eux; \
     case "$(dpkg --print-architecture)" in \

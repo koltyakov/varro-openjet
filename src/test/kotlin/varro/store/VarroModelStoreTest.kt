@@ -8,6 +8,15 @@ import org.junit.Test
 import varro.protocol.*
 
 class VarroModelStoreTest {
+    @Test fun `concurrent provider pin renames additions and removals survive stale views and restart`() {
+        val base = Json.obj("providerLimitPins" to Json.obj("openai" to "", "anthropic" to "Claude"))
+        val store = VarroModelStore().apply { modelPreferences = base }
+        store.update(base, base.deepCopy().apply { obj("providerLimitPins")!!.addProperty("openai", "Codex") })
+        store.update(base, base.deepCopy().apply { obj("providerLimitPins")!!.addProperty("google", "Gemini") })
+        store.update(base, base.deepCopy().apply { obj("providerLimitPins")!!.remove("anthropic") })
+        assertEquals(Json.obj("openai" to "Codex", "google" to "Gemini"), restore(store).modelPreferences.obj("providerLimitPins"))
+        assertFalse(base.obj("providerLimitPins")!!.has("google"))
+    }
     @Test fun `last model persists and stale unrelated preference updates do not overwrite it`() {
         val base = Json.obj("lastSelectedModel" to Json.obj("providerID" to "one", "modelID" to "first", "variant" to "high"))
         val store = VarroModelStore().apply { modelPreferences = base }

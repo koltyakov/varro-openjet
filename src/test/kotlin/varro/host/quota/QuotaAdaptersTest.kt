@@ -21,6 +21,29 @@ class QuotaAdaptersTest {
     private val now = 1_800_000_000_000L
     private data class Fixture(val id: String, val endpoint: String, val payload: String, val remaining: Int, val quotaId: String)
 
+    @Test fun `provider-wide Claude Agent poll ignores stale idle statusline and reads quotas without inference or credential writes`() {
+        val home = temporary.newFolder().toPath()
+        val creds = QuotaCredentials(home, mapOf("CLAUDE_CODE_OAUTH_TOKEN" to "idle-token")) { error("Explicit token must bypass Keychain") }
+        val statusline = home.resolve(".onwatch/data/anthropic-statusline.json")
+        Files.createDirectories(statusline.parent)
+        val stale = """{"rate_limits":{"five_hour":{"used_percentage":99}}}"""
+        Files.writeString(statusline, stale)
+        Files.setLastModifiedTime(statusline, java.nio.file.attribute.FileTime.fromMillis(now - 600_000))
+        var requests = 0
+        val adapters = QuotaAdapters(QuotaHttp { request ->
+            requests++
+            assertEquals("https://api.anthropic.com/api/oauth/usage", request.url)
+            assertEquals("Bearer idle-token", request.headers["Authorization"])
+            QuotaResponse(200, """{"five_hour":{"utilization":20},"seven_day":{"utilization":30}}""".toByteArray())
+        }, creds) { _, _ -> fail("Quota polling cannot write Claude Code credentials") }
+        val result = adapters.poll(Json.obj("id" to "claude-agent", "models" to Json.obj()), JsonObject(), null, now)!!
+        assertEquals("available", result.str("status"))
+        assertNull(result.str("modelID"))
+        assertEquals(listOf(80, 70), result.arr("windows")!!.map { it.asJsonObject.int("remaining") })
+        assertEquals(1, requests)
+        assertEquals(stale, Files.readString(statusline))
+    }
+
     @Test fun `Claude Agent credentials prefer environment then Keychain then file without using Anthropic auth`() {
         for (source in listOf("env", "keychain", "file", "missing", "invalid-keychain", "unavailable-keychain")) {
             val home = temporary.newFolder().toPath()

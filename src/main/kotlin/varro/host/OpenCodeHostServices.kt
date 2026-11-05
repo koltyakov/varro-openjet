@@ -105,7 +105,7 @@ class OpenCodeHostServices(
         if (!settings.chatFollowupsEnabled || model == null) return Followups.empty()
         return followups.suggest(sessionId, source, model, scope, body.asObjectOrNull().bool("allowGenerate") == true,
             isCancelled, { settings.chatFollowupsEnabled && settings.chatFollowupModel.trim() == modelRef &&
-            (server.requestGeneration() to server.url()) == serverIdentity })
+            (server.requestGeneration() to server.url()) == serverIdentity }, cacheOnly = body.asObjectOrNull().bool("cacheOnly") == true)
     }
 
     override fun clearFollowups(sessionId: String, directory: String?, messageId: String?) =
@@ -343,6 +343,8 @@ class OpenCodeHostServices(
 
     override fun providerLimit(providerId: String, modelId: String?): JsonObject =
         providerQuotas.get(providerId, modelId, project.guessProjectDir()?.path ?: project.basePath)
+
+    internal fun pinnedProviderLimit(providerId: String, directory: String?): JsonObject = providerQuotas.get(providerId, null, directory)
 
     // --- Session diff summary -------------------------------------------------
 
