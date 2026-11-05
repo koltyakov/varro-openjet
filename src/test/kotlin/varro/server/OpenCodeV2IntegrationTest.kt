@@ -43,9 +43,51 @@ class OpenCodeV2IntegrationTest {
             defaults.update(Json.obj("name" to "fixture-docs", "scope" to "project", "enabled" to null))
             assertEquals(true, configured().bool("disabled"))
             assertEquals(Json.obj(), defaults.read().obj("project"))
+            defaults.add(Json.obj("scope" to "project", "json" to """{"mcpServers":{"fixture-import":{"url":"http://127.0.0.1:1/mcp","oauth":false,"enabled":false}}}"""))
+            val imported = transport.request("GET", "/config", options = RequestOptions(directory = workspace.toString()))
+                .data.asObjectOrNull().obj("mcp").obj("servers").obj("fixture-import")!!
+            assertEquals(true, imported.bool("disabled")); assertFalse(imported.has("enabled")); assertEquals(false, imported.bool("oauth"))
+            defaults.add(Json.obj("scope" to "global", "json" to """{"fixture-other":{"type":"remote","url":"http://127.0.0.1:2/mcp","disabled":true}}"""))
+            assertNotNull(transport.request("GET", "/config", options = RequestOptions(directory = workspace.toString()))
+                .data.asObjectOrNull().obj("mcp").obj("servers").obj("fixture-other"))
+            verifyMcpSignOut(transport, workspace)
         } finally {
             Files.writeString(globalFile, original)
             reload()
+        }
+    }
+
+    private fun verifyMcpSignOut(transport: OpenCodeTransport, workspace: java.nio.file.Path) {
+        val options = RequestOptions(directory = workspace.toString())
+        var servers = com.google.gson.JsonArray()
+        waitFor("Fixture MCP integrations were not registered") {
+            servers = transport.request("GET", "/api/mcp", options = options).data.asObjectOrNull().arr("data")!!
+            listOf("fixture-docs", "fixture-other").all { name -> servers.any {
+                it.asJsonObject.str("name") == name && it.asJsonObject.text("integrationID") != null
+            } }
+        }
+        val ids = mutableListOf<String>()
+        fun create(name: String, token: String): String {
+            val integration = servers.map { it.asJsonObject }.single { it.str("name") == name }.str("integrationID")!!
+            val id = transport.request("POST", "/api/credential", Json.obj("integrationID" to integration, "activate" to true,
+                "value" to Json.obj("type" to "oauth", "methodID" to integration, "access" to token, "refresh" to "unused-fixture-refresh",
+                    "expires" to System.currentTimeMillis() + 86_400_000)), options).data.asObjectOrNull().obj("data").str("id")!!
+            ids += id
+            return id
+        }
+        try {
+            // Disabled loopback MCPs register real integrations but cannot receive these synthetic tokens.
+            val first = create("fixture-docs", "fixture-tenant-one")
+            val second = create("fixture-docs", "fixture-tenant-two")
+            val unrelated = create("fixture-other", "fixture-other-server")
+            transport.request("POST", "/mcp/fixture-docs/disconnect", options = options)
+            assertEquals(true, transport.request("DELETE", "/mcp/fixture-docs/auth", options = options).data.asObjectOrNull().bool("success"))
+            val remaining = transport.request("GET", "/api/credential", options = options).data.asObjectOrNull().arr("data")!!.map { it.asJsonObject.str("id") }
+            assertFalse(first in remaining); assertFalse(second in remaining); assertTrue(unrelated in remaining)
+            assertEquals("disabled", transport.request("GET", "/mcp", options = options).data.asObjectOrNull().obj("fixture-docs").str("status"))
+        } finally {
+            val remaining = transport.request("GET", "/api/credential", options = options).data.asObjectOrNull().arr("data")!!.map { it.asJsonObject.str("id") }
+            ids.reversed().filter { it in remaining }.forEach { transport.request("DELETE", "/api/credential/$it", options = options) }
         }
     }
 

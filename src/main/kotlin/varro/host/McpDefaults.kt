@@ -19,6 +19,64 @@ internal class McpDefaults(
 
     fun read(): JsonObject = defaults(snapshot().files)
 
+    fun add(body: JsonElement?): JsonObject {
+        val request = body.asObjectOrNull()
+        val scope = request.str("scope")
+        require(scope in setOf("global", "project")) { "Choose Global or This project for the MCP configuration." }
+        val text = request.str("json") ?: error("MCP configuration must contain JSON and an optional server name.")
+        require(request?.has("name") != true || request.str("name") != null) { "MCP server name must be a string." }
+        val snippet = McpConfigSnippet.parse(text, request.str("name").orEmpty())
+        require(snippet.servers.size() > 0) { "Enter a name for this MCP server." }
+        val global = scope == "global"
+        fun target(snapshot: Snapshot) = if (global) snapshot.files.lastOrNull { it.global }?.path
+            ?: globalDirectory.resolve("opencode.json") else snapshot.target
+        while (true) {
+            val selected = canonical(target(snapshot()))
+            var retry = false
+            ProjectConfigEdit.update(selected, { beforeWrite(selected) }) edit@{ original ->
+                val current = snapshot()
+                if (canonical(target(current)) != selected) { retry = true; return@edit original }
+                val configured = current.files.find { canonical(it.path) == selected }
+                require(configured?.raw.orEmpty() == original) { "OpenCode configuration changed while saving. Try again." }
+                beforeWrite(selected)
+                val duplicate = snippet.servers.keySet().firstOrNull { name -> current.files.any { it.global == global && servers(it.document).has(name) } }
+                require(duplicate == null) { "MCP server $duplicate is already configured in this scope. Open the config file to edit it." }
+                val document = configured?.document ?: Json.obj()
+                val mcp = document.obj("mcp")
+                require((!document.has("mcp") || mcp != null) && (mcp?.has("servers") != true || mcp.obj("servers") != null)) {
+                    "The existing MCP configuration is invalid. Open the config file to fix it before adding servers."
+                }
+                val nested = native && (mcp.obj("servers") != null || servers(document).size() == 0)
+                var raw = original.ifBlank { "{}\n" }
+                if (!document.hasNonNull("\$schema")) raw = JsoncEdit.set(raw, listOf("\$schema"), Json.toElement("https://opencode.ai/config.json"))
+                snippet.servers.entrySet().forEach { (name, value) ->
+                    val server = value.asJsonObject.deepCopy()
+                    server.bool(if (nested) "enabled" else "disabled")?.let { server.addProperty(if (nested) "disabled" else "enabled", !it) }
+                    server.remove(if (nested) "enabled" else "disabled")
+                    raw = JsoncEdit.set(raw, (if (nested) listOf("mcp", "servers") else listOf("mcp")) + name, server)
+                }
+                if (raw.endsWith('\n')) raw else "$raw\n"
+            }
+            if (retry) continue
+            refresh(global)
+            return read()
+        }
+    }
+
+    /** Opening an invalid config must still work so the user can repair it. */
+    fun open(scope: String, isOpen: (Path) -> Boolean = { false }): Path {
+        require(scope in setOf("global", "project")) { "Choose Global or This project for the MCP configuration." }
+        val global = scope == "global"
+        val paths = paths().filter { (it in globalPaths()) == global }
+        val selected = paths.lastOrNull(Files::exists) ?: if (global) globalDirectory.resolve("opencode.json") else directory.resolve("opencode.json")
+        val target = canonical(selected)
+        if (Files.exists(target) || isOpen(target)) return target
+        ProjectConfigEdit.update(target, { require(!isOpen(target)) { "$target is already open; save before creating configuration." } }) { original ->
+            if (Files.exists(target) || isOpen(target)) original else "{\n  \"\$schema\": \"https://opencode.ai/config.json\"\n}\n"
+        }
+        return target
+    }
+
     fun update(body: JsonElement?): JsonObject {
         val request = body.asObjectOrNull()
         val name = request.text("name")
@@ -84,7 +142,9 @@ internal class McpDefaults(
         }
     }
 
-    private fun snapshot(): Snapshot {
+    private fun globalPaths() = listOf("config.json", "opencode.json", "opencode.jsonc").map(globalDirectory::resolve)
+
+    private fun paths(): List<Path> {
         val root = directory.toAbsolutePath().normalize()
         val ancestors = mutableListOf<Path>()
         var current: Path? = root
@@ -93,17 +153,22 @@ internal class McpDefaults(
             if (!native && Files.exists(current.resolve(".git"))) break
             current = current.parent
         }
-        val globals = listOf("config.json", "opencode.json", "opencode.jsonc").map(globalDirectory::resolve)
+        val globals = globalPaths()
         val projects = ancestors.asReversed().flatMap { ancestor -> listOf("opencode.json", "opencode.jsonc").map(ancestor::resolve) } +
             if (native) ancestors.asReversed().flatMap { ancestor -> listOf("opencode.json", "opencode.jsonc").map(ancestor.resolve(".opencode")::resolve) } else emptyList()
-        val files = (globals + projects).distinct().filter(Files::exists).map { path ->
+        return (globals + projects).distinct()
+    }
+
+    private fun snapshot(): Snapshot {
+        val globals = globalPaths()
+        val files = paths().filter(Files::exists).map { path ->
             require(Files.size(path) <= 4 * 1024 * 1024) { "OpenCode configuration is too large" }
             val raw = Files.readString(path)
             val document = Json.parseOrNull(ProjectPermissionConfig.stripJsonComments(raw.ifBlank { "{}" })).asObjectOrNull()
                 ?: error("Could not parse $path")
             Config(path, raw, document, path in globals)
         }
-        return Snapshot(files, ProjectConfigPath.resolve(root, native))
+        return Snapshot(files, ProjectConfigPath.resolve(directory.toAbsolutePath().normalize(), native))
     }
 
     private fun servers(document: JsonObject): JsonObject {
@@ -144,7 +209,10 @@ internal class McpDefaults(
             (if (file.global) global else project).addProperty(name, enabled(resolved))
             effective.addProperty(name, enabled(resolved))
         } }
-        return Json.obj("global" to global, "project" to project, "effective" to effective, "editable" to true)
+        return Json.obj("global" to global, "project" to project, "effective" to effective, "editable" to true).apply {
+            val oauth = inherited.filter { (_, server) -> server.str("type") == "remote" && server.bool("oauth") != false }.keys
+            if (oauth.isNotEmpty()) add("oauthServers", Json.array(oauth))
+        }
     }
 
     fun attached(document: JsonObject): JsonObject = defaults(listOf(Config(directory, "", document, false))).apply {

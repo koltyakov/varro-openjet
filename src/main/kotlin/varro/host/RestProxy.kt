@@ -105,6 +105,7 @@ class RestProxy(
         fun readOpenCodeConfig(): JsonObject
         fun updateModelRouting(body: JsonElement?): JsonObject
         fun mcpDefaults(method: String, body: JsonElement?): JsonObject
+        fun mcpConfig(body: JsonElement?, open: Boolean): JsonElement
         fun disableProvider(body: JsonElement?): JsonElement
         fun readOpenCodePermissions(): JsonObject
         fun updateOpenCodePermissions(body: JsonElement?): JsonObject
@@ -413,6 +414,8 @@ class RestProxy(
             pathname == ApiRoutes.Endpoints.OPENCODE_CONFIG -> services.readOpenCodeConfig()
 
             pathname == ApiRoutes.Endpoints.MCP_DEFAULTS -> services.mcpDefaults(method, body)
+            pathname == ApiRoutes.Endpoints.MCP_CONFIG -> services.mcpConfig(body, false)
+            pathname == ApiRoutes.Endpoints.MCP_CONFIG_OPEN -> services.mcpConfig(body, true)
 
             pathname == ApiRoutes.Endpoints.OPENCODE_CONFIG_MODEL_ROUTING ->
                 services.updateModelRouting(body)

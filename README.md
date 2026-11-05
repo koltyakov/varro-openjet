@@ -50,6 +50,10 @@ Open **Settings > Tools > Varro** for server startup, models, fonts and chat opt
 
 With Database Tools installed, Varro can attach loaded table metadata, SQL and selected rows. Use **Add to Varro Context** in a result grid to save a snapshot, or drag tables from Database Explorer into chat. Type `@` to search tables. Context capture uses data already loaded in the IDE and excludes connection URLs and credentials.
 
+### MCP servers
+
+Use `/mcp` or `/mcps` to select MCP servers for a chat. The management screen can add servers from JSON or JSONC snippets to global or project configuration and open the config file for editing. Existing servers, comments and unrelated settings are preserved. For OAuth-enabled remote servers, separate controls handle sign-in, sign-out and switching accounts. Attached servers cannot open or edit local configuration.
+
 ### Dictation
 
 Start Hex with control CLI support or [Handy](https://github.com/cjpais/Handy), then use the composer's microphone to start or stop dictation. Running Hex takes priority when both apps are running. Right-click to cancel. Apps are discovered in standard installation locations and PATH. Disable Handy's **Auto Submit** to review text before sending. Dictation is unavailable on remote IDE hosts.

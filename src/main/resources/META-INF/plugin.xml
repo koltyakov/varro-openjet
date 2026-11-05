@@ -57,20 +57,14 @@
     ]]></description>
 
     <change-notes><![CDATA[
-        <h3>0.10.0</h3>
+        <h3>0.10.x</h3>
         <ul>
-            <li>Pin provider quotas to the IDE status bar with custom names, background refresh,
-                and rotating or all-provider display. Providers selected in visible chats are excluded.</li>
-            <li>Add Hex dictation alongside Handy, with automatic app discovery, recording status,
-                and finish/cancel controls. Running Hex takes priority when both apps are running.</li>
-            <li>Copy follow-up suggestions or add them to the queue paused without changing the composer draft.</li>
-            <li>Fix chat scroll restoration after hidden completion, follow-up positioning,
-                and excess bottom spacing. Opening chats no longer waits for pending follow-up generation.</li>
-            <li>Keep background subagent cards active until their child sessions finish,
-                and group completed results under Explored.</li>
-            <li>Recover from settings-panel loading failures without losing chat drafts.</li>
-            <li>Sync with Varro 0.34.0 and verify OpenCode V1 1.19.5 and V2 2.2.5 compatibility,
-                retaining support for V1 1.16.0 and V2 2.0.5 or newer.</li>
+            <li>Manage MCP defaults, import JSON/JSONC, and open global or project configuration.</li>
+            <li>Sign in, sign out, or switch accounts for OAuth-enabled MCP servers.</li>
+            <li>Pin provider quotas to the status bar with custom names and optional rotation.</li>
+            <li>Add Hex dictation alongside Handy with automatic app discovery.</li>
+            <li>Copy follow-up suggestions or queue them paused without changing drafts.</li>
+            <li>Fix chat restoration, follow-up layout, subagent status, and settings-panel recovery.</li>
         </ul>
         <h3>0.9.x</h3>
         <ul>

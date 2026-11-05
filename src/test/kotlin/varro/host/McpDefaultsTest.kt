@@ -21,6 +21,125 @@ class McpDefaultsTest {
     private fun update(scope: String, enabled: Boolean?) = Json.obj("name" to "docs", "scope" to scope, "enabled" to enabled)
     private fun service(native: Boolean = true) = McpDefaults(root, global, native)
 
+    @Test fun `OAuth server names follow effective replacement and legacy merge without exposing credentials`() {
+        val remote = Json.obj("type" to "remote", "url" to "https://example.com/mcp", "headers" to Json.obj("Authorization" to "fixture-secret"))
+        for (native in listOf(true, false)) {
+            write(global.resolve("opencode.json"), config(Json.obj("docs" to remote, "disabled" to remote.deepCopy().apply { addProperty("disabled", true) },
+                "header" to remote.deepCopy().apply { addProperty("oauth", false) }, "local" to server), native))
+            write(root.resolve("opencode.json"), config(Json.obj("docs" to if (native) server else Json.obj("oauth" to false)), native))
+            val result = service(native).read()
+            assertEquals(listOf("disabled"), result.arr("oauthServers")!!.strings())
+            assertFalse(result.toString().contains("fixture-secret"))
+            val attached = service(native).attached(Json.parse(Files.readString(global.resolve("opencode.json"))).asJsonObject)
+            assertEquals(listOf("docs", "disabled"), attached.arr("oauthServers")!!.strings())
+            assertFalse(attached.toString().contains("fixture-secret"))
+        }
+    }
+
+    @Test fun `imports choose native or legacy nesting and invert flags without resolving environment references`() {
+        for ((native, legacy) in listOf(true to false, true to true, false to false)) {
+            val workspace = Files.createDirectories(root.resolve("case-$native-$legacy"))
+            val file = workspace.resolve("opencode.json")
+            if (legacy) write(file, config(Json.obj("old" to server), false))
+            var refreshed: Boolean? = null
+            val defaults = McpDefaults(workspace, global, native, refresh = { refreshed = it })
+            val result = defaults.add(Json.obj("scope" to "project", "json" to
+                """{"mcpServers":{"docs":{"command":"node","args":["docs.js"],"env":{"KEY":"{env:DOCS_KEY}"},"disabled":true}}}"""))
+            assertEquals(false, refreshed)
+            val document = Json.parse(Files.readString(file)).asJsonObject
+            val nested = native && !legacy
+            val added = (if (nested) document.obj("mcp").obj("servers") else document.obj("mcp")).obj("docs")!!
+            assertEquals(listOf("node", "docs.js"), added.arr("command")!!.strings())
+            assertEquals("{env:DOCS_KEY}", added.obj("environment").str("KEY"))
+            assertEquals(if (nested) true else false, added.bool(if (nested) "disabled" else "enabled"))
+            assertFalse(added.has(if (nested) "enabled" else "disabled"))
+            assertEquals(false, result.obj("effective").bool("docs"))
+        }
+    }
+
+    @Test fun `global batch import preserves comments existing servers and project overrides`() {
+        val file = write(global.resolve("opencode.jsonc"), "// keep me\n" + Json.obj("model" to "keep/model", "mcp" to Json.obj("servers" to Json.obj("old" to server))).toString())
+        val project = write(root.resolve("opencode.json"), config(Json.obj("old" to Json.obj("type" to "local", "command" to listOf("project")))))
+        val original = Files.readString(project)
+        var refreshes = 0
+        val result = McpDefaults(root, global, true, refresh = { assertTrue(it); refreshes++ }).add(Json.obj("scope" to "global",
+            "json" to """{"mcp":{"servers":{"docs":{"url":"https://example.com/mcp"}}},"model":"not/imported"}"""))
+        assertEquals(Json.obj("old" to true, "docs" to true), result.obj("global"))
+        assertEquals(1, refreshes)
+        assertTrue(Files.readString(file).contains("// keep me")); assertTrue(Files.readString(file).contains("keep/model"))
+        assertFalse(Files.readString(file).contains("not/imported")); assertEquals(original, Files.readString(project))
+    }
+
+    @Test fun `duplicates in any file in the chosen scope reject a whole import and cross-scope overrides remain allowed`() {
+        val file = write(global.resolve("opencode.json"), config(Json.obj("docs" to server)))
+        val original = Files.readString(file)
+        val batch = Json.obj("scope" to "global", "json" to Json.obj("new" to server, "docs" to server).toString())
+        assertThrows(IllegalArgumentException::class.java) { service().add(batch) }
+        assertEquals(original, Files.readString(file)); assertFalse(Files.exists(root.resolve("opencode.json")))
+        service().add(batch.deepCopy().apply { addProperty("scope", "project") })
+        assertEquals(Json.obj("new" to true, "docs" to true), service().read().obj("project"))
+        assertThrows(IllegalArgumentException::class.java) { service().add(batch.deepCopy().apply { addProperty("scope", "project") }) }
+    }
+
+    @Test fun `invalid inputs containers dirty buffers busy checks and concurrent edits cannot overwrite an import target`() {
+        val file = write(root.resolve("opencode.json"), "{}")
+        val body = Json.obj("scope" to "project", "json" to Json.obj("docs" to server).toString())
+        for (invalid in listOf(Json.obj("scope" to "other", "json" to "{}"), Json.obj("scope" to "project", "json" to 1),
+            body.deepCopy().apply { addProperty("name", 42) }, Json.obj("scope" to "project", "json" to server.toString()))) {
+            assertThrows(Exception::class.java) { service().add(invalid) }
+            assertEquals("{}", Files.readString(file))
+        }
+        for (raw in listOf("{\"mcp\":null}", "{\"mcp\":{\"servers\":[]}}", "{\"mcp\":4}")) {
+            write(file, raw)
+            assertThrows(Exception::class.java) { service().add(body) }
+            assertEquals(raw, Files.readString(file))
+        }
+        write(file, "{}")
+        for (message in listOf("unsaved changes", "active work")) {
+            assertThrows(IllegalStateException::class.java) { McpDefaults(root, global, true, beforeWrite = { error(message) }).add(body) }
+            assertEquals("{}", Files.readString(file))
+        }
+        var checks = 0
+        assertThrows(IllegalArgumentException::class.java) {
+            McpDefaults(root, global, true, beforeWrite = { if (++checks == 2) Files.writeString(it, "{\"model\":\"external\"}") }).add(body)
+        }
+        assertEquals("{\"model\":\"external\"}", Files.readString(file))
+    }
+
+    @Test fun `concurrent imports retain both batches and new names need an explicit name for a bare server`() {
+        val pool = Executors.newFixedThreadPool(2)
+        try {
+            listOf("one", "two").map { name -> pool.submit {
+                service().add(Json.obj("scope" to "project", "json" to server.toString(), "name" to name))
+            } }.forEach { it.get(10, TimeUnit.SECONDS) }
+        } finally { pool.shutdownNow() }
+        assertEquals(Json.obj("one" to true, "two" to true), service().read().obj("project"))
+    }
+
+    @Test fun `opening creates only schema scaffolds chooses the highest-precedence existing file and never parses invalid JSON`() {
+        val defaults = service()
+        val project = defaults.open("project")
+        assertEquals(root.resolve("opencode.json").toRealPath(), project)
+        assertEquals(Json.obj("\$schema" to "https://opencode.ai/config.json"), Json.parse(Files.readString(project)))
+        val file = write(global.resolve("opencode.jsonc"), "{ broken JSON")
+        assertEquals(file.toRealPath(), defaults.open("global"))
+        assertEquals("{ broken JSON", Files.readString(file))
+        val nested = write(root.resolve(".opencode/opencode.jsonc"), "// invalid")
+        assertEquals(nested.toRealPath(), defaults.open("project"))
+    }
+
+    @Test fun `opening an unsaved new config never writes to disk and add routes are narrow`() {
+        val selected = service().open("global") { true }
+        assertEquals(global.toRealPath().resolve("opencode.json"), selected)
+        assertFalse(Files.exists(selected))
+        assertThrows(IllegalArgumentException::class.java) { service().open("other") }
+        for (route in listOf(ApiRoutes.Endpoints.MCP_CONFIG, ApiRoutes.Endpoints.MCP_CONFIG_OPEN)) {
+            assertTrue(ApiRoutes.isAllowed("POST", route))
+            for (method in listOf("GET", "DELETE", "PATCH")) assertFalse(ApiRoutes.isAllowed(method, route))
+            assertFalse(ApiRoutes.isAllowed("POST", "$route?directory=/other"))
+        }
+    }
+
     @Test fun `defaults come from files with v2 replacement and v1 shallow inheritance`() {
         write(global.resolve("opencode.json"), config(Json.obj("docs" to server.deepCopy().apply { addProperty("disabled", true) })))
         write(root.resolve("opencode.json"), config(Json.obj("docs" to server)))

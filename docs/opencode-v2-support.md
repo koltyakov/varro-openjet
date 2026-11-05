@@ -1,6 +1,6 @@
 # OpenCode V2 support
 
-OpenJet supports V1 from 1.16.0 and V2 from 2.0.5. The webview and shared sources were synced from Varro's `main` branch at `70529460ef20`, version 0.34.0. Tested baselines are V1 1.19.5 and V2 2.2.5. The Kotlin adapter handles released-server contracts, including generated skill, shell and synthetic transcript records. Synthetic text appears as automatic-action notices; canonical subagent completion metadata produces linked subagent activities. Pending and running V2 patch calls render as active edits. Assistant history preserves automatic retry metadata for recovery notices. History attachments use deferred references with Kotlin-generated thumbnails and on-demand original reads. Chat annotations retain bounded display context before deferral. [Session cleanup and usage export](session-cleanup.md) preserve statistics and optional parent transcripts before confirmed deletions.
+OpenJet supports V1 from 1.16.0 and V2 from 2.0.5. The webview and shared sources were synced from Varro's `main` branch at `d5843d5b9042`, version 0.34.1. Tested baselines are V1 1.19.5 and V2 2.2.5. The Kotlin adapter handles released-server contracts, including generated skill, shell and synthetic transcript records. Synthetic text appears as automatic-action notices; canonical subagent completion metadata produces linked subagent activities. Pending and running V2 patch calls render as active edits. Assistant history preserves automatic retry metadata for recovery notices. History attachments use deferred references with Kotlin-generated thumbnails and on-demand original reads. Chat annotations retain bounded display context before deferral. [Session cleanup and usage export](session-cleanup.md) preserve statistics and optional parent transcripts before confirmed deletions.
 
 V2 sessions support `/pause` and a Resume action in the transcript. Pausing parks queued messages and interrupts with `resume=false`. Pause markers persist in the shared Varro session annotations, and session summaries and usage reports exclude paused time. Commit-message generation uses the stateless endpoint when the server advertises it, falling back to a helper session when the endpoint or selected model is unavailable before generation starts.
 
@@ -2281,6 +2281,96 @@ delta. The pre-existing differences and native verification limits above remain.
 Unrelated backend behavior and the unchanged OpenCode release range were not
 reviewed again. Tests use isolated fixture HOME/XDG/database/workspace/service
 roots, never production sessions, credentials or service registrations.
+
+## MCP management and account-switching sync, 2026-11-05
+
+Compared Varro `70529460ef20a1f57ec1e4bda8e2fb5e13541ef7` through
+`d5843d5b904296e39c82d15aff96768afaca2fe1`, version 0.34.1. Both commits and
+the complete 26-file change inventory were reviewed, including all changed
+extension implementations, shared protocol, package configuration and affected
+browser/E2E flows. Vendor sources remain unmodified. SDK 1.19.5, client 2.2.5,
+browser dependencies, Node/npm pins and support floors are unchanged. There is
+no new released OpenCode range to review. The user's staged OpenJet 0.10.1
+version is preserved, and release notes are consolidated under 0.10.x.
+
+| Upstream change | Kotlin alignment and regression coverage |
+| --- | --- |
+| `src/extension/opencode-config-service.ts`, `rest-proxy.ts`, `src/shared/mcp-config.ts`; `POST /varro/mcp-config` | `src/main/kotlin/varro/host/McpConfigSnippet.kt`, `McpDefaults.kt`, `OpenCodeHostServices.kt`, `RestProxy.kt` and `ApiRoutes.kt` validate bounded JSONC, common wrappers, explicit bare-server names, command/args/env, HTTP(S) URLs, string maps and mutually exclusive boolean flags. Imports preserve literal secret references, comments, existing V1/V2 nesting and unrelated settings. Duplicate names anywhere in the selected scope reject the whole batch. Atomic writes reject dirty buffers and concurrent changes; concurrent imports retain both batches. Existing idle-server policy and V1 safe-global-restart behavior apply. |
+| Same upstream host files; `POST /varro/mcp-config/open` | `src/main/kotlin/varro/host/McpDefaults.kt` selects the highest-precedence existing config without parsing it, or creates a schema-only scaffold under the config-write lock. Open unsaved files are not overwritten. `src/main/kotlin/varro/host/EditorIntegration.kt` opens the computed path directly through native VFS/editor APIs, including global files outside project roots. Both new endpoints reject attached servers before file access. Tests cover invalid existing JSON, precedence, new files, unsaved buffers and narrow POST-only routes. |
+| `src/extension/opencode-config-service.ts`, `src/shared/protocol.ts`; `oauthServers` in MCP defaults | `src/main/kotlin/varro/host/McpDefaults.kt` lists only effective remote-server names whose OAuth is not explicitly disabled, including on-demand servers. V1 shallow merging and V2 replacement remain distinct. Tests check overrides, attached snapshots and exclusion of local/header-only servers and secret values. |
+| `McpPicker.tsx`, `McpSettingsPanel.tsx`, `client.ts`; `/mcp/:id/disconnect`, `DELETE /mcp/:id/auth`, `/auth`, `/auth/callback` | Copied unchanged. `src/main/kotlin/varro/server/OpenCodeV2Adapter.kt` already scopes these operations to the selected MCP's native integration and OAuth attempt. New deterministic regressions verify disconnect/delete/new-login ordering, workspace and attempt correlation, deletion failures and no provider/session fallback. The native OpenCode 2.2.5 MCP implementation was checked for integration identity and credential-change reconnect behavior. |
+| `ChatInput.tsx`, `chat-input/slash-commands.ts`, picker/settings styles and E2E harness | Copied unchanged. `/mcp` and `/mcps` select servers or open management for an empty catalog. Selection remains separate from sign-in/out/account controls. Browser completion polling, manual-code fallback, tenant-switch guidance, visible credential/connection errors and narrow layouts reuse existing Kotlin auth/status routes. VS Code editor-opening calls are replaced by the native editor helper, not ported literally. |
+
+The only package change outside the upstream release version is the extension's
+`oxlint-tsgolint` development dependency. It is not an OpenJet browser dependency,
+so no lockfile or toolchain update is required here. The full upstream patch is
+retained in `build/upstream-sync-d5843d5-review.diff`.
+
+All 111 OpenJet browser host tests, TypeScript checking, vendor integrity,
+953 selected upstream unit/component tests and 18 Chromium cases passed. The
+six compatibility-helper tests and vendor-integrity script regression passed
+too. Browser coverage includes JSON import into both scopes, empty catalogs,
+`/mcp` and `/mcps`, sign-out, account switching, completed browser callbacks and
+responsive management/sign-in controls. These are upstream browser fixtures,
+not native JCEF or live OAuth verification.
+
+The exact published OpenCode 2.2.5 binary passed the Kotlin adapter and both
+managed-service cases without skips through the compatibility helper. The
+expanded adapter fixture imports disabled MCPs into project and global files,
+checks effective native configuration, creates synthetic credentials for two
+tenants of one disabled loopback MCP and a separate MCP, then verifies that the
+adapted disconnect/sign-out removes both selected-server accounts without
+removing the other server's account. Credentials are created only in the
+fixture database and cleaned up there. The first full run read native MCP
+registrations before asynchronous initialization settled; the fixture now waits
+at most ten seconds for its two integrations rather than weakening assertions.
+Passing focused evidence is
+`build/upstream-sync-d5843d5-compatibility-retry.log`; the initial failure is
+retained in `build/upstream-sync-d5843d5-full-check.log`.
+
+The final pinned-release `--full-check` passed `check buildPlugin --rerun-tasks`
+with V2 2.2.5 and V1 1.19.5 enabled. All 809 enabled Kotlin tests passed,
+including 13 new regressions and all four released adapter/managed-service
+cases without skips. Only the existing opt-in usage benchmark was skipped.
+Both released adapters verify imported MCP definitions against effective server
+configuration; V1 also exercises global import through its safe restart.
+Evidence is `build/upstream-sync-d5843d5-full-check-final.log` and
+`build/opencode-compatibility/2.2.5/verification.json`.
+
+The requested six-bullet 0.10.x changelog was shortened after that full run.
+Kotlin and browser source hashes remained unchanged; only the release-note XML
+changed. `buildPlugin -PskipWebview=true` repackaged that metadata, and archive
+inspection confirmed version 0.10.1, the six bullets and the new MCP host class.
+The package is `build/distributions/varro-openjet-0.10.1.zip`, SHA-256
+`df5f51afc46894b388e8f742faba26a058979b86ed8e73f648f5509bf4d08a02`.
+The metadata-only build log is
+`build/upstream-sync-d5843d5-changelog-package.log`. Varro `main` still resolved
+to `d5843d5b9042` after packaging.
+
+Plugin Verifier passed against that final ZIP on all five configured IDEs,
+2025.2.6.3, 2025.3.6.1, 2026.1.5, 2026.2.3 and 263.6800.24, with no
+compatibility errors. It reported deprecated/experimental API warnings and
+optional-dependency notices. The new configuration opener uses
+`FileEditorManager.openFile`, deprecated on 263 but available across the
+supported matrix. This verifies API linkage, not actual editor interaction.
+The log is `build/upstream-sync-d5843d5-verifier.log`.
+
+Remaining differences and verification limits:
+
+| Status | Upstream files/endpoints and OpenJet code | User-visible impact |
+| --- | --- | --- |
+| Existing busy-server policy applies to imports | Varro `src/extension/opencode-config-service.ts`, `src/extension/provider-file-refresh-controller.ts`; OpenJet `src/main/kotlin/varro/host/OpenCodeHostServices.kt`, `src/main/kotlin/varro/host/McpDefaults.kt` and `src/main/kotlin/varro/server/OpenCodeServer.kt`, `/varro/mcp-config` and `/varro/mcp-defaults`. | Busy/unverifiable imports reject before writing instead of saving ahead of a deferred refresh. V1 global changes require a safe managed restart. This preserves the established OpenJet policy rather than interrupting another project's work. |
+| Native UI and live OAuth unverified | Varro `src/webview/components/McpPicker.tsx`, `McpSettingsPanel.tsx` and `ChatInput.tsx`; OpenJet `src/main/kotlin/varro/host/EditorIntegration.kt`, `src/main/kotlin/varro/host/WebviewHost.kt`, `src/main/kotlin/varro/server/OpenCodeV2Adapter.kt` and `webview/vendor/webview/`. | Actual JCEF focus, global/project editor opening, browser/account/tenant consent and real MCP connectivity still need sandbox/live-provider interaction. The released test checks credential isolation and deletion, not an external identity provider's OAuth quality. No native Windows/Linux run or production account was used. |
+| Existing quota differences | Varro `src/extension/provider-limit-service.ts`, coordinator and `src/extension/provider-limits/adapters/`; OpenJet `src/main/kotlin/varro/host/ProviderQuotaBackend.kt` and `src/main/kotlin/varro/host/quota/QuotaAdapters.kt`. | Polling stays project-local; Claude validation, custom probe URLs and partial xAI fallback retain the differences in [architecture](architecture.md#remaining-quota-parity-differences). No quota code changed here. |
+| Existing cleanup, permission and annotation differences | Varro `src/extension/usage-report-service.ts`, `session-cleanup-service.ts`, `auto-approve-judge.ts`, `rest-proxy.ts` and `varro-state-paths.ts`; OpenJet `src/main/kotlin/varro/host/LocalUsageDatabase.kt`, `ArtifactCleanup.kt`, `PermissionJudge.kt`, `NativeDecisions.kt`, `RestProxy.kt`, `ProjectNotifications.kt` and `src/main/kotlin/varro/server/OpenCodeV2SessionState.kt`. | Large scans stay bounded, old attachment-cache copies remain, equivalent permission reviews may repeat, cross-root pending snapshots can differ and native-only roots can separate annotations, pauses and service choices. No existing user state was migrated. |
+| Existing optional-client/platform, notice and advisory limitations | OpenCode shell/job and optional-management APIs, Varro image codecs, Windows inspector and notices; OpenJet `src/main/kotlin/varro/server/OpenCodeV2Adapter.kt`, `ServerOwnership.kt`, `src/main/kotlin/varro/host/ImageThumbnails.kt`, `RemoteImages.kt`, `webview/vite.config.mts`, `webview/package.json` and vendored UI. | Shell deletion can notify/resume the assistant; optional management controls and retry countdown remain absent. AVIF may be unsupported, Windows inspection lacks persistent-helper warm-up, frontend notices remain incomplete and the unchanged seroval advisories from the preceding review remain. None changed in this delta. |
+
+No new required Kotlin host or consumed-contract gap remains in the reviewed
+delta. The established host-policy differences and native verification limits
+above remain. The unchanged OpenCode release range and unrelated backend
+behavior were not reviewed again. Tests use isolated fixture HOME, XDG,
+database, workspace and service-state roots, never production sessions,
+credentials or service registrations.
 
 ## Verification
 

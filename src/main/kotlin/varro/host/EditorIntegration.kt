@@ -49,6 +49,18 @@ class EditorIntegration(private val project: Project) {
 
     // --- Opening --------------------------------------------------------------
 
+    /** Host-computed config paths can be outside project roots and are not file-citation searches. */
+    fun openConfiguration(path: Path): Boolean {
+        var opened = false
+        ApplicationManager.getApplication().invokeAndWait {
+            val file = LocalFileSystem.getInstance().refreshAndFindFileByNioFile(path)
+                ?: error("OpenCode configuration is not available at $path")
+            require(!file.isDirectory) { "OpenCode configuration is a directory: $path" }
+            opened = FileEditorManager.getInstance(project).openFile(file, true).isNotEmpty()
+        }
+        return opened
+    }
+
     /**
      * Opens a path in the editor.
      *

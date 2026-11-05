@@ -44,6 +44,8 @@ object ApiRoutes {
         const val CITATION_PATHS = "$NAMESPACE/citation-paths"
         const val CITATION_SYMBOLS = "$NAMESPACE/citation-symbols"
         const val MCP_DEFAULTS = "$NAMESPACE/mcp-defaults"
+        const val MCP_CONFIG = "$NAMESPACE/mcp-config"
+        const val MCP_CONFIG_OPEN = "$NAMESPACE/mcp-config/open"
         const val PERMISSION_JUDGE = "$NAMESPACE/permission/judge"
         const val PERMISSION_JUDGE_MODEL = "$NAMESPACE/permission/judge/model"
         const val PERMISSION_SESSION_ALLOW = "$NAMESPACE/permission/session-allow"
@@ -217,6 +219,8 @@ object ApiRoutes {
         route("/command", methodsNoQuery("GET")),
         route("/mcp", methodsNoQuery("GET")),
         route(Endpoints.MCP_DEFAULTS, methodsNoQuery("GET", "POST")),
+        route(Endpoints.MCP_CONFIG, methodsNoQuery("POST")),
+        route(Endpoints.MCP_CONFIG_OPEN, methodsNoQuery("POST")),
         route("/lsp", methodsNoQuery("GET")),
         route("/vcs/status", methodsNoQuery("GET")),
         route("/agent", methodsNoQuery("GET")),

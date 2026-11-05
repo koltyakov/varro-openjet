@@ -474,6 +474,8 @@ export const VARRO_API_ENDPOINTS = {
   openCodeConfigDisableProvider: `${VARRO_API_NAMESPACE}/opencode-config/disable-provider`,
   openCodeConfigPermissions: `${VARRO_API_NAMESPACE}/opencode-config/permissions`,
   mcpDefaults: `${VARRO_API_NAMESPACE}/mcp-defaults`,
+  mcpConfig: `${VARRO_API_NAMESPACE}/mcp-config`,
+  mcpConfigOpen: `${VARRO_API_NAMESPACE}/mcp-config/open`,
   session: `${VARRO_API_NAMESPACE}/session`,
   sessionTrash: `${VARRO_API_NAMESPACE}/session-trash`,
   sessionHistoryScope: `${VARRO_API_NAMESPACE}/session-history-scope`,
@@ -499,6 +501,7 @@ export interface McpDefaults {
   project: Record<string, boolean>;
   effective: Record<string, boolean>;
   editable: boolean;
+  oauthServers?: string[];
 }
 
 export interface ModelPricing {

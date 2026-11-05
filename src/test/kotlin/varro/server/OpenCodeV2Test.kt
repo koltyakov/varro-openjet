@@ -11,6 +11,51 @@ import varro.protocol.*
 class OpenCodeV2Test {
     @JvmField @Rule val temporary = TemporaryFolder()
 
+    @Test fun `MCP account switching disconnects and deletes only its integration credentials before a fresh OAuth attempt`() {
+        val calls = mutableListOf<Pair<String, String>>()
+        var connected = true
+        val native = adapter { method, path, _ ->
+            assertTrue(path.endsWith("?location%5Bdirectory%5D=%2Frepo"))
+            val route = path.substringBefore('?')
+            calls += method to route
+            when (route) {
+                "/api/mcp" -> Json.obj("data" to listOf(Json.obj("name" to "docs tenant", "integrationID" to "mcp_fixture",
+                    "status" to Json.obj("status" to if (connected) "connected" else "disabled"))))
+                "/api/experimental/mcp/docs%20tenant/disconnect" -> { connected = false; Json.obj() }
+                "/api/integration/mcp_fixture" -> Json.obj("data" to Json.obj("connections" to listOf(
+                    Json.obj("type" to "credential", "id" to "cred_one"), Json.obj("type" to "credential", "id" to "cred_two")),
+                    "methods" to listOf(Json.obj("id" to "login", "type" to "oauth"))))
+                "/api/credential/cred_one", "/api/credential/cred_two" -> { assertEquals("DELETE", method); Json.obj() }
+                "/api/integration/mcp_fixture/connect/oauth" -> Json.obj("data" to Json.obj("attemptID" to "attempt_switch", "url" to "https://login.example/authorize", "mode" to "code"))
+                "/api/integration/mcp_fixture/connect/oauth/attempt_switch/complete" -> { assertEquals("POST", method); connected = true; Json.obj() }
+                "/api/integration/mcp_fixture/connect/oauth/attempt_switch" -> Json.obj("data" to Json.obj("status" to "complete"))
+                else -> error("Unexpected MCP operation $method $route")
+            }
+        }
+        val options = RequestOptions(directory = "/repo")
+        native.request("POST", "/mcp/docs%20tenant/disconnect", null, options)
+        assertEquals(true, native.request("DELETE", "/mcp/docs%20tenant/auth", null, options).data.asObjectOrNull().bool("success"))
+        val auth = native.request("POST", "/mcp/docs%20tenant/auth", null, options).data.asObjectOrNull()!!
+        assertEquals("https://login.example/authorize", auth.str("authorizationUrl"))
+        assertEquals("attempt_switch", auth.str("oauthState"))
+        assertEquals("connected", native.request("POST", "/mcp/docs%20tenant/auth/callback", Json.obj("code" to "fixture-code"), options).data.asObjectOrNull().str("status"))
+        assertEquals(listOf("cred_one", "cred_two"), calls.filter { it.first == "DELETE" }.map { it.second.substringAfterLast('/') })
+        assertTrue(calls.indexOf("DELETE" to "/api/credential/cred_two") < calls.indexOf("POST" to "/api/integration/mcp_fixture/connect/oauth"))
+    }
+
+    @Test fun `MCP sign out does not acknowledge rejected credential deletion or start a replacement login`() {
+        val calls = mutableListOf<String>()
+        val native = adapter { _, path, _ -> calls += path; when (path) {
+            "/api/mcp" -> Json.obj("data" to listOf(Json.obj("name" to "docs", "integrationID" to "mcp_fixture")))
+            "/api/integration/mcp_fixture" -> Json.obj("data" to Json.obj("connections" to listOf(Json.obj("type" to "credential", "id" to "cred_failed"))))
+            "/api/credential/cred_failed" -> error("Credential removal rejected")
+            else -> error("Unexpected route $path")
+        } }
+        assertThrows(IllegalStateException::class.java) { native.request("DELETE", "/mcp/docs/auth", null, RequestOptions()) }
+        assertEquals(3, calls.size)
+        assertTrue(calls.none { "/provider" in it || "/connect/oauth" in it || "/session" in it })
+    }
+
     @Test fun `synthetic transcript text remains automatic rather than an editable user prompt`() {
         val record = Json.obj("id" to "automatic", "type" to "synthetic", "text" to "Continue with the next task.",
             "time" to Json.obj("created" to 1000))

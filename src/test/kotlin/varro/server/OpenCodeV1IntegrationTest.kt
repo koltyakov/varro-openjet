@@ -71,6 +71,11 @@ class OpenCodeV1IntegrationTest {
             assertEquals(true, transport.request("GET", "/config").data.asObjectOrNull().obj("mcp").obj("fixture-docs").bool("enabled"))
             defaults.update(Json.obj("name" to "fixture-docs", "scope" to "project", "enabled" to null))
             assertEquals(false, transport.request("GET", "/config").data.asObjectOrNull().obj("mcp").obj("fixture-docs").bool("enabled"))
+            defaults.add(Json.obj("scope" to "project", "json" to """{"mcpServers":{"fixture-import":{"url":"http://127.0.0.1:1/mcp","oauth":false,"disabled":true}}}"""))
+            val imported = transport.request("GET", "/config").data.asObjectOrNull().obj("mcp").obj("fixture-import")!!
+            assertEquals(false, imported.bool("enabled")); assertFalse(imported.has("disabled")); assertEquals(false, imported.bool("oauth"))
+            defaults.add(Json.obj("scope" to "global", "json" to """{"fixture-global":{"url":"http://127.0.0.1:2/mcp","oauth":false,"disabled":true}}"""))
+            assertEquals(false, transport.request("GET", "/config").data.asObjectOrNull().obj("mcp").obj("fixture-global").bool("enabled"))
             defaults.update(Json.obj("name" to "fixture-docs", "scope" to "global", "enabled" to true))
             assertEquals(true, transport.request("GET", "/config").data.asObjectOrNull().obj("mcp").obj("fixture-docs").bool("enabled"))
             defaults.update(Json.obj("name" to "fixture-docs", "scope" to "global", "enabled" to false))

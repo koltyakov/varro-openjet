@@ -172,13 +172,43 @@ class OpenCodeHostServices(
     override fun updateModelRouting(body: JsonElement?): JsonObject = modelRouting.update(body)
 
     override fun mcpDefaults(method: String, body: JsonElement?): JsonObject {
+        val defaults = mcpDefaultsService()
+        if (server.isAttachOnly()) {
+            if (method != "GET") requireLocalConfig()
+            return defaults.attached(server.transport.request("GET", "/config").data.asObjectOrNull()
+                ?: error("OpenCode returned an invalid MCP configuration"))
+        }
+        return if (method == "GET") defaults.read() else defaults.update(body)
+    }
+
+    override fun mcpConfig(body: JsonElement?, open: Boolean): JsonElement {
+        requireLocalConfig()
+        val defaults = mcpDefaultsService()
+        if (!open) return defaults.add(body)
+        val path = defaults.open(body.asObjectOrNull().str("scope").orEmpty()) { target ->
+            var opened = false
+            ApplicationManager.getApplication().invokeAndWait {
+                val documents = com.intellij.openapi.fileEditor.FileDocumentManager.getInstance()
+                opened = documents.unsavedDocuments.any { document -> documents.getFile(document)?.path?.let {
+                    varro.server.WorkspacePaths.isSame(it, target.toString())
+                } == true } || com.intellij.openapi.fileEditor.FileEditorManager.getInstance(project).openFiles.any {
+                    varro.server.WorkspacePaths.isSame(it.path, target.toString())
+                }
+            }
+            opened
+        }
+        require(editor.openConfiguration(path)) { "Could not open the OpenCode configuration in the editor." }
+        return Json.toElement(true)
+    }
+
+    private fun mcpDefaultsService(): McpDefaults {
         val environment = server.cli.serverEnvironment()
         val global = Path.of(environment["XDG_CONFIG_HOME"] ?: Path.of(System.getProperty("user.home"), ".config").toString(), "opencode")
-        val defaults = McpDefaults(Path.of(server.workspaceDirectory() ?: project.basePath ?: error("Project has no workspace directory")),
+        return McpDefaults(Path.of(server.workspaceDirectory() ?: project.basePath ?: error("Project has no workspace directory")),
             global, server.transport.apiVersion == 2, beforeWrite = { path ->
                 // The UI only knows this view's sessions. Include other projects and pending input.
                 require(server.readRestartBlockers().get("totalSessionCount").asInt == 0) {
-                    "OpenCode has active work or pending decisions. Wait for it to finish before changing MCP defaults."
+                    "OpenCode has active work or pending decisions. Wait for it to finish before changing MCP configuration."
                 }
                 val documents = com.intellij.openapi.fileEditor.FileDocumentManager.getInstance()
                 require(documents.unsavedDocuments.none { document -> documents.getFile(document)?.path?.let {
@@ -193,12 +223,6 @@ class OpenCodeHostServices(
                 } else if (globalScope) server.transport.request("POST", "/global/dispose", options = RequestOptions(unscoped = true))
                 else server.transport.request("POST", "/instance/dispose", options = RequestOptions(directory = server.workspaceDirectory()))
             })
-        if (server.isAttachOnly()) {
-            if (method != "GET") requireLocalConfig()
-            return defaults.attached(server.transport.request("GET", "/config").data.asObjectOrNull()
-                ?: error("OpenCode returned an invalid MCP configuration"))
-        }
-        return if (method == "GET") defaults.read() else defaults.update(body)
     }
 
     private val projectProviderConfig by lazy { ProjectProviderConfig(
