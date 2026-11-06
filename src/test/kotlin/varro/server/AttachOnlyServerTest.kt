@@ -9,6 +9,7 @@ import java.net.InetSocketAddress
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.CompletableFuture
+import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicReference
 import java.util.concurrent.atomic.AtomicBoolean
 import java.nio.file.Files
@@ -35,6 +36,24 @@ class AttachOnlyServerTest {
             assertEquals(version.substringBefore('.').toInt(), server.currentStatus().toJson().get("apiVersion").asInt)
             assertEquals(OpenCodeServer.RestartOutcome.NOT_MANAGED, server.restart(force = true))
             assertTrue(server.currentStatus() is ServerStatus.Running)
+        }
+    }
+
+    @Test
+    fun `status and ownership reads never initialize historical session directories`() {
+        for (version in listOf("1.19.5", "2.2.5")) {
+            val requests = CopyOnWriteArrayList<String>()
+            withServer(version, onRequest = requests::add) { server ->
+                requests.clear()
+                assertEquals(version, server.readVersionInfo()!!.serverVersion)
+                assertEquals(version, server.readVersionInfo(refresh = true)!!.serverVersion)
+                assertTrue(server.isAttachOnly())
+                assertFalse(server.isManaged())
+                val healthPaths = if (version.startsWith("1.")) listOf("/api/info", "/api/status", "/global/health") else listOf("/api/info")
+                // Startup connects SSE asynchronously; it is independent of metadata reads.
+                val eventPath = if (version.startsWith("1.")) "/global/event" else "/api/event"
+                assertEquals(healthPaths + healthPaths, requests.filterNot { it == eventPath })
+            }
         }
     }
 
@@ -175,10 +194,12 @@ class AttachOnlyServerTest {
 
     private fun withServer(version: String, authentication: OpenCodeServerAuthentication? = null,
         healthPayload: () -> String = { """{"healthy":true,"version":"$version","pid":12345}""" },
+        onRequest: (String) -> Unit = {},
         check: (OpenCodeServer) -> Unit,
     ) {
         val endpoint = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
         endpoint.createContext("/") { exchange ->
+            onRequest(exchange.requestURI.toString())
             if (authentication != null && exchange.requestHeaders.getFirst("Authorization") != OpenCodeConnection.authorization("password", "user")) {
                 exchange.sendResponseHeaders(401, -1)
                 exchange.close()

@@ -962,6 +962,7 @@
   display: flex;
   align-items: center;
   gap: 6px;
+  min-height: 32px;
   padding: var(--space-3) var(--space-5);
   background: color-mix(in srgb, var(--color-vscode-fg) 3%, transparent);
 }

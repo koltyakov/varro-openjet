@@ -29,10 +29,10 @@
   "devDependencies": {
     "@opencode/client": "^2.2.5",
     "@types/node": "26.6.6",
-    "@tailwindcss/vite": "4.3.4",
+    "@tailwindcss/vite": "4.3.5",
     "iconoir": "7.12.2",
     "material-icon-theme": "5.40.0",
-    "tailwindcss": "4.3.4",
+    "tailwindcss": "4.3.5",
     "typescript": "7.0.2",
     "vite": "8.3.6",
     "vite-plugin-solid": "2.11.15",

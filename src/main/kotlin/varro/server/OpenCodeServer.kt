@@ -118,7 +118,7 @@ class OpenCodeServer(
 
     fun version(): String? = serverVersion.get()
 
-    /** Called off the EDT. Refresh read-only health and process diagnostics at most once a minute. */
+    /** Called off the EDT. Refresh health/process metadata without querying historical session directories. */
     @Synchronized fun readVersionInfo(refresh: Boolean = false): OpenCodeVersionInfo? {
         if (status.get() !is ServerStatus.Running || phase.get() == Phase.DISPOSING) {
             versionInfo = null
