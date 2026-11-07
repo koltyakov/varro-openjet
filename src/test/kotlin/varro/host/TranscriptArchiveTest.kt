@@ -15,10 +15,10 @@ class TranscriptArchiveTest {
         HistoryDatabase.query(database, "SELECT data FROM transcript_turn ORDER BY ordinal") { Json.parse(it.getString(1)).asJsonObject }
     }
 
-    @Test fun `separately stored assistant parts replace stale inline content and preserve idle outcome`() {
+    @Test fun `separately stored assistant parts preserve idle outcome without inline content`() {
         val f = fixture(); val root = f.session("parent"); val child = f.session("child", parent = root.id)
         f.message(root, "prompt", "user", Json.obj("time" to Json.obj("created" to 100), "text" to "User prompt"), 1)
-        f.message(root, "assistant", "assistant", f.assistant(text = "STALE INLINE RESPONSE"), 2)
+        f.message(root, "assistant", "assistant", f.assistant().apply { add("content", Json.array(emptyList<Any>())) }, 2)
         f.execute("INSERT INTO session_part VALUES('p1','assistant','parent',0,'text',?)", Json.obj("type" to "text", "text" to "Authoritative final response").toString())
         f.execute("INSERT INTO session_part VALUES('p2','assistant','parent',1,'reasoning',?)", Json.obj("type" to "reasoning", "text" to "PRIVATE REASONING").toString())
         f.message(root, "idle", "idle", Json.obj("outcome" to "succeeded"), 3)
@@ -27,8 +27,34 @@ class TranscriptArchiveTest {
         assertEquals("succeeded", turn.str("outcome")); assertEquals("idle", turn.str("boundary"))
         assertEquals("Authoritative final response", turn.obj("response").str("text"))
         assertEquals("User prompt", turn.arr("prompts")!![0].asJsonObject.str("text"))
-        assertFalse(turn.toString().contains("PRIVATE")); assertFalse(turn.toString().contains("STALE"))
+        assertFalse(turn.toString().contains("PRIVATE"))
         HistoryDatabase.open(f.archive.transcriptPath).use { assertEquals(1L, HistoryDatabase.scalar(it, "SELECT count(*) FROM transcript_session")) }
+    }
+
+    @Test fun `mixed split and inline parts use native hydration for old and new server contracts`() {
+        for (appendsInline in listOf(false, true)) {
+            val f = HistoryFixture(temporary.newFolder().toPath().resolve("history.db"))
+            val session = f.session("parent")
+            f.message(session, "prompt", "user", Json.obj("time" to Json.obj("created" to 100), "text" to "Question"), 1)
+            f.message(session, "answer", "assistant", f.assistant(text = "Inline suffix"), 2)
+            f.execute("INSERT INTO session_part VALUES('part','answer','parent',0,'text',?)", Json.obj("type" to "text", "text" to "Split prefix").toString())
+            val expected = if (appendsInline) "Split prefix\n\nInline suffix" else "Split prefix"
+            var calls = 0
+            TranscriptArchive(f.archive).archive(listOf(session), 2, { _, path, options ->
+                calls++
+                assertEquals("/api/session/parent/message?limit=200&order=desc", path)
+                assertTrue(options.nativePaths); assertTrue(options.unscoped)
+                OpenCodeResponse(Json.obj("data" to listOf(
+                    f.assistant(text = "Split prefix").apply {
+                        addProperty("id", "answer"); addProperty("type", "assistant")
+                        if (appendsInline) arr("content")!!.add(Json.obj("type" to "text", "text" to "Inline suffix"))
+                    },
+                    Json.obj("id" to "prompt", "type" to "user", "time" to Json.obj("created" to 100), "text" to "Question"),
+                ), "cursor" to Json.obj("next" to null)))
+            }, {})
+            assertEquals(1, calls)
+            assertEquals(expected, turns(f).single().obj("response").str("text"))
+        }
     }
 
     @Test fun `pasted annotations load only bounded text blobs while images keep omitted metadata`() {

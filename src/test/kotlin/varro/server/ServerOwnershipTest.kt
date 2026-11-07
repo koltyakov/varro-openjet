@@ -18,12 +18,13 @@ class ServerOwnershipTest {
         var onListeners: (() -> Unit)? = null
         var onExecutable: (() -> Unit)? = null
         var onBirth: (() -> Unit)? = null
+        var executablePath = "/usr/bin/opencode"
         override fun listeners(port: Int): Set<Long> {
             check(!fail) { "inspection failed" }
             onListeners?.invoke()
             return listening
         }
-        override fun executable(pid: Long): String { onExecutable?.invoke(); return "/usr/bin/opencode" }
+        override fun executable(pid: Long): String { onExecutable?.invoke(); return executablePath }
         override fun birth(pid: Long): String {
             if (pid == 123L) onBirth?.invoke()
             return if (pid == 123L) serverBirth else "darwin:host-start"
@@ -166,6 +167,31 @@ class ServerOwnershipTest {
         addProperty("version", 1); addProperty("host", "vscode-host"); addProperty("hostPid", 999)
         addProperty("hostBirthIdentity", "darwin:dead-host"); addProperty("state", "active")
         addProperty("password", "secret"); addProperty("username", "varro-user")
+    }
+
+    @Test fun `hard linked executable aliases use fresh file identity without relaxing listener or birth checks`() {
+        for (change in listOf("different-file", "missing-file", "birth", "listener")) fixture { shared, legacy, identity ->
+            val executable = Files.writeString(shared.resolve("opencode.exe"), "fixture executable")
+            val alias = Files.createLink(shared.resolve("opencode"), executable)
+            val path = shared.resolve("varro-opencode-server-4096.json")
+            val raw = Json.stringify(lease().apply { addProperty("executable", executable.toString()) })
+            privateFile(path, raw)
+            val manager = ServerOwnership(4096, shared, legacy, identity)
+            for (reported in listOf(executable, alias, executable, alias)) {
+                identity.executablePath = reported.toString()
+                assertNotNull(manager.connection())
+                assertFalse(manager.registrationChanged())
+            }
+            when (change) {
+                "different-file" -> { Files.delete(alias); Files.writeString(alias, "fixture executable") }
+                "missing-file" -> Files.delete(alias)
+                "birth" -> identity.serverBirth = "darwin:replacement"
+                "listener" -> identity.listening = setOf(124L)
+            }
+            assertTrue(manager.registrationChanged())
+            assertEquals(raw, Files.readString(path))
+            assertFalse(manager.stop(0))
+        }
     }
 
     private class StoppingProcess : ProcessHandle {

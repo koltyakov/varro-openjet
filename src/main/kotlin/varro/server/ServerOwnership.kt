@@ -124,7 +124,7 @@ internal class ServerOwnership(
             (value.sameUser != true || value.identity != null) &&
             (value.identity == null || value.identity.startsWith("$pid:$birth:"))
         if (!accountMatches(account)) return null
-        val compatible = candidates.filter { (_, value) -> inspect.normalizeExecutable(value.str("executable")!!) == inspect.normalizeExecutable(executable) }
+        val compatible = candidates.filter { (_, value) -> inspect.matchesExecutable(value.str("executable")!!, executable) }
         if (compatible.isEmpty() || compatible.any { (_, value) -> !runCatching { retired(value) }.getOrDefault(false) }) return null
         val (selectedPath, previous) = compatible.sortedWith(compareByDescending<Pair<Path, JsonObject>> { it.second.get("createdAt").asDouble }
             .thenBy { it.first.toString() }).first()
@@ -367,7 +367,7 @@ internal class ServerOwnership(
             "Expected PID $pid on port $port; observed listening PIDs: ${listeners.sorted().joinToString(", ").ifEmpty { "none" }}.",
             listeners.isEmpty() && inspect.alive(pid))
         val executable = inspect.executable(pid)
-        if (inspect.normalizeExecutable(lease.str("executable")!!) != inspect.normalizeExecutable(executable))
+        if (!inspect.matchesExecutable(lease.str("executable")!!, executable))
             return Inspection(false, "Executable identity changed for PID $pid.")
         if (!inspect.matchesBirth(lease.str("birthIdentity")!!, inspect.birth(pid), lease.get("createdAt").asLong))
             return Inspection(false, "Birth identity changed for PID $pid.")
@@ -603,6 +603,20 @@ internal open class ProcessIdentity {
         windows -> value.trim().lowercase()
         mac -> value.trim()
         else -> value.trim().removeSuffix(" (deleted)")
+    }
+    fun matchesExecutable(recorded: String, observed: String): Boolean {
+        val expected = normalizeExecutable(recorded)
+        val actual = normalizeExecutable(observed)
+        if (expected == actual) return true
+        // Read fresh identities: macOS may alternate between hard-link names.
+        return runCatching {
+            val first = Files.readAttributes(Path.of(expected), java.nio.file.attribute.BasicFileAttributes::class.java)
+            val second = Files.readAttributes(Path.of(actual), java.nio.file.attribute.BasicFileAttributes::class.java)
+            first.isRegularFile && second.isRegularFile && first.fileKey() != null && first.fileKey() == second.fileKey() &&
+                (!Path.of(expected).fileSystem.supportedFileAttributeViews().contains("unix") ||
+                    (Files.getAttribute(Path.of(expected), "unix:ino") as Number).toLong() != 0L) &&
+                Files.isSameFile(Path.of(expected), Path.of(actual))
+        }.getOrDefault(false)
     }
     fun matchesBirth(expected: String, actual: String, createdAt: Long): Boolean {
         if (expected == actual) return true

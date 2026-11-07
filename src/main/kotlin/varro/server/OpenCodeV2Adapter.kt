@@ -24,15 +24,18 @@ internal class OpenCodeV2Adapter(
     private val failures = ConcurrentHashMap<String, JsonObject>()
     private val parents = ConcurrentHashMap<String, String>()
     private val submissions = Array(64) { Any() }
-    private data class OAuthAttempt(val integration: String, val id: String, val provider: String, val directory: String?)
+    private data class OAuthAttempt(val integration: String, val id: String, val provider: String, val directory: String?, val paste: Boolean)
     private val oauth = ConcurrentHashMap<String, OAuthAttempt>()
     private val backgroundWork = OpenCodeV2BackgroundWork()
+    private val backgroundJobs = OpenCodeV2BackgroundJobs()
+    private var backgroundGeneration = 0L
     private val backgroundServices = OpenCodeV2BackgroundServices(annotations, backgroundWork, classifyBackgroundProcess, backgroundChanged)
     @Volatile private var apiCapabilities: OpenCodeApiCapabilities? = null
     @Volatile private var nativeModelExclusions = false
     @Volatile private var nativeChatCatalog = false
 
     fun setServerVersion(version: String?) {
+        backgroundJobs.setServerVersion(version)
         val release = version?.let { Regex("\\d+\\.\\d+\\.\\d+(?:-[0-9A-Za-z.-]+)?").find(it)?.value }
         val comparison = release?.let { OpenCodeCli.compareVersions(it, "2.1.2") }
         nativeModelExclusions = comparison != null && (comparison > 0 || (comparison == 0 && '-' !in release))
@@ -40,11 +43,14 @@ internal class OpenCodeV2Adapter(
         nativeChatCatalog = catalogComparison != null && (catalogComparison > 0 || (catalogComparison == 0 && '-' !in release))
     }
 
-    fun reset() { nativeChatCatalog = false; nativeModelExclusions = false; apiCapabilities = null; childTasks.reset(); backgroundServices.reset(); permissions.clear(); forms.clear(); contexts.clear(); inputTypes.clear(); failures.clear(); parents.clear(); oauth.clear(); backgroundWork.reset() }
+    fun reset() {
+        synchronized(backgroundWork) { backgroundGeneration++; backgroundJobs.reset(); backgroundWork.reset() }
+        nativeChatCatalog = false; nativeModelExclusions = false; apiCapabilities = null; childTasks.reset(); backgroundServices.reset(); permissions.clear(); forms.clear(); contexts.clear(); inputTypes.clear(); failures.clear(); parents.clear(); oauth.clear()
+    }
 
     fun events(event: JsonObject): List<JsonObject> {
         val type = event.str("type").orEmpty()
-        if (type == "server.connected") apiCapabilities = null
+        if (type == "server.connected") { apiCapabilities = null; backgroundJobs.reconnect() }
         val data = event.obj("data") ?: return emptyList()
         childTasks.observe(type, data)
         if (type in setOf("shell.exited", "shell.deleted")) data.str("id")?.let(backgroundServices::cancel)
@@ -148,12 +154,20 @@ internal class OpenCodeV2Adapter(
                 return result(model?.let { Json.obj("providerID" to it.get("providerID"), "modelID" to it.get("id"), "variant" to it.get("variant")) })
             }
             "/session/status" -> {
-                val version = backgroundWork.snapshotVersion()
+                val (version, generation) = synchronized(backgroundWork) { backgroundWork.snapshotVersion() to backgroundGeneration }
                 val active = data("GET", "/api/session/active").asObjectOrNull() ?: error("Invalid OpenCode v2 active sessions")
                 val shells = objects(data("GET", scoped("/api/shell")))
-                val choices = shells.mapNotNull { it.obj("metadata").str("sessionID") }.distinct().associateWith(backgroundServices::read)
-                val serviceIDs = shells.filter { choices[it.obj("metadata").str("sessionID")].bool(it.str("id").orEmpty()) == true }.mapNotNull { it.str("id") }.toSet()
-                val waiting = backgroundWork.reconcile(shells, active.keySet(), directory, version, serviceIDs)
+                val jobs = backgroundJobs.read({ data("GET", it) }, directory)
+                val nativeShells = jobs?.values.orEmpty().flatten().filter { it.str("kind") == "shell" }
+                val choices = (shells.mapNotNull { it.obj("metadata").str("sessionID") } + nativeShells.mapNotNull { it.str("sessionID") })
+                    .distinct().associateWith(backgroundServices::read)
+                val serviceIDs = (shells.filter { choices[it.obj("metadata").str("sessionID")].bool(it.str("id").orEmpty()) == true }.mapNotNull { it.str("id") } +
+                    nativeShells.filter { choices[it.str("sessionID")].bool(it.str("shellID").orEmpty()) == true }.mapNotNull { it.str("shellID") }).toSet()
+                val waiting = synchronized(backgroundWork) {
+                    options.checkCancelled()
+                    check(generation == backgroundGeneration) { "OpenCode background status was reset" }
+                    backgroundWork.reconcile(shells, active.keySet(), directory, version, serviceIDs, jobs)
+                }
                 shells.forEach { backgroundServices.review(it, directory, choices[it.obj("metadata").str("sessionID")] ?: Json.obj()) }
                 fun status(id: String, type: String) = Json.obj("type" to type).apply {
                     val count = backgroundWork.serviceCount(id)
@@ -433,7 +447,9 @@ internal class OpenCodeV2Adapter(
             if (method == "DELETE") { authenticate(key, "", method, input, directory, options, integration); return result(Json.obj("success" to true)) }
             if (action == "callback") { authenticate(key, "callback", "POST", input, directory, options, integration); return result(request("GET", "/mcp", null, options).data.asObjectOrNull()?.get(name)) }
             val authorization = authenticate(key, "authorize", "POST", input, directory, options, integration).asJsonObject
-            if (action != "authenticate") return result(Json.obj("authorizationUrl" to authorization.get("url"), "oauthState" to authorization.get("attemptID")))
+            if (action != "authenticate") return result(Json.obj("authorizationUrl" to authorization.get("url"), "oauthState" to authorization.get("attemptID")).apply {
+                if (authorization.bool("paste") == true) addProperty("paste", true)
+            })
             com.intellij.ide.BrowserUtil.browse(authorization.str("url") ?: error("Missing MCP authentication URL"))
             authenticate(key, "callback", "POST", Json.obj("attemptID" to authorization.get("attemptID")), directory, options, integration)
             return result(true)
@@ -652,14 +668,22 @@ internal class OpenCodeV2Adapter(
             require(selected.str("type") == "oauth") { "Unsupported OpenCode authentication method" }
             val attempt = data("POST", "$base/connect/oauth", Json.obj("methodID" to selected?.get("id"), "answer" to authAnswers(selected.arr("form"), input.get("inputs")))).asObjectOrNull()
             val id = attempt.str("attemptID") ?: error("Invalid OpenCode OAuth attempt")
-            oauth[id] = OAuthAttempt(integration, id, provider, directory)
-            return Json.obj("attemptID" to id, "url" to attempt?.get("url"), "method" to if (attempt.str("mode") == "code") "code" else "auto", "instructions" to attempt.str("instructions").orEmpty())
+            oauth[id] = OAuthAttempt(integration, id, provider, directory, attempt.str("mode") == "auto" && attempt.bool("paste") == true)
+            return Json.obj("attemptID" to id, "url" to attempt?.get("url"), "method" to if (attempt.str("mode") == "code") "code" else "auto", "instructions" to attempt.str("instructions").orEmpty()).apply {
+                if (attempt.bool("paste") == true) addProperty("paste", true)
+            }
         }
         if (action == "callback") {
             val candidates = oauth.values.filter { it.provider == provider && it.directory == directory }
             val attempt = (input.str("attemptID")?.let { id -> candidates.firstOrNull { it.id == id } }
                 ?: if (!input.hasNonNull("attemptID")) candidates.singleOrNull() else null) ?: error("OpenCode OAuth attempt was not started")
             val endpoint = "/api/integration/${encode(attempt.integration)}/connect/oauth/${encode(attempt.id)}"
+            if (input.bool("submitOnly") == true) {
+                require(attempt.paste && !input.str("code").isNullOrBlank()) { "This OAuth attempt does not accept a pasted redirect URL" }
+                // The original callback owns polling and cleanup, even if this submission fails.
+                raw("POST", "$endpoint/complete", Json.obj("code" to input.get("code")))
+                return Json.toElement(true)
+            }
             var completed = false
             try {
                 if (input.hasNonNull("code")) raw("POST", "$endpoint/complete", Json.obj("code" to input.get("code")))

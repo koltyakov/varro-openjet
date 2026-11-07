@@ -85,6 +85,10 @@ internal class TranscriptArchive(private val usage: UsageArchive) {
                         if (part.getString(3) == "text") Json.obj("type" to "text", "text" to (part.getString(5) ?: error("Missing transcript text"))) else Json.obj("type" to part.getString(3))
                     }
                 } else emptyList()
+                // 2.2.6 appends inline content after split parts; older servers treated it as stale.
+                // The database alone cannot distinguish those contracts. Let the running server hydrate it.
+                if (stored.isNotEmpty() && (HistoryDatabase.scalar(database,
+                    "SELECT coalesce(json_array_length(data,'$.content'),0) FROM session_message WHERE id=?", id) ?: 0) > 0) throw ApiRequired()
                 val content = if (stored.isNotEmpty()) stored else {
                     require(HistoryDatabase.query(database, "SELECT json_type(data,'$.content') FROM session_message WHERE id=?", id) { it.getString(1) }.single() == "array") { "Missing transcript assistant content" }
                     HistoryDatabase.query(database, "SELECT json_extract(c.value,'$.type'),CASE WHEN json_extract(c.value,'$.type')='text' THEN json_extract(c.value,'$.text') END FROM session_message m,json_each(m.data,'$.content') c WHERE m.id=? ORDER BY c.key", id) { part ->

@@ -339,6 +339,12 @@ class OpenCodeV2IntegrationTest {
                 assertTrue(transport.request("GET", "/session/$id/background-process", options = processOptions).data.asArrayOrNull()!!.any {
                     it.asObjectOrNull().str("id") == shellID
                 })
+                if (OpenCodeCli.compareVersions(version, "2.2.6") >= 0) {
+                    val jobs = transport.request("GET", "/api/experimental/job").data.asObjectOrNull().arr("data")!!
+                    // A session-tagged shell created through the management API is not a native background job.
+                    assertFalse(jobs.any { it.asObjectOrNull().str("shellID") == shellID })
+                    assertFalse(transport.request("GET", "/session/status", options = processOptions).data.asObjectOrNull()!!.has(id))
+                }
                 assertEquals(true, transport.request("DELETE", "/session/$id/background-process/$shellID", options = processOptions).data!!.asBoolean)
                 assertFalse(transport.request("GET", "/session/$id/background-process", options = processOptions).data.asArrayOrNull()!!.any {
                     it.asObjectOrNull().str("id") == shellID
