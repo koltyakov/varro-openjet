@@ -6,11 +6,13 @@ import {
   createMemo,
   createSignal,
   createUniqueId,
+  on,
   onCleanup,
   onMount,
 } from 'solid-js';
 import type {
   OpenCodePermissionConfig,
+  OpenCodeGlobalPermissionConfig,
   OpenCodeServerMemoryPermissions,
   PermissionMode,
 } from '../../shared/protocol';
@@ -486,11 +488,13 @@ function PermissionActionSelect(props: {
 function PermissionRuleRow(props: {
   rule: PermissionRule;
   projectConfig?: boolean;
+  supportsPatterns?: boolean;
   onChange: (rule: PermissionRule) => void;
   onRemove: () => void;
 }) {
   const scalarConfigPermission = () =>
     props.projectConfig === true &&
+    !props.supportsPatterns &&
     props.rule.pattern === '*' &&
     isScalarConfigPermission(props.rule.permission);
   return (
@@ -502,7 +506,9 @@ function PermissionRuleRow(props: {
             ...props.rule,
             permission,
             pattern:
-              props.projectConfig === true && isScalarConfigPermission(permission)
+              props.projectConfig === true &&
+              !props.supportsPatterns &&
+              isScalarConfigPermission(permission)
                 ? '*'
                 : props.rule.pattern,
           })
@@ -535,6 +541,139 @@ function PermissionRuleRow(props: {
   );
 }
 
+function GlobalPermissionRules(props: { onSaved: () => void }) {
+  const [config, setConfig] = createSignal<OpenCodeGlobalPermissionConfig>();
+  const [rules, setRules] = createSignal<PermissionRule[]>([]);
+  const [loading, setLoading] = createSignal(true);
+  const [saving, setSaving] = createSignal(false);
+  const [error, setError] = createSignal<string>();
+  const dirty = () => JSON.stringify(rules()) !== JSON.stringify(config()?.rules ?? []);
+  const load = async () => {
+    setLoading(true);
+    setError(undefined);
+    try {
+      const next = await client.varro.openCodeGlobalPermissionConfig();
+      setConfig(next);
+      setRules(next.rules.map((rule) => ({ ...rule })));
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Could not load global rules');
+    } finally {
+      setLoading(false);
+    }
+  };
+  const save = async () => {
+    const normalized = rules().map((rule) => ({
+      ...rule,
+      permission: rule.permission.trim(),
+      pattern: rule.pattern.trim(),
+    }));
+    if (normalized.some((rule) => !rule.permission || !rule.pattern)) {
+      setError('Every rule needs a permission name and pattern.');
+      return;
+    }
+    setSaving(true);
+    setError(undefined);
+    try {
+      const next = await client.varro.saveOpenCodeGlobalPermissionConfig(normalized);
+      setConfig(next);
+      setRules(next.rules.map((rule) => ({ ...rule })));
+      props.onSaved();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Could not save global rules');
+    } finally {
+      setSaving(false);
+    }
+  };
+  onMount(() => void load());
+  return (
+    <section class="permission-config-section permission-global-section">
+      <div class="permission-config-heading">
+        <div>
+          <h2>Global config rules</h2>
+          <p>
+            Applies across projects. Project, agent, and session rules can override these
+            permissions. Config changes apply when OpenCode next loads the config; saving does not
+            restart the server.
+          </p>
+        </div>
+        <div class="permission-config-actions">
+          <button
+            type="button"
+            class="permission-settings-save"
+            disabled={!dirty() || saving() || loading() || !config()}
+            onClick={() => void save()}
+          >
+            {saving() ? 'Saving...' : 'Save'}
+          </button>
+          <button
+            type="button"
+            class="permission-config-add"
+            disabled={saving() || loading() || !config()}
+            onClick={() =>
+              setRules((current) => [...current, { permission: '', pattern: '*', action: 'ask' }])
+            }
+          >
+            <UiIcon source={plusIcon} width={14} height={14} />
+            Add rule
+          </button>
+        </div>
+      </div>
+      <Show when={error()}>
+        <div class="permission-layer-error" role="alert">
+          {error()}{' '}
+          <Show when={!config()}>
+            <button type="button" disabled={loading()} onClick={() => void load()}>
+              Retry
+            </button>
+          </Show>
+        </div>
+      </Show>
+      <Show when={config()}>
+        {(value) => (
+          <>
+            <div class="permission-config-source">
+              <span>Global config</span>
+              <code title={value().targetPath}>{value().targetPath}</code>
+            </div>
+            <div class="permission-config-column-labels" aria-hidden="true">
+              <span>Permission</span>
+              <span>Pattern</span>
+              <span>Action</span>
+            </div>
+            <Show
+              when={rules().length > 0}
+              fallback={
+                <div class="permission-config-empty">No rules in this global config file.</div>
+              }
+            >
+              <Index each={rules()}>
+                {(rule, index) => (
+                  <PermissionRuleRow
+                    rule={rule()}
+                    projectConfig
+                    supportsPatterns={value().supportsPatterns}
+                    onChange={(next) =>
+                      setRules((current) =>
+                        current.map((item, itemIndex) => (itemIndex === index ? next : item))
+                      )
+                    }
+                    onRemove={() =>
+                      setRules((current) => current.filter((_, itemIndex) => itemIndex !== index))
+                    }
+                  />
+                )}
+              </Index>
+            </Show>
+          </>
+        )}
+      </Show>
+      <Show when={loading()}>
+        <div class="permission-config-empty">Loading global rules...</div>
+      </Show>
+    </section>
+  );
+}
+
 export function PermissionSettingsPanel() {
   const [config, setConfig] = createSignal(EMPTY_CONFIG);
   const [rules, setRules] = createSignal<PermissionRule[]>([]);
@@ -551,6 +690,8 @@ export function PermissionSettingsPanel() {
     null
   );
   const [serverMemoryError, setServerMemoryError] = createSignal<string | null>(null);
+  const [serverMemoryLoading, setServerMemoryLoading] = createSignal(false);
+  const [confirmingServerRule, setConfirmingServerRule] = createSignal<string | null>(null);
   const [removingServerRule, setRemovingServerRule] = createSignal<string | null>(null);
   const [editingServerRule, setEditingServerRule] = createSignal<{
     id: string;
@@ -559,6 +700,25 @@ export function PermissionSettingsPanel() {
   } | null>(null);
   const [savingServerRule, setSavingServerRule] = createSignal(false);
   let sessionLoadGeneration = 0;
+  let serverMemoryLoadGeneration = 0;
+  const serverConnection = createMemo(() => {
+    const status = state.serverStatus;
+    return status.state === 'running' ? `${status.apiVersion}:${status.url}` : '';
+  });
+  const legacyServer = () =>
+    state.serverStatus.state === 'running' && state.serverStatus.apiVersion === 1;
+  const serverMemoryReadOnly = () => {
+    const memory = serverMemory();
+    return serverMemoryLoading() || !memory?.supported || Boolean(memory.stale);
+  };
+  const untrackedServerRules = () => {
+    const memory = serverMemory();
+    return memory?.supported ? (memory.untrackedRules ?? []) : [];
+  };
+  const serverMemoryStale = () => {
+    const memory = serverMemory();
+    return memory?.supported ? memory.stale : undefined;
+  };
   const defaultDirectRules = getSharedDirectPermissionRules();
   const dirty = createMemo(() => JSON.stringify(rules()) !== JSON.stringify(config().projectRules));
   const sessionDirty = createMemo(
@@ -625,18 +785,18 @@ export function PermissionSettingsPanel() {
     const generation = ++sessionLoadGeneration;
     setSessionSaving(false);
     setRemovingServerRule(null);
+    setConfirmingServerRule(null);
     setEditingServerRule(null);
     setSavingServerRule(false);
     setSessionLoading(Boolean(session));
     setSessionError(null);
     setServerMemoryError(null);
-    const [sessionResult, memoryResult] = await Promise.allSettled([
+    setServerMemory(null);
+    const [sessionResult] = await Promise.allSettled([
       session
         ? client.session.getPermissionRulesForSession(session.id, { directory: session.directory })
         : Promise.resolve([]),
-      client.varro.serverMemoryPermissions(session?.id ?? null, {
-        directory: session?.directory,
-      }),
+      refreshServerMemory(),
     ]);
     if (generation !== sessionLoadGeneration) return;
     if (!session) {
@@ -655,19 +815,37 @@ export function PermissionSettingsPanel() {
           : 'Could not load current-session rules'
       );
     }
-    setServerMemory(
-      memoryResult.status === 'fulfilled'
-        ? memoryResult.value
-        : {
-            supported: false,
-            rules: [],
-            reason:
-              memoryResult.reason instanceof Error
-                ? memoryResult.reason.message
-                : 'Could not load saved server permissions',
-          }
-    );
     setSessionLoading(false);
+  }
+
+  async function refreshServerMemory() {
+    const session = activeSession();
+    const generation = ++serverMemoryLoadGeneration;
+    setServerMemoryLoading(true);
+    setServerMemoryError(null);
+    setConfirmingServerRule(null);
+    try {
+      const next = await client.varro.serverMemoryPermissions(session?.id ?? null, {
+        directory: session?.directory,
+      });
+      if (generation === serverMemoryLoadGeneration) {
+        setServerMemory(next);
+        const draft = editingServerRule();
+        if (draft && !next.rules.some((rule) => rule.id === draft.id)) setEditingServerRule(null);
+      }
+    } catch (cause) {
+      if (generation !== serverMemoryLoadGeneration) return;
+      const reason =
+        cause instanceof Error ? cause.message : 'Could not load saved server permissions';
+      const previous = serverMemory();
+      setServerMemory(
+        previous?.supported
+          ? { ...previous, stale: reason }
+          : { supported: false, rules: [], reason }
+      );
+    } finally {
+      if (generation === serverMemoryLoadGeneration) setServerMemoryLoading(false);
+    }
   }
 
   async function saveSessionRules() {
@@ -712,16 +890,22 @@ export function PermissionSettingsPanel() {
     const session = activeSession();
     const sessionId = session?.id ?? null;
     const generation = sessionLoadGeneration;
+    const memoryGeneration = serverMemoryLoadGeneration;
     const shouldApply = () =>
-      generation === sessionLoadGeneration && (activeSession()?.id ?? null) === sessionId;
-    if (removingServerRule() || savingServerRule()) return;
+      generation === sessionLoadGeneration &&
+      memoryGeneration === serverMemoryLoadGeneration &&
+      (activeSession()?.id ?? null) === sessionId;
+    if (removingServerRule() || savingServerRule() || serverMemoryReadOnly()) return;
     setRemovingServerRule(id);
     setServerMemoryError(null);
     try {
       const next = await client.varro.removeServerMemoryPermission(sessionId, id, {
         directory: session?.directory,
       });
-      if (shouldApply()) setServerMemory(next);
+      if (shouldApply()) {
+        setServerMemory(next);
+        setConfirmingServerRule(null);
+      }
     } catch (cause) {
       if (!shouldApply()) return;
       setServerMemoryError(
@@ -734,14 +918,16 @@ export function PermissionSettingsPanel() {
 
   async function saveServerMemoryPermission() {
     const draft = editingServerRule();
-    if (!draft || savingServerRule() || removingServerRule()) return;
+    if (!draft || savingServerRule() || removingServerRule() || serverMemoryReadOnly()) return;
     if (!draft.permission.trim() || !draft.pattern.trim()) {
       setServerMemoryError('Every saved rule needs a permission name and pattern.');
       return;
     }
     const session = activeSession();
     const generation = sessionLoadGeneration;
-    const shouldApply = () => generation === sessionLoadGeneration;
+    const memoryGeneration = serverMemoryLoadGeneration;
+    const shouldApply = () =>
+      generation === sessionLoadGeneration && memoryGeneration === serverMemoryLoadGeneration;
     setSavingServerRule(true);
     setServerMemoryError(null);
     try {
@@ -782,8 +968,35 @@ export function PermissionSettingsPanel() {
     void loadSessionLayers();
   });
 
+  createEffect(
+    on(
+      serverConnection,
+      () => {
+        setRemovingServerRule(null);
+        setEditingServerRule(null);
+        setConfirmingServerRule(null);
+        setSavingServerRule(false);
+        if (serverConnection()) {
+          setServerMemory(null);
+          void refreshServerMemory();
+        } else {
+          serverMemoryLoadGeneration += 1;
+          setServerMemoryLoading(false);
+          const previous = serverMemory();
+          if (previous?.supported)
+            setServerMemory({
+              ...previous,
+              stale: 'OpenCode disconnected. Reconnect to refresh saved approvals.',
+            });
+        }
+      },
+      { defer: true }
+    )
+  );
+
   onCleanup(() => {
     sessionLoadGeneration += 1;
+    serverMemoryLoadGeneration += 1;
   });
 
   return (
@@ -898,10 +1111,29 @@ export function PermissionSettingsPanel() {
           <section class="permission-config-section">
             <div class="permission-config-heading">
               <div>
-                <h2>Server memory</h2>
-                <p>Saved allowances applied before project and inherited configuration.</p>
+                <h2>{legacyServer() ? 'Server memory' : 'Saved project approvals'}</h2>
+                <p>
+                  {legacyServer()
+                    ? 'Matching requests across sessions until OpenCode restarts.'
+                    : 'Stored by OpenCode separately from config. Persist across sessions and server restarts.'}
+                </p>
               </div>
-              <span class="permission-config-level">Until restart</span>
+              <div class="permission-config-actions">
+                <span class="permission-config-level">
+                  {legacyServer() ? 'Until restart' : 'Persistent'}
+                </span>
+                <button
+                  type="button"
+                  class="permission-memory-refresh"
+                  aria-label="Refresh saved approvals"
+                  disabled={
+                    serverMemoryLoading() || removingServerRule() !== null || savingServerRule()
+                  }
+                  onClick={() => void refreshServerMemory()}
+                >
+                  Refresh
+                </button>
+              </div>
             </div>
             <Show when={serverMemoryError()}>
               <div class="permission-layer-error" role="alert">
@@ -921,132 +1153,222 @@ export function PermissionSettingsPanel() {
                     </div>
                   }
                 >
+                  <Show when={serverMemoryStale()}>
+                    <div class="permission-layer-error" role="alert">
+                      Cached approvals only. {serverMemoryStale()} Refresh before making changes.
+                    </div>
+                  </Show>
                   <Show
-                    when={memory().rules.length > 0}
+                    when={memory().rules.length > 0 || untrackedServerRules().length > 0}
                     fallback={
-                      <div class="permission-config-empty">No saved server allowances.</div>
+                      <div class="permission-config-empty">
+                        {legacyServer()
+                          ? 'No saved server allowances.'
+                          : 'No saved project approvals.'}
+                      </div>
                     }
                   >
-                    <div class="permission-memory-list">
-                      <For each={memory().rules}>
-                        {(rule) => (
-                          <div class="permission-memory-rule">
-                            <Show
-                              when={editingServerRule()?.id === rule.id}
-                              fallback={
-                                <>
-                                  <code>{rule.permission}</code>
-                                  <code title={rule.pattern}>{rule.pattern}</code>
-                                </>
-                              }
-                            >
-                              <input
-                                aria-label="Saved permission name"
-                                value={editingServerRule()?.permission ?? ''}
-                                disabled={savingServerRule()}
-                                onInput={(event) =>
-                                  setEditingServerRule(
-                                    (draft) =>
-                                      draft && { ...draft, permission: event.currentTarget.value }
-                                  )
-                                }
-                              />
-                              <input
-                                aria-label="Saved resource pattern"
-                                value={editingServerRule()?.pattern ?? ''}
-                                disabled={savingServerRule()}
-                                onInput={(event) =>
-                                  setEditingServerRule(
-                                    (draft) =>
-                                      draft && { ...draft, pattern: event.currentTarget.value }
-                                  )
-                                }
-                              />
-                            </Show>
-                            <span class="permission-memory-actions">
-                              <Show
-                                when={editingServerRule()?.id === rule.id}
-                                fallback={
-                                  <>
-                                    <span>Allow</span>
-                                    <Show when={rule.editable && rule.retractable !== false}>
-                                      <Tooltip content="Edit server allowance">
+                    <For
+                      each={[
+                        { rules: memory().rules, untracked: false },
+                        {
+                          rules: untrackedServerRules(),
+                          untracked: true,
+                        },
+                      ]}
+                    >
+                      {(group) => (
+                        <Show when={group.rules.length > 0}>
+                          <Show when={group.untracked}>
+                            <div class="permission-memory-untracked">
+                              <h3>Other saved approvals</h3>
+                              <p>
+                                Origin unknown. Not tracked by this Varro workspace; these may
+                                include internal or other-client approvals. Review before removing.
+                              </p>
+                            </div>
+                          </Show>
+                          <div class="permission-memory-list">
+                            <For each={group.rules}>
+                              {(rule) => (
+                                <div class="permission-memory-rule">
+                                  <Show
+                                    when={editingServerRule()?.id === rule.id}
+                                    fallback={
+                                      <>
+                                        <code>{rule.permission}</code>
+                                        <code title={rule.pattern}>{rule.pattern}</code>
+                                      </>
+                                    }
+                                  >
+                                    <input
+                                      aria-label="Saved permission name"
+                                      value={editingServerRule()?.permission ?? ''}
+                                      disabled={savingServerRule()}
+                                      onInput={(event) =>
+                                        setEditingServerRule(
+                                          (draft) =>
+                                            draft && {
+                                              ...draft,
+                                              permission: event.currentTarget.value,
+                                            }
+                                        )
+                                      }
+                                    />
+                                    <input
+                                      aria-label="Saved resource pattern"
+                                      value={editingServerRule()?.pattern ?? ''}
+                                      disabled={savingServerRule()}
+                                      onInput={(event) =>
+                                        setEditingServerRule(
+                                          (draft) =>
+                                            draft && {
+                                              ...draft,
+                                              pattern: event.currentTarget.value,
+                                            }
+                                        )
+                                      }
+                                    />
+                                  </Show>
+                                  <span class="permission-memory-actions">
+                                    <Show
+                                      when={editingServerRule()?.id === rule.id}
+                                      fallback={
+                                        <>
+                                          <span>Allow</span>
+                                          <Show
+                                            when={
+                                              !group.untracked &&
+                                              rule.editable &&
+                                              rule.retractable !== false
+                                            }
+                                          >
+                                            <Tooltip content="Edit server allowance">
+                                              <button
+                                                type="button"
+                                                class="permission-config-remove"
+                                                aria-label="Edit server allowance"
+                                                disabled={
+                                                  removingServerRule() !== null ||
+                                                  serverMemoryReadOnly() ||
+                                                  savingServerRule() ||
+                                                  editingServerRule() !== null
+                                                }
+                                                onClick={() => {
+                                                  setServerMemoryError(null);
+                                                  setEditingServerRule({
+                                                    id: rule.id,
+                                                    permission: rule.permission,
+                                                    pattern: rule.pattern,
+                                                  });
+                                                }}
+                                              >
+                                                <UiIcon
+                                                  source={editPencilIcon}
+                                                  width={14}
+                                                  height={14}
+                                                />
+                                              </button>
+                                            </Tooltip>
+                                          </Show>
+                                        </>
+                                      }
+                                    >
+                                      <button
+                                        type="button"
+                                        class="permission-config-remove"
+                                        aria-label="Save server allowance"
+                                        disabled={savingServerRule() || serverMemoryReadOnly()}
+                                        onClick={() => void saveServerMemoryPermission()}
+                                      >
+                                        <UiIcon source={checkIcon} width={14} height={14} />
+                                      </button>
+                                      <button
+                                        type="button"
+                                        class="permission-config-remove"
+                                        aria-label="Cancel server allowance edit"
+                                        disabled={savingServerRule()}
+                                        onClick={() => {
+                                          setEditingServerRule(null);
+                                          setServerMemoryError(null);
+                                        }}
+                                      >
+                                        <UiIcon source={xmarkIcon} width={14} height={14} />
+                                      </button>
+                                    </Show>
+                                    <Show
+                                      when={rule.retractable !== false}
+                                      fallback={
+                                        <span
+                                          title={
+                                            legacyServer()
+                                              ? 'Legacy OpenCode server memory can only be cleared by restarting the server'
+                                              : 'Refresh to resolve the native saved-approval ID'
+                                          }
+                                        >
+                                          {legacyServer()
+                                            ? 'Restart to clear'
+                                            : 'Refresh to manage'}
+                                        </span>
+                                      }
+                                    >
+                                      <Tooltip content="Retract server allowance">
                                         <button
                                           type="button"
                                           class="permission-config-remove"
-                                          aria-label="Edit server allowance"
+                                          aria-label="Retract server allowance"
                                           disabled={
                                             removingServerRule() !== null ||
+                                            serverMemoryReadOnly() ||
                                             savingServerRule() ||
                                             editingServerRule() !== null
                                           }
-                                          onClick={() => {
-                                            setServerMemoryError(null);
-                                            setEditingServerRule({
-                                              id: rule.id,
-                                              permission: rule.permission,
-                                              pattern: rule.pattern,
-                                            });
-                                          }}
+                                          onClick={() =>
+                                            group.untracked
+                                              ? setConfirmingServerRule(rule.id)
+                                              : void removeServerMemoryPermission(rule.id)
+                                          }
                                         >
-                                          <UiIcon source={editPencilIcon} width={14} height={14} />
+                                          <UiIcon source={trashIcon} width={14} height={14} />
                                         </button>
                                       </Tooltip>
                                     </Show>
-                                  </>
-                                }
-                              >
-                                <button
-                                  type="button"
-                                  class="permission-config-remove"
-                                  aria-label="Save server allowance"
-                                  disabled={savingServerRule()}
-                                  onClick={() => void saveServerMemoryPermission()}
-                                >
-                                  <UiIcon source={checkIcon} width={14} height={14} />
-                                </button>
-                                <button
-                                  type="button"
-                                  class="permission-config-remove"
-                                  aria-label="Cancel server allowance edit"
-                                  disabled={savingServerRule()}
-                                  onClick={() => {
-                                    setEditingServerRule(null);
-                                    setServerMemoryError(null);
-                                  }}
-                                >
-                                  <UiIcon source={xmarkIcon} width={14} height={14} />
-                                </button>
-                              </Show>
-                              <Show
-                                when={rule.retractable !== false}
-                                fallback={
-                                  <span title="Legacy OpenCode server memory can only be cleared by restarting the server">
-                                    Restart to clear
                                   </span>
-                                }
-                              >
-                                <Tooltip content="Retract server allowance">
-                                  <button
-                                    type="button"
-                                    class="permission-config-remove"
-                                    aria-label="Retract server allowance"
-                                    disabled={
-                                      removingServerRule() !== null ||
-                                      savingServerRule() ||
-                                      editingServerRule() !== null
-                                    }
-                                    onClick={() => void removeServerMemoryPermission(rule.id)}
-                                  >
-                                    <UiIcon source={trashIcon} width={14} height={14} />
-                                  </button>
-                                </Tooltip>
-                              </Show>
-                            </span>
+                                  <Show when={confirmingServerRule() === rule.id}>
+                                    <div class="permission-memory-confirm">
+                                      <span>
+                                        Remove this saved approval? Its origin is unknown. Other
+                                        matching rules may still allow this action.
+                                      </span>
+                                      <div class="permission-config-actions">
+                                        <button
+                                          type="button"
+                                          class="permission-settings-save"
+                                          disabled={
+                                            removingServerRule() !== null || serverMemoryReadOnly()
+                                          }
+                                          onClick={() => void removeServerMemoryPermission(rule.id)}
+                                        >
+                                          Remove saved approval
+                                        </button>
+                                        <button
+                                          type="button"
+                                          class="permission-config-add"
+                                          disabled={removingServerRule() !== null}
+                                          onClick={() => setConfirmingServerRule(null)}
+                                        >
+                                          Cancel
+                                        </button>
+                                      </div>
+                                    </div>
+                                  </Show>
+                                </div>
+                              )}
+                            </For>
                           </div>
-                        )}
-                      </For>
-                    </div>
+                        </Show>
+                      )}
+                    </For>
                   </Show>
                 </Show>
               )}
@@ -1110,6 +1432,7 @@ export function PermissionSettingsPanel() {
                     <PermissionRuleRow
                       rule={rule()}
                       projectConfig
+                      supportsPatterns={config().supportsPatterns}
                       onChange={(next) => updateRule(index, next)}
                       onRemove={() =>
                         setRules((current) => current.filter((_, itemIndex) => itemIndex !== index))
@@ -1120,6 +1443,23 @@ export function PermissionSettingsPanel() {
               </Show>
             </Show>
           </section>
+
+          <Show when={!legacyServer() && serverConnection()} keyed>
+            <GlobalPermissionRules
+              onSaved={() => {
+                void client.varro
+                  .openCodePermissionConfig()
+                  .then(setConfig)
+                  .catch((cause: unknown) => {
+                    setError(
+                      cause instanceof Error
+                        ? `Global rules saved, but the policy overview could not refresh: ${cause.message}`
+                        : 'Global rules saved, but the policy overview could not refresh.'
+                    );
+                  });
+              }}
+            />
+          </Show>
 
           <For each={visibleInheritedSources()}>
             {(source) => (

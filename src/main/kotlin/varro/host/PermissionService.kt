@@ -12,6 +12,8 @@ class PermissionService(
     private val store: VarroStore,
     private val projectRules: ((String?) -> JsonArray)? = null,
     private val saveProjectRules: ((JsonArray, String?) -> Unit)? = null,
+    private val apiVersion: () -> Int = { 1 },
+    private val allowConfigPermission: ((String, List<String>, String, String?) -> JsonArray)? = null,
     private val request: (String, String, JsonElement?, String?) -> JsonElement?,
 ) {
     @Synchronized
@@ -30,7 +32,16 @@ class PermissionService(
     }
 
     @Synchronized
-    fun allow(body: JsonObject, project: Boolean, directory: String?): JsonArray {
+    fun allow(body: JsonObject, project: Boolean, directory: String?): JsonArray =
+        allowScope(body, if (project) "project" else "session", directory)
+
+    @Synchronized fun allowGlobal(body: JsonObject, directory: String?): JsonArray {
+        require(apiVersion() == 2) { "Global permission management requires OpenCode V2" }
+        return allowScope(body, "global", directory)
+    }
+
+    private fun allowScope(body: JsonObject, scope: String, directory: String?): JsonArray {
+        val reviewed = reviewedPatterns(body, apiVersion())
         val sessionId = body.text("sessionId") ?: error("Missing session id")
         val permissionId = body.text("permissionId") ?: error("Missing permission id")
         require(sessionId.matches(Regex("[A-Za-z0-9_-]+"))) { "Invalid session id" }
@@ -38,24 +49,27 @@ class PermissionService(
         val owningDirectory = session.text("directory") ?: error("404 Session not found")
         require(session.text("id") == sessionId &&
             (directory == null || WorkspacePaths.isSame(owningDirectory, directory))) { "404 Session not found" }
-        return allowInDirectory(sessionId, permissionId, project, owningDirectory)
+        return allowInDirectory(sessionId, permissionId, scope, owningDirectory, reviewed)
     }
 
-    private fun allowInDirectory(sessionId: String, permissionId: String, project: Boolean, directory: String): JsonArray {
+    private fun allowInDirectory(sessionId: String, permissionId: String, scope: String, directory: String, reviewed: List<String>?): JsonArray {
         val pending = request("GET", "/permission", null, directory).asArrayOrNull()
             ?.mapNotNull { it.asObjectOrNull()?.let { record -> record.obj("info") ?: record } }?.firstOrNull {
                 (it.text("id") ?: it.text("permissionID") ?: it.text("requestID")) == permissionId && it.str("sessionID") == sessionId
             } ?: error("Permission request is no longer pending")
         val name = pending.text("permission") ?: pending.text("type") ?: error("Missing permission name")
-        val patterns = pending.arr("always")?.mapNotNull {
+        val suggested = pending.arr("always")?.mapNotNull {
             it.takeIf { value -> value.isJsonPrimitive && value.asJsonPrimitive.isString }
                 ?.asString?.trim()?.takeIf(String::isNotEmpty)
         }?.distinct().orEmpty()
-        require(patterns.isNotEmpty()) { "Standing approval scope is unavailable for this request" }
+        require(suggested.isNotEmpty()) { "Standing approval scope is unavailable for this request" }
+        val patterns = reviewed ?: suggested
         val additions = validateRules(Json.array(patterns.map { pattern ->
             Json.obj("permission" to name, "pattern" to pattern, "action" to "allow")
         }))
-        if (project) {
+        if (scope != "session") {
+            allowConfigPermission?.let { return it(name, patterns, scope, directory) }
+            check(scope == "project") { "Global rule storage is unavailable" }
             val rules = projectRules?.invoke(directory) ?: error("Project rule storage is unavailable")
             val effective = request("GET", "/config", null, directory).asObjectOrNull()
                 ?: error("Could not read effective OpenCode permissions")
@@ -69,8 +83,17 @@ class PermissionService(
     }
 
     companion object {
+        internal fun reviewedPatterns(body: JsonObject, version: Int): List<String>? {
+            if (!body.has("patterns")) return null
+            require(version == 2) { "Custom approval patterns require OpenCode V2" }
+            val patterns = body.arr("patterns")
+            require(patterns != null && patterns.size() in 1..50 && patterns.all {
+                it.isJsonPrimitive && it.asJsonPrimitive.isString && it.asString.isNotBlank() && it.asString.length <= 2000
+            }) { "Approval patterns must contain 1 to 50 non-empty patterns of at most 2000 characters" }
+            return patterns.map { it.asString.trim() }.distinct()
+        }
         /** Merge within each permission's config entry instead of appending a second group. */
-        private fun mergeProjectAllow(rules: JsonArray, additions: JsonArray, effective: JsonElement?): JsonArray {
+        internal fun mergeProjectAllow(rules: JsonArray, additions: JsonArray, effective: JsonElement?): JsonArray {
             val config = toConfig(rules)
             // Turning an inherited scalar into a project object must preserve its default.
             if (!config.has("*") && effective?.isJsonPrimitive == true) config.add("*", effective)

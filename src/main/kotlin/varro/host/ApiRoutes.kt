@@ -32,6 +32,7 @@ object ApiRoutes {
         const val OPENCODE_CONFIG_MODEL_ROUTING = "$NAMESPACE/opencode-config/model-routing"
         const val OPENCODE_CONFIG_DISABLE_PROVIDER = "$NAMESPACE/opencode-config/disable-provider"
         const val OPENCODE_CONFIG_PERMISSIONS = "$NAMESPACE/opencode-config/permissions"
+        const val OPENCODE_GLOBAL_PERMISSIONS = "$NAMESPACE/opencode-config/global-permissions"
         const val SESSION = "$NAMESPACE/session"
         const val SESSION_TRASH = "$NAMESPACE/session-trash"
         const val SESSION_HISTORY_SCOPE = "$NAMESPACE/session-history-scope"
@@ -52,6 +53,7 @@ object ApiRoutes {
         const val PERMISSION_SESSION_RULES = "$NAMESPACE/permission/session-rules"
         const val PERMISSION_SERVER_MEMORY = "$NAMESPACE/permission/server-memory"
         const val PERMISSION_PROJECT_ALLOW = "$NAMESPACE/permission/project-allow"
+        const val PERMISSION_GLOBAL_ALLOW = "$NAMESPACE/permission/global-allow"
         const val DECISION_PROVIDERS = "$NAMESPACE/decision-providers"
     }
 
@@ -279,12 +281,16 @@ object ApiRoutes {
         route(Endpoints.OPENCODE_CONFIG_MODEL_ROUTING, methodsNoQuery("POST")),
         route(Endpoints.OPENCODE_CONFIG_DISABLE_PROVIDER, methodsNoQuery("POST")),
         route(Endpoints.OPENCODE_CONFIG_PERMISSIONS, methodsNoQuery("GET", "POST")),
+        route(Endpoints.OPENCODE_GLOBAL_PERMISSIONS, methodsNoQuery("GET", "POST")),
         route(Endpoints.PERMISSION_JUDGE, methodsNoQuery("POST")),
         route(Endpoints.DECISION_PROVIDERS, methodsNoQuery("GET", "POST")),
         route(Endpoints.PERMISSION_PROJECT_ALLOW) { request, _ ->
             request.method == "POST" && request.optionalDirectory()
         },
         route(Endpoints.PERMISSION_SESSION_ALLOW) { request, _ ->
+            request.method == "POST" && request.optionalDirectory()
+        },
+        route(Endpoints.PERMISSION_GLOBAL_ALLOW) { request, _ ->
             request.method == "POST" && request.optionalDirectory()
         },
         route(Endpoints.PERMISSION_SESSION_RULES) { request, _ ->

@@ -1,6 +1,6 @@
 # OpenCode V2 support
 
-OpenJet supports V1 from 1.16.0 and V2 from 2.0.5. The webview and shared sources were synced from Varro's `main` branch at `1697df0afc98`, version 0.34.3. Tested baselines are V1 1.19.5 and V2 2.2.6. The Kotlin adapter handles released-server contracts, including generated skill, shell and synthetic transcript records. Synthetic text appears as automatic-action notices; canonical subagent completion metadata produces linked subagent activities. Pending and running V2 patch calls render as active edits. Assistant history preserves automatic retry metadata for recovery notices. History attachments use deferred references with Kotlin-generated thumbnails and on-demand original reads. Chat annotations retain bounded display context before deferral. [Session cleanup and usage export](session-cleanup.md) preserve statistics and optional parent transcripts before confirmed deletions.
+OpenJet supports V1 from 1.16.0 and V2 from 2.0.5. The webview and shared sources were synced from Varro's `main` branch at `0307fac3ca2a`, version 0.34.4. Tested baselines are V1 1.19.5 and V2 2.2.6. The Kotlin adapter handles released-server contracts, including generated skill, shell and synthetic transcript records. Synthetic text appears as automatic-action notices; canonical subagent completion metadata produces linked subagent activities. Pending and running V2 patch calls render as active edits. Assistant history preserves automatic retry metadata for recovery notices. History attachments use deferred references with Kotlin-generated thumbnails and on-demand original reads. Chat annotations retain bounded display context before deferral. [Session cleanup and usage export](session-cleanup.md) preserve statistics and optional parent transcripts before confirmed deletions.
 
 V2 sessions support `/pause` and a Resume action in the transcript. Pausing parks queued messages and interrupts with `resume=false`. Pause markers persist in the shared Varro session annotations, and session summaries and usage reports exclude paused time. Commit-message generation uses the stateless endpoint when the server advertises it, falling back to a helper session when the endpoint or selected model is unavailable before generation starts.
 
@@ -74,6 +74,21 @@ OpenCode 2.0.25 external credential methods retain their catalog position alongs
 Ordinary sends in Default mode preserve session-scoped Always approvals; explicit mode changes can still reset rules.
 
 Permission and form replies retain the owning session. The adapter removes pending requests only after the server acknowledges the reply. Native permission configuration keeps its ordered `permissions` array. Model routing edits preserve native `agents` keys when the target file uses V2 configuration.
+
+V2 session/project/global approvals open a resource-pattern review. Saving keeps
+the pending request's action and owning session authoritative. Project and global
+config approvals reply once, without creating a durable database approval or
+restarting the server. Global rules require a local V2 connection; attach-only
+connections cannot edit host files. New V2 configs use native permission arrays,
+including URL-specific WebFetch patterns, while existing legacy syntax stays
+unchanged. Dirty documents and concurrent config changes reject writes.
+
+Saved V2 approvals are persistent. The Permissions screen separates observed
+approvals from other native rows with unknown origin. Unknown rows cannot be
+edited or silently adopted; explicit confirmed removal is available. Every
+mutation requires a fresh valid project snapshot and the same connection. A
+successful removal requires a second list proving the exact ID is gone. Cached
+observations remain visible with a stale warning but cannot authorize mutations.
 
 Native session forms retain field keys, typed values, conditions, defaults, hidden
 fields, constraints and tool attribution. Replies use `kind: native-form`, the
@@ -2541,6 +2556,80 @@ the reviewed changes. Existing differences were not reverified for full parity.
 Live-account OAuth/provider calls, native Windows/Linux and Plugin Verifier were
 not run. No production sessions, credentials, databases or service registrations
 were used.
+
+## Upstream sync review, 2026-11-08
+
+Reviewed all five commits and 33 changed files from Varro
+`1697df0afc98ae927b2d1d2f68103406e2a2705c` through
+`0307fac3ca2aa6b5e98dded0d2ba1fae1f5099f4`, version 0.34.4. This includes
+the extension backend, shared protocol, config handling and upstream regression
+tests. SDK 1.19.5 and client 2.2.6 are unchanged. OpenJet's support floors,
+dependencies and toolchain pins stay unchanged. The user's plugin version
+selection, 0.10.4, is retained.
+
+| Upstream change | Kotlin alignment and coverage |
+| --- | --- |
+| `rest-proxy.ts`, `util/webview-message.ts`, shared protocol; reviewed approval patterns and global endpoints | `ApiRoutes.kt`, `RestProxy.kt`, `PermissionService.kt` and `SessionTransfers.kt` add named global-config/approval routes, reject transferred-session writes, validate bounded V2-only pattern reviews, and keep the pending action, session and directory server-authoritative. Tests reject malformed reviews, V1 custom patterns, missing standing scope, foreign requests and widened directories. |
+| `opencode-config-service.ts`; config-backed project/global approvals | `ProjectPermissionConfig.kt`, `GlobalPermissionConfig.kt`, `ProjectConfigEdit.kt` and `OpenCodeHostServices.kt` preserve existing legacy syntax and comments, append ordered native rules, support URL-specific native WebFetch patterns, serialize fresh target edits, reject dirty or changed files, and avoid disposing pending V2 instances. Global management requires a local V2 connection and never targets workspace or injected runtime config. |
+| `opencode-config-service.ts`; other saved approvals and fresh mutation snapshots | `OpenCodeSavedPermissions.kt` separates origin-unknown rows without adopting or editing them. Removal requires a fresh validated project list, unchanged connection and a second list proving the exact native ID is absent. Stale observations remain visible but cannot authorize writes. Tests cover malformed/foreign rows, failed discovery, stale data, inconclusive deletion and URL/protocol/generation changes. |
+| Permission review/settings, background command details and styles | Vendored unchanged. V2 session/project/global reviews retain drafts after failures and can be cancelled without replying. V2 config approvals reply once rather than creating database grants. Background commands expand and copy the complete command without selecting another process. The upstream harness/question changes are VS Code test fixtures, not additional JetBrains host APIs. |
+
+The complete upstream diff is retained at
+`build/upstream-sync-0307fac3-review.diff`. Focused Kotlin regressions, vendor
+integrity, all 111 browser host tests, TypeScript checking and browser bundling
+passed. Seven selected upstream permission, background-dialog, client and host
+test files passed all 699 tests. Their results supplement, rather than replace,
+the Kotlin released-server checks.
+
+The exact published macOS ARM64 OpenCode 2.2.6 binary passed the Kotlin adapter
+and both managed-service cases with no skips. The expanded adapter fixture
+checks reviewed project/global config approvals, once replies with no database
+grant, removal restoring an ask, URL-specific global rules across separate Git
+projects, and deletion of an origin-unknown native approval without changing
+session rules. Every fixture uses isolated HOME, XDG, database and server-state
+roots and a deterministic local provider. The direct native permission fixture
+initializes its location's agent catalog before asking, matching the normal
+tool path. Early fixture failures were fixed before the final run.
+
+`python3 scripts/check-opencode-compatibility.py --version 2.2.6 --binary
+build/opencode-compatibility/2.2.6/node_modules/@opencode/cli/bin/opencode.exe
+--full-check` passed `check buildPlugin --rerun-tasks`. All 844 enabled Kotlin
+tests passed. Only the optional published V1 fixture and existing-database usage
+benchmark were skipped. The six compatibility-helper tests also passed.
+Evidence is `build/opencode-compatibility/2.2.6/verification.json` and
+`build/upstream-sync-0307fac3-full-check.log`. The package is
+`build/distributions/varro-openjet-0.10.4.zip`.
+
+Three targeted macOS JCEF checks passed in IntelliJ IDEA 2026.2.2 with no page
+errors. All screenshots were inspected.
+
+| Targeted native check | Issues found | All cases complete |
+| --- | --- | --- |
+| V2 reviewed approval, save-error draft retention and cancel without reply | None | Yes |
+| Independent global config save and confirmed unknown saved-grant removal | None | Yes |
+| Complete multiline background command expansion, copy and collapse | None | Yes |
+
+Evidence is `build/upstream-sync-0307fac3/result.json` and the three PNGs in
+that directory. The fixture verified the IDE PID and packaged plugin path and
+used separate IDE/HOME/XDG/database/workspace roots with managed startup disabled.
+It mounted unchanged upstream components in JCEF with mocked client calls, not
+the ordinary Kotlin bridge or live provider operations. Initial fixture runs
+used an overlay above portal menus and started before harness initialization;
+fixing those test assumptions required no product changes. The fixture IDE and
+Vite exited; ports 50534, 50552, 50553 and 50555 had no listeners.
+
+Remaining differences and verification limits:
+
+| Status | Upstream files/endpoints and OpenJet code | User-visible impact |
+| --- | --- | --- |
+| Existing permission/config differences outside this delta | Varro `opencode-config-service.ts`, permission judge and pending snapshots; OpenJet `OpenCodeHostServices.kt`, `PermissionJudge.kt`, `NativeDecisions.kt` and `RestProxy.kt`. | The project settings response still omits inherited-file provenance, and previously documented repeated equivalent reviews and cross-root pending-snapshot differences remain. Effective rules are still read from OpenCode. This sync does not claim a full permission-system parity audit. |
+| Existing runtime/platform differences | Varro state-path, provider-refresh, quota, cleanup, Windows inspection and remote-image services; OpenJet `OpenCodeV2SessionState.kt`, `VarroProjectService.kt`, `ProviderQuotaBackend.kt`, `ArtifactCleanup.kt`, `ServerOwnership.kt`, `RemoteImages.kt` and `ImageThumbnails.kt`. | Annotation-root selection, provider refresh, quota polling/validation, bounded cleanup, process inspection and AVIF differences documented in prior reviews remain. None changed in the reviewed upstream delta. |
+| Unverified releases and environments | Unchanged V1 SDK/support floors, native Windows/Linux, live providers and interactive account flows. | The exact V2 2.2.6 checks do not establish released V1, lower-bound, other-platform or live-account behavior. Plugin Verifier was not rerun. |
+
+No new required Kotlin host or consumed-contract implementation gap remains in
+the reviewed changes. Existing differences above were not reverified for full
+parity. No production sessions, credentials, databases or service registrations
+were used. No commit, push or tag was made.
 
 ## Verification
 

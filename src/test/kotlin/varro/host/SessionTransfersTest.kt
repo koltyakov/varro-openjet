@@ -69,6 +69,7 @@ class SessionTransfersTest {
             "POST" to "/varro/session/ses_one/pin", "GET" to "/session/ses_one/background-process"))
             assertThrows(IllegalStateException::class.java) { transfers.authorizeRequest(method, path) }
         assertThrows(IllegalStateException::class.java) { transfers.authorizeRequest("POST", ApiRoutes.Endpoints.PERMISSION_PROJECT_ALLOW, Json.obj("sessionId" to "ses_one")) }
+        assertThrows(IllegalStateException::class.java) { transfers.authorizeRequest("POST", ApiRoutes.Endpoints.PERMISSION_GLOBAL_ALLOW, Json.obj("sessionId" to "ses_one")) }
         assertNull(transfers.authorizeRequest("POST", "/session/ses_other/prompt_async"))
     }
 

@@ -6,7 +6,7 @@ import varro.protocol.*
 import java.net.URLDecoder
 import java.net.URLEncoder
 
-/** Only allowances observed through this host are user-managed, never arbitrary server rules. */
+/** Observed approvals are editable; other native rows have unknown origin and can only be revoked. */
 internal class OpenCodeSavedPermissions(
     private val apiVersion: () -> Int,
     initial: JsonElement? = null,
@@ -15,8 +15,13 @@ internal class OpenCodeSavedPermissions(
     private val request: (String, String, JsonElement?, RequestOptions) -> OpenCodeResponse,
 ) {
     private val observed = ServerMemoryPermissionStore(initial, persist)
+    private val generation = java.util.concurrent.atomic.AtomicLong()
     private fun server() = "${apiVersion()}:${serverUrl()}"
-    fun reset() = observed.clearLegacy()
+    fun reset() { generation.incrementAndGet(); observed.clearLegacy() }
+    private fun connection() = server() to generation.get()
+    private fun assertCurrent(expected: Pair<String, Long>) {
+        check(connection() == expected) { "OpenCode server changed. Refresh saved approvals before retrying." }
+    }
     private fun scope(rule: JsonObject) = "${rule.str("permission")}\u0000${rule.str("pattern")}"
     fun remember(rules: List<JsonObject>) = observed.remember(server(), rules)
 
@@ -48,6 +53,7 @@ internal class OpenCodeSavedPermissions(
     }
 
     @Synchronized fun handle(method: String, sessionID: String?, body: JsonElement?, options: RequestOptions): JsonObject {
+        val expected = connection()
         val input = body.asObjectOrNull()
         val id = if (method != "GET") input.text("id")?.trim() ?: error("Saved permission ID is required") else null
         val permission = input.str("permission")
@@ -58,15 +64,21 @@ internal class OpenCodeSavedPermissions(
         val projectID = project.text(if (sessionID == null) "id" else "projectID") ?: error("Project is unavailable")
         val current = list(projectID, options)
         if (id == null) return current
+        options.checkCancelled()
+        assertCurrent(expected)
         check(current.bool("supported") == true) { "Saved permissions are unavailable on this OpenCode server" }
+        check(!current.has("stale")) { "Could not refresh saved permissions. Retry before changing approvals." }
         require(!id.startsWith("legacy:")) { "Restart OpenCode to clear this server-memory allowance" }
-        val rule = current.arr("rules").orEmpty().mapNotNull { it.asObjectOrNull() }
+        val candidates = current.arr("rules").orEmpty() + if (method == "DELETE") current.arr("untrackedRules").orEmpty() else emptyList()
+        val rule = candidates.mapNotNull { it.asObjectOrNull() }
             .firstOrNull { it.str("id") == id && it.str("projectID") == projectID } ?: error("Saved permission not found for this project")
         val path = "/api/permission/saved/${encode(id)}"
         if (method == "PATCH") {
             check(rule.bool("editable") == true) { "Saved-permission editing is unavailable on this OpenCode server" }
             val action = OpenCodeV2Projection.nativeAction(permission!!)
             val updated = request("PATCH", path, Json.obj("action" to action, "resource" to pattern), options).data.asObjectOrNull().obj("data")
+            options.checkCancelled()
+            assertCurrent(expected)
             check(updated.str("id") == id && updated.str("projectID") == projectID && updated.str("action") == action && updated.str("resource") == pattern) {
                 "Could not verify the saved-permission update. Refresh before retrying."
             }
@@ -74,13 +86,26 @@ internal class OpenCodeSavedPermissions(
         } else {
             require(method == "DELETE") { "Unsupported saved-permission mutation" }
             request("DELETE", path, null, options)
-            observed.forget(server(), rule)
+            options.checkCancelled()
+            assertCurrent(expected)
+            val next = list(projectID, options)
+            assertCurrent(expected)
+            check(next.bool("supported") == true && !next.has("stale")) {
+                "Removal was sent, but could not be verified. Refresh saved approvals to check."
+            }
+            check((next.arr("rules").orEmpty() + next.arr("untrackedRules").orEmpty()).none { it.asObjectOrNull().str("id") == id }) {
+                "OpenCode still reports this saved approval. Refresh before retrying."
+            }
+            observed.forget(expected.first, rule)
+            return next
         }
         return list(projectID, options)
     }
 
     private fun list(projectID: String, options: RequestOptions): JsonObject {
-        val legacy = observed.get(server(), projectID)
+        val expected = connection()
+        val version = apiVersion()
+        val legacy = observed.get(expected.first, projectID)
         return try {
             val response = request("GET", "/api/permission/saved?projectID=${encode(projectID)}", null, options).data
             val values = response.asArrayOrNull() ?: response.asObjectOrNull().arr("data")
@@ -91,25 +116,40 @@ internal class OpenCodeSavedPermissions(
                 com.intellij.openapi.diagnostic.logger<OpenCodeSavedPermissions>().warn("Could not discover saved-permission editing", failure)
                 false
             }
-            val saved = values.mapNotNull { value -> value.asObjectOrNull()?.let { rule ->
-                if (rule.str("id") == null || rule.str("projectID") != projectID || rule.str("action") == null || rule.str("resource") == null) null
-                else Json.obj("id" to rule.get("id"), "projectID" to projectID,
-                    "permission" to if (apiVersion() == 2) OpenCodeV2Projection.legacyAction(rule.str("action")) else rule.str("action"),
-                    "pattern" to rule.get("resource")).apply { if (editable) addProperty("editable", true) }
-            } }.filter { rule -> legacy.any { it.str("id") == rule.str("id") ||
+            val native = values.map { value ->
+                val rule = value.asObjectOrNull()
+                require(listOf("id", "projectID", "action", "resource").all { rule.str(it) != null }) {
+                    "OpenCode returned an invalid saved-permission record. Refresh before retrying."
+                }
+                Json.obj("id" to rule!!.get("id"), "projectID" to rule.get("projectID"),
+                    "permission" to if (version == 2) OpenCodeV2Projection.legacyAction(rule.str("action")) else rule.str("action"),
+                    "pattern" to rule.get("resource"))
+            }.filter { it.str("projectID") == projectID }
+            options.checkCancelled()
+            assertCurrent(expected)
+            val saved = native.filter { rule -> legacy.any { it.str("id") == rule.str("id") ||
                 (it.str("id").orEmpty().startsWith("legacy:") && scope(it) == scope(rule)) } }
+            if (editable) saved.forEach { it.addProperty("editable", true) }
             val scopes = saved.map(::scope).toSet()
             if (apiVersion() == 2) {
                 val ids = saved.map { it.str("id") }.toSet()
                 legacy.filter { if (it.str("id").orEmpty().startsWith("legacy:")) scope(it) in scopes else it.str("id") !in ids }
-                    .forEach { observed.forget(server(), it) }
-                remember(saved)
+                    .forEach { observed.forget(expected.first, it) }
+                observed.remember(expected.first, saved)
             }
             Json.obj("supported" to true, "rules" to saved + legacy.filter {
                 (apiVersion() != 2 || it.str("id").orEmpty().startsWith("legacy:")) && scope(it) !in scopes
-            })
+            }).apply {
+                if (version == 2) {
+                    val ids = saved.map { it.str("id") }.toSet()
+                    val untracked = native.filter { it.str("id") !in ids }
+                    if (untracked.isNotEmpty()) add("untrackedRules", Json.array(untracked))
+                }
+            }
         } catch (failure: Exception) {
-            if (legacy.isNotEmpty()) Json.obj("supported" to true, "rules" to legacy.map { it.apply { remove("editable") } })
+            if (legacy.isNotEmpty()) Json.obj("supported" to true, "rules" to legacy.map { it.apply { remove("editable") } }).apply {
+                if (version == 2) addProperty("stale", failure.message ?: "Could not refresh saved permissions")
+            }
             else Json.obj("supported" to false, "rules" to emptyList<Any>(), "reason" to failure.message)
         }
     }

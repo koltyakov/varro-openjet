@@ -1,5 +1,6 @@
 package varro.server
 
+import com.google.gson.JsonObject
 import org.junit.Assert.*
 import org.junit.Assume.assumeTrue
 import org.junit.Rule
@@ -257,6 +258,7 @@ class OpenCodeV2IntegrationTest {
             assertNotNull(password.get())
             if (OpenCodeCli.compareVersions(version, "2.0.27") >= 0) verifyMcpDefaults(root, transport)
             verifySymlinkedWorkspace(root, workspace, port, password, version)
+            if (OpenCodeCli.compareVersions(version, "2.2.6") >= 0) verifyPermissionScopes(root, transport)
             if (OpenCodeCli.compareVersions(version, "2.1.2") >= 0) verifyFreeModelExclusions(transport, root)
             if (OpenCodeCli.compareVersions(version, "2.2.0") >= 0) {
                 val requestsBefore = providerRequests.get()
@@ -544,6 +546,110 @@ class OpenCodeV2IntegrationTest {
             reader.join(1000)
             provider.stop(0)
             providerExecutor.shutdownNow()
+        }
+    }
+
+    private fun verifyPermissionScopes(root: java.nio.file.Path, transport: OpenCodeTransport) {
+        val workspace = Files.createDirectories(root.resolve("permission-lifetime"))
+        val nested = Files.createDirectories(workspace.resolve(".opencode"))
+        Files.writeString(nested.resolve("opencode.json"), "{}")
+        val base = Files.writeString(workspace.resolve("opencode.json"), Json.stringify(Json.obj("permissions" to listOf(
+            Json.obj("action" to "read", "resource" to "*", "effect" to "ask")))))
+        val config = varro.host.ProjectPermissionConfig(workspace, native = { true })
+        val globalPath = root.resolve("config/opencode/opencode.json")
+        val originalGlobal = Files.readString(globalPath)
+        val global = varro.host.GlobalPermissionConfig(globalPath.parent)
+        val sessions = mutableListOf<String>()
+        val directories = mutableMapOf<String, String>()
+        fun create(directory: java.nio.file.Path, askAll: Boolean = false): String {
+            // Native permission requests do not initialize the location's agent catalog themselves.
+            transport.request("GET", "/agent", options = RequestOptions(directory = directory.toString()))
+            val body = Json.obj("title" to "Permission scope fixture", "agent" to "build")
+            if (askAll) body.add("permission", Json.array(listOf(Json.obj("permission" to "*", "pattern" to "*", "action" to "ask"))))
+            return transport.request("POST", "/session", body, RequestOptions(directory = directory.toString())).data.asObjectOrNull().str("id")!!.also {
+                sessions.add(it); directories[it] = directory.toString()
+            }
+        }
+        fun ask(id: String, action: String, resource: String) = transport.request("POST", "/api/session/$id/permission",
+            Json.obj("action" to action, "resources" to listOf(resource), "save" to listOf(resource)), RequestOptions(directory = directories[id])).data.asObjectOrNull().obj("data")!!
+        fun reply(id: String, request: JsonObject, standing: Boolean = false) {
+            // Native reply intentionally bypasses this host's observation capture for the origin-unknown case.
+            transport.request("POST", "/api/session/$id/permission/${request.str("id")}/reply", Json.obj("decision" to if (standing) "always" else "once"), RequestOptions(directory = directories[id]))
+        }
+        fun saved() = transport.request("GET", "/api/permission/saved").data
+        val service = varro.host.PermissionService(varro.store.VarroStore(), apiVersion = { 2 },
+            allowConfigPermission = { permission, patterns, scope, directory ->
+                if (scope == "global") global.allow(permission, patterns)
+                else {
+                    assertEquals(workspace.toString(), directory)
+                    config.allow(permission, patterns)
+                }
+            }) { method, path, body, directory -> transport.request(method, path, body, RequestOptions(directory = directory)).data }
+        try {
+            val before = saved()
+            val first = create(workspace)
+            val pending = ask(first, "read", "fixture-read/one")
+            assertEquals("ask", pending.str("effect"))
+            service.allow(Json.obj("sessionId" to first, "permissionId" to pending.str("id"), "patterns" to listOf("fixture-read/*")), true, workspace.toString())
+            assertEquals(nested.resolve("opencode.json"), config.path())
+            assertEquals("ask", transport.request("GET", "/permission", options = RequestOptions(directory = workspace.toString())).data.asArrayOrNull()!!.let {
+                if (it.any { item -> item.asObjectOrNull().str("id") == pending.str("id") }) "ask" else "missing"
+            })
+            reply(first, pending)
+            assertEquals(before, saved())
+            transport.request("POST", "/instance/dispose", options = RequestOptions(directory = workspace.toString()))
+            val second = create(workspace)
+            assertEquals("allow", ask(second, "read", "fixture-read/two").str("effect"))
+            assertEquals(before, saved())
+            Files.delete(config.path())
+            assertTrue(Files.exists(base))
+            transport.request("POST", "/instance/dispose", options = RequestOptions(directory = workspace.toString()))
+            val third = create(workspace)
+            val revoked = ask(third, "read", "fixture-read/three")
+            assertEquals("ask", revoked.str("effect")); reply(third, revoked)
+
+            global.write(Json.array(listOf(Json.obj("permission" to "webfetch", "pattern" to "*", "action" to "ask"))))
+            fun globalProject(name: String): java.nio.file.Path = Files.createDirectories(root.resolve("global-$name")).also { directory ->
+                val git = ProcessBuilder("git", "init", "--quiet").directory(directory.toFile()).start()
+                assertTrue(git.waitFor(10, TimeUnit.SECONDS)); assertEquals(0, git.exitValue())
+            }
+            val one = globalProject("one")
+            val globalSession = create(one)
+            val globalPending = ask(globalSession, "webfetch", "https://trusted.example/one")
+            assertEquals("ask", globalPending.str("effect"))
+            service.allowGlobal(Json.obj("sessionId" to globalSession, "permissionId" to globalPending.str("id"),
+                "patterns" to listOf("https://trusted.example/*")), one.toString())
+            reply(globalSession, globalPending)
+            val other = create(globalProject("two"))
+            assertEquals("allow", ask(other, "webfetch", "https://trusted.example/two").str("effect"))
+            val outside = ask(other, "webfetch", "https://other.example/")
+            assertEquals("ask", outside.str("effect")); reply(other, outside)
+            global.write(Json.array(listOf(Json.obj("permission" to "webfetch", "pattern" to "*", "action" to "ask"))))
+            val afterGlobalRemoval = create(globalProject("revoked"))
+            val globalRevoked = ask(afterGlobalRemoval, "webfetch", "https://trusted.example/revoked")
+            assertEquals("ask", globalRevoked.str("effect")); reply(afterGlobalRemoval, globalRevoked)
+            assertEquals(before, saved())
+
+            val unknown = create(workspace, true)
+            val resource = "fixture-untracked-approval *"
+            val unknownPending = ask(unknown, "shell", resource)
+            assertEquals("ask", unknownPending.str("effect")); reply(unknown, unknownPending, true)
+            val options = RequestOptions(directory = workspace.toString())
+            val panel = transport.savedPermissions.handle("GET", unknown, null, options)
+            val row = panel.arr("untrackedRules")!!.map { it.asJsonObject }.single { it.str("pattern") == resource }
+            assertFalse(panel.arr("rules").orEmpty().any { it.asObjectOrNull().str("id") == row.str("id") })
+            assertFalse(row.has("editable"))
+            val sessionRules = transport.request("GET", "/session/$unknown").data.asObjectOrNull().arr("permission")!!.deepCopy()
+            val removed = transport.savedPermissions.handle("DELETE", unknown, Json.obj("id" to row.str("id")), options)
+            assertFalse(removed.arr("untrackedRules").orEmpty().any { it.asObjectOrNull().str("id") == row.str("id") })
+            assertEquals(sessionRules, transport.request("GET", "/session/$unknown").data.asObjectOrNull().arr("permission"))
+            val unknownRevoked = ask(unknown, "shell", resource)
+            assertEquals("ask", unknownRevoked.str("effect")); reply(unknown, unknownRevoked)
+            assertEquals(before, saved())
+        } finally {
+            Files.writeString(globalPath, originalGlobal)
+            sessions.reversed().forEach { transport.request("DELETE", "/session/$it") }
+            transport.request("POST", "/global/dispose")
         }
     }
 

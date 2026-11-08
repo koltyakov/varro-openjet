@@ -12,7 +12,7 @@ internal object ProjectConfigEdit {
     private val locks = Array(64) { Any() }
 
     fun update(file: Path, beforeWrite: () -> Unit = {}, edit: (String) -> String) {
-        val path = file.toAbsolutePath().normalize()
+        val path = canonical(file)
         synchronized(locks[(path.hashCode() and Int.MAX_VALUE) % locks.size]) {
             val original = read(path)
             val updated = edit(original.orEmpty())
@@ -39,5 +39,12 @@ internal object ProjectConfigEdit {
         if (!Files.exists(path)) return null
         require(Files.size(path) <= 4 * 1024 * 1024) { "OpenCode project configuration is too large" }
         return Files.readString(path)
+    }
+
+    internal fun canonical(file: Path): Path {
+        val absolute = file.toAbsolutePath().normalize()
+        if (Files.exists(absolute)) return absolute.toRealPath()
+        val parent = generateSequence(absolute.parent) { it.parent }.firstOrNull(Files::exists) ?: return absolute
+        return parent.toRealPath().resolve(parent.relativize(absolute))
     }
 }

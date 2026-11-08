@@ -41,7 +41,7 @@ class OpenCodeSavedPermissionsTest {
         assertEquals(Json.obj("action" to "subagent", "resource" to "audit *"), mutations.single())
         assertEquals("task", result.arr("rules")!!.single().asJsonObject.str("permission"))
         for (id in listOf("foreign", "unobserved")) assertThrows(IllegalStateException::class.java) {
-            service.handle("DELETE", null, Json.obj("id" to id), options)
+            service.handle("PATCH", null, Json.obj("id" to id, "permission" to "bash", "pattern" to "*"), options)
         }
         assertEquals(1, mutations.size)
     }
@@ -69,7 +69,7 @@ class OpenCodeSavedPermissionsTest {
         available = false
         service.remember(listOf(observed()))
         assertEquals(false, service.handle("GET", null, null, options).arr("rules")!!.single().asJsonObject.bool("retractable"))
-        assertThrows(IllegalArgumentException::class.java) { service.handle("DELETE", null, Json.obj("id" to "legacy:request:0"), options) }
+        assertThrows(IllegalStateException::class.java) { service.handle("DELETE", null, Json.obj("id" to "legacy:request:0"), options) }
     }
 
     @Test fun `conflicts unverified acknowledgements and invalid drafts do not change mirrored scope`() {
@@ -201,5 +201,117 @@ class OpenCodeSavedPermissionsTest {
         assertTrue(OpenCodeApiCapabilities.read(value).savedPermissionEditing)
         value.obj("components").obj("schemas")!!.add("edit/saved~", Json.obj("\$ref" to "#/components/schemas/edit~1saved~0"))
         assertFalse(OpenCodeApiCapabilities.read(value).savedPermissionEditing)
+    }
+
+    @Test fun `untracked native rows are visible without adoption or editing and removal is verified`() {
+        var rows = listOf(Json.obj("id" to "unknown", "projectID" to "project", "action" to "shell", "resource" to "internal *"),
+            Json.obj("id" to "foreign", "projectID" to "other", "action" to "read", "resource" to "*"))
+        var writes = 0
+        val calls = mutableListOf<String>()
+        val service = OpenCodeSavedPermissions({ 2 }, persist = { writes++ }) { method, path, _, _ ->
+            calls += "$method $path"
+            OpenCodeResponse(when {
+                path == "/project/current" -> Json.obj("id" to "project")
+                path == "/openapi.json" -> spec()
+                path.startsWith("/api/permission/saved?") -> Json.obj("data" to rows)
+                method == "DELETE" && path == "/api/permission/saved/unknown" -> { rows = rows.filter { it.str("id") != "unknown" }; null }
+                else -> error("Unexpected $method $path")
+            })
+        }
+        val panel = service.handle("GET", null, null, RequestOptions())
+        assertTrue(panel.arr("rules")!!.isEmpty)
+        assertEquals("unknown", panel.arr("untrackedRules")!!.single().asJsonObject.str("id"))
+        assertFalse(panel.arr("untrackedRules")!!.single().asJsonObject.has("editable")); assertEquals(0, writes)
+        assertThrows(IllegalStateException::class.java) { service.handle("PATCH", null, Json.obj("id" to "unknown", "permission" to "bash", "pattern" to "*"), RequestOptions()) }
+        assertThrows(IllegalStateException::class.java) { service.handle("DELETE", null, Json.obj("id" to "foreign"), RequestOptions()) }
+        calls.clear()
+        val removed = service.handle("DELETE", null, Json.obj("id" to "unknown"), RequestOptions())
+        assertFalse(removed.has("untrackedRules")); assertEquals(0, writes)
+        val deletion = calls.indexOf("DELETE /api/permission/saved/unknown")
+        assertTrue(deletion >= 0 && calls.drop(deletion + 1).any { it.startsWith("GET /api/permission/saved?") })
+        assertFalse(calls.any { it.startsWith("PATCH") || "dispose" in it || "/permission/" in it && !it.contains("/permission/saved") })
+    }
+
+    @Test fun `stale malformed or unavailable native snapshots cannot authorize any mutation`() {
+        for (failure in listOf("network", "malformed", "invalid-foreign")) {
+            var bad = false
+            var mutations = 0
+            var stored = Json.array(emptyList<Any>())
+            val service = OpenCodeSavedPermissions({ 2 }, persist = { stored = it }) { method, path, _, _ ->
+                if (method != "GET") { mutations++; error("Mutation forbidden") }
+                OpenCodeResponse(when {
+                    path == "/project/current" -> Json.obj("id" to "project")
+                    path == "/openapi.json" -> spec()
+                    path.startsWith("/api/permission/saved?") -> {
+                        if (bad && failure == "network") error("503 unavailable")
+                        Json.obj("data" to if (!bad) listOf(Json.obj("id" to "saved", "projectID" to "project", "action" to "shell", "resource" to "git *"))
+                            else listOf(Json.obj("id" to "malformed", "projectID" to if (failure == "invalid-foreign") "other" else "project")))
+                    }
+                    else -> error("Unexpected $path")
+                })
+            }
+            service.approved(listOf(observed()), RequestOptions())
+            val before = stored.deepCopy()
+            bad = true
+            val stale = service.handle("GET", null, null, RequestOptions())
+            assertTrue(stale.has("stale")); assertFalse(stale.arr("rules")!!.single().asJsonObject.has("editable"))
+            for (method in listOf("PATCH", "DELETE")) assertThrows(IllegalStateException::class.java) {
+                service.handle(method, null, Json.obj("id" to "saved", "permission" to "bash", "pattern" to "*"), RequestOptions())
+            }
+            assertEquals(0, mutations); assertEquals(before, stored)
+        }
+    }
+
+    @Test fun `failed or inconclusive removal keeps native tracking for an actionable refresh`() {
+        for (failure in listOf("retained", "malformed", "network", "delete-failed")) {
+            var deletion = false
+            var stored = Json.array(emptyList<Any>())
+            val service = OpenCodeSavedPermissions({ 2 }, persist = { stored = it }) { method, path, _, _ ->
+                OpenCodeResponse(when {
+                    path == "/project/current" -> Json.obj("id" to "project")
+                    path == "/openapi.json" -> spec()
+                    path.startsWith("/api/permission/saved?") -> {
+                        if (deletion && failure == "network") error("503 verification unavailable")
+                        Json.obj("data" to if (deletion && failure == "malformed") listOf(Json.obj("id" to "saved"))
+                            else listOf(Json.obj("id" to "saved", "projectID" to "project", "action" to "shell", "resource" to "git *")))
+                    }
+                    method == "DELETE" -> { if (failure == "delete-failed") error("500 deletion failed"); deletion = true; null }
+                    else -> error("Unexpected $method $path")
+                })
+            }
+            service.approved(listOf(observed()), RequestOptions())
+            val before = stored.deepCopy()
+            assertThrows(IllegalStateException::class.java) { service.handle("DELETE", null, Json.obj("id" to "saved"), RequestOptions()) }
+            assertEquals(before, stored)
+        }
+    }
+
+    @Test fun `URL protocol and reset changes cannot mutate or adopt another connection snapshot`() {
+        for (change in listOf("url", "protocol", "reset")) for (stage in listOf("list", "delete")) {
+            var url = "http://one"
+            var version = 2
+            var trigger = false
+            var mutations = 0
+            var persisted = Json.array(emptyList<Any>())
+            lateinit var service: OpenCodeSavedPermissions
+            fun switch() { when (change) { "url" -> url = "http://two"; "protocol" -> version = 1; else -> service.reset() } }
+            service = OpenCodeSavedPermissions({ version }, persist = { persisted = it.deepCopy() }, serverUrl = { url }) { method, path, _, _ ->
+                OpenCodeResponse(when {
+                    path == "/project/current" -> Json.obj("id" to "project")
+                    path == "/openapi.json" -> spec()
+                    path.startsWith("/api/permission/saved?") -> {
+                        if (trigger && stage == "list") switch()
+                        Json.obj("data" to listOf(Json.obj("id" to "saved", "projectID" to "project", "action" to "shell", "resource" to "git *")))
+                    }
+                    method == "DELETE" -> { mutations++; switch(); null }
+                    else -> error("Unexpected $method $path")
+                })
+            }
+            service.approved(listOf(observed()), RequestOptions())
+            val before = persisted.deepCopy()
+            trigger = true
+            assertThrows(IllegalStateException::class.java) { service.handle("DELETE", null, Json.obj("id" to "saved"), RequestOptions()) }
+            assertEquals(if (stage == "delete") 1 else 0, mutations); assertEquals(before, persisted)
+        }
     }
 }

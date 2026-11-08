@@ -109,11 +109,13 @@ class RestProxy(
         fun disableProvider(body: JsonElement?): JsonElement
         fun readOpenCodePermissions(): JsonObject
         fun updateOpenCodePermissions(body: JsonElement?): JsonObject
+        fun globalPermissions(method: String, body: JsonElement?): JsonObject
         fun judgePermission(body: JsonElement?): JsonObject
         fun judgeModel(providerId: String?, modelId: String?, variant: String?): JsonObject
         fun decisionProviders(method: String, body: JsonElement?): JsonObject
         fun permissionRules(sessionId: String, rules: JsonElement?, directory: String?): JsonArray
         fun allowPermission(body: JsonObject, project: Boolean, directory: String?): JsonArray
+        fun allowGlobalPermission(body: JsonObject, directory: String?): JsonArray
         fun providerLimit(providerId: String, modelId: String?): JsonObject
         fun sessionDiffSummary(sessionId: String, directory: String?, revision: String?): JsonObject
     }
@@ -427,6 +429,8 @@ class RestProxy(
                 if (method == "GET") services.readOpenCodePermissions()
                 else services.updateOpenCodePermissions(body)
 
+            pathname == ApiRoutes.Endpoints.OPENCODE_GLOBAL_PERMISSIONS -> services.globalPermissions(method, body)
+
             pathname == ApiRoutes.Endpoints.PERMISSION_JUDGE -> services.judgePermission(body)
 
             pathname == ApiRoutes.Endpoints.DECISION_PROVIDERS -> services.decisionProviders(method, body)
@@ -469,6 +473,10 @@ class RestProxy(
                     body.asObjectOrNull() ?: error("Missing permission request"),
                     pathname == ApiRoutes.Endpoints.PERMISSION_PROJECT_ALLOW, q("directory"),
                 )
+
+            pathname == ApiRoutes.Endpoints.PERMISSION_GLOBAL_ALLOW -> services.allowGlobalPermission(
+                body.asObjectOrNull() ?: error("Missing permission request"), q("directory"),
+            )
 
             else -> throw IllegalArgumentException("Unsupported Varro API request: $pathname")
         }

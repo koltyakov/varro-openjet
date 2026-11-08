@@ -13,6 +13,58 @@ class ProjectPermissionConfigTest {
     @JvmField @Rule val temporary = TemporaryFolder()
     private val rules = Json.array(listOf(Json.obj("permission" to "bash", "pattern" to "git *", "action" to "ask")))
 
+    @Test fun `new V2 rules use native arrays while existing legacy syntax is preserved`() {
+        for (legacy in listOf(false, true)) {
+            val root = temporary.newFolder().toPath()
+            val file = root.resolve("opencode.jsonc")
+            Files.writeString(file, if (legacy) "{ // keep\n \"permission\": {\"bash\":\"deny\"}, \"model\":\"p/m\" }" else "{ // keep\n \"model\":\"p/m\" }")
+            val config = ProjectPermissionConfig(root, { true })
+            assertEquals(!legacy, config.supportsPatterns())
+            config.write(rules)
+            val raw = Files.readString(file)
+            assertTrue(raw.contains("// keep")); assertTrue(raw.contains("\"model\":\"p/m\""))
+            val document = Json.parse(ProjectPermissionConfig.stripJsonComments(raw)).asJsonObject
+            assertEquals(!legacy, document.has("permissions")); assertEquals(legacy, document.has("permission"))
+            assertEquals(rules, config.read())
+        }
+    }
+
+    @Test fun `native URL-specific allowances append in order and do not use legacy scalar restrictions`() {
+        val config = ProjectPermissionConfig(temporary.newFolder().toPath(), { true })
+        config.write(Json.array(listOf(Json.obj("permission" to "webfetch", "pattern" to "*", "action" to "ask"))))
+        config.allow("webfetch", listOf("https://trusted.example/*"))
+        val saved = config.read()
+        assertEquals(listOf("*", "https://trusted.example/*"), saved.map { it.asJsonObject.str("pattern") })
+        assertEquals(listOf("ask", "allow"), saved.map { it.asJsonObject.str("action") })
+    }
+
+    @Test fun `independent standing approval writers merge fresh config without losing rules`() {
+        val root = temporary.newFolder().toPath()
+        val pool = Executors.newFixedThreadPool(4)
+        try {
+            val writes = (1..8).map { index -> pool.submit { ProjectPermissionConfig(root, { true }).allow("read", listOf("file-$index")) } }
+            writes.forEach { it.get(10, TimeUnit.SECONDS) }
+            assertEquals((1..8).map { "file-$it" }.toSet(), ProjectPermissionConfig(root, { true }).read().map { it.asJsonObject.str("pattern") }.toSet())
+        } finally { pool.shutdownNow() }
+    }
+
+    @Test fun `dirty targets symlink aliases and changed target selection cannot overwrite config`() {
+        val root = temporary.newFolder().toPath()
+        val file = Files.writeString(root.resolve("opencode.json"), "{}")
+        val config = ProjectPermissionConfig(root, { true }, beforeSave = { error("unsaved document") })
+        assertThrows(IllegalStateException::class.java) { config.write(rules) }
+        assertEquals("{}", Files.readString(file))
+        val alias = Files.createSymbolicLink(root.resolve("alias"), root)
+        ProjectPermissionConfig(alias, { true }).write(rules)
+        assertTrue(Files.isSymbolicLink(alias)); assertEquals(rules, ProjectPermissionConfig(root).read())
+        assertThrows(IllegalArgumentException::class.java) {
+            ProjectPermissionConfig(root, { true }).write(rules.deepCopy().apply { add(Json.obj("permission" to "read", "pattern" to "*", "action" to "deny")) }) {
+                Files.writeString(root.resolve("opencode.jsonc"), "{\"model\":\"changed\"}")
+            }
+        }
+        assertEquals(rules, ProjectPermissionConfig(root, target = { file }).read())
+    }
+
     @Test fun `permission edits retain comments whitespace unrelated fields and JSONC filename`() {
         val root = temporary.root.toPath()
         val path = root.resolve("opencode.jsonc")

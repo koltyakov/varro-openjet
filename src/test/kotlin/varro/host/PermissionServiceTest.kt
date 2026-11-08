@@ -12,6 +12,64 @@ class PermissionServiceTest {
     private fun pending() = Json.obj("id" to "p", "sessionID" to "s", "permission" to "bash", "always" to listOf("npm *"))
     private fun session(directory: String = "/workspace") = Json.obj("id" to "s", "directory" to directory)
 
+    @Test fun `reviewed V2 patterns retain the server action session and pending identity`() {
+        for (scope in listOf("session", "project", "global")) {
+            var result: JsonArray? = null
+            val calls = mutableListOf<String>()
+            val service = PermissionService(VarroStore(), apiVersion = { 2 }, allowConfigPermission = { name, patterns, selected, directory ->
+                assertEquals("bash", name); assertEquals(listOf("git diff *"), patterns)
+                assertEquals(scope, selected); assertEquals("/workspace", directory)
+                Json.array(patterns.map { Json.obj("permission" to name, "pattern" to it, "action" to "allow") }).also { result = it }
+            }) { method, path, body, directory ->
+                calls += "$method $path"; assertEquals("/workspace", directory)
+                when ("$method $path") {
+                    "GET /session/s" -> session().apply { add("permission", JsonArray()) }
+                    "GET /permission" -> Json.array(listOf(pending()))
+                    "PATCH /session/s" -> { result = body.asObjectOrNull().arr("permission"); session() }
+                    else -> error("Unexpected $method $path")
+                }
+            }
+            val request = body.deepCopy().apply {
+                addProperty("permission", "*"); add("patterns", Json.array(listOf(" git diff * ", "git diff *")))
+            }
+            val saved = if (scope == "global") service.allowGlobal(request, "/workspace") else service.allow(request, scope == "project", "/workspace")
+            assertEquals(result, saved)
+            assertEquals("bash", saved.last().asJsonObject.str("permission"))
+            assertEquals("git diff *", saved.last().asJsonObject.str("pattern"))
+            assertFalse(calls.any { it.startsWith("POST") || "dispose" in it })
+        }
+    }
+
+    @Test fun `invalid reviewed patterns and V1 custom scopes fail before server reads`() {
+        val invalid = listOf(Json.toElement(null), Json.obj(), JsonArray(), Json.array(listOf("")), Json.array(listOf(" ")),
+            Json.array(listOf(4)), Json.array(listOf("x".repeat(2001))), Json.array(List(51) { "*" }))
+        for (version in listOf(1, 2)) {
+            val service = PermissionService(VarroStore(), apiVersion = { version }) { _, _, _, _ -> error("No server read allowed") }
+            for (patterns in invalid) assertThrows(IllegalArgumentException::class.java) {
+                service.allow(body.deepCopy().apply { add("patterns", patterns) }, false, null)
+            }
+            if (version == 1) {
+                assertThrows(IllegalArgumentException::class.java) { service.allow(body.deepCopy().apply { add("patterns", Json.array(listOf("*"))) }, false, null) }
+                assertThrows(IllegalArgumentException::class.java) { service.allowGlobal(body, null) }
+            }
+        }
+    }
+
+    @Test fun `reviewed global patterns never bypass pending request ownership or missing standing scope`() {
+        for (invalid in listOf("other-session", "missing-id", "no-scope")) {
+            val service = PermissionService(VarroStore(), apiVersion = { 2 }, allowConfigPermission = { _, _, _, _ -> error("Must not save") }) { _, path, _, _ ->
+                if (path == "/session/s") session() else Json.array(listOf(pending().apply {
+                    when (invalid) {
+                        "other-session" -> addProperty("sessionID", "other")
+                        "missing-id" -> addProperty("id", "other")
+                        else -> remove("always")
+                    }
+                }))
+            }
+            assertThrows(Exception::class.java) { service.allowGlobal(body.deepCopy().apply { add("patterns", Json.array(listOf("*"))) }, "/workspace") }
+        }
+    }
+
     @Test fun `session approval saves rules exactly once and never replies or reloads config`() {
         val calls = mutableListOf<String>()
         val store = VarroStore()

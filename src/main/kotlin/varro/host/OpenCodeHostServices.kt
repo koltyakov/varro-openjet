@@ -255,23 +255,26 @@ class OpenCodeHostServices(
             "inheritedSources" to Json.array(listOf(Json.obj("path" to "global/config",
                 "rules" to PermissionService.fromConfig(inherited.get("permission"))))),
             "effectiveRules" to PermissionService.fromConfig(effective?.get("permission")),
+            "supportsPatterns" to local.supportsPatterns(),
         )
     }
 
     @Synchronized override fun updateOpenCodePermissions(body: JsonElement?): JsonObject {
         val rules = PermissionService.validateRules(body.asObjectOrNull()?.get("rules"))
         projectPermissions().write(rules)
-        if (server.transport.apiVersion == 2) server.transport.request("POST", "/global/dispose", options = RequestOptions(directory = project.basePath))
-        else server.transport.request("PATCH", "/config", JsonObject(), RequestOptions(directory = project.basePath))
+        if (server.transport.apiVersion != 2) server.transport.request("PATCH", "/config", JsonObject(), RequestOptions(directory = project.basePath))
         return readOpenCodePermissions()
     }
 
-    private val permissions = PermissionService(varro.store.VarroStore.getInstance(project), projectRules = { directory ->
-        projectPermissions(directory).read()
-    }, saveProjectRules = { rules, directory ->
-        projectPermissions(directory).write(rules)
-        // Reloading config can dispose the instance that owns the pending request.
-        // The webview's next `always` reply applies the rule to the current runtime.
+    private val permissions = PermissionService(varro.store.VarroStore.getInstance(project),
+        apiVersion = { server.transport.apiVersion }, allowConfigPermission = { name, patterns, scope, directory ->
+        // The browser replies once on V2 after saving. Never reload the pending request's instance.
+        if (scope == "global") globalPermissionConfig().allow(name, patterns)
+        else {
+            val effective = server.transport.request("GET", "/config", options = RequestOptions(directory = directory)).data.asObjectOrNull()
+                ?: error("Could not read effective OpenCode permissions")
+            projectPermissions(directory).allow(name, patterns, effective.get("permission"))
+        }
     }) { method, path, body, directory ->
         server.transport.request(method, path, body, RequestOptions(directory = directory)).data
     }
@@ -287,6 +290,32 @@ class OpenCodeHostServices(
             throw failure
         }
 
+    override fun globalPermissions(method: String, body: JsonElement?): JsonObject {
+        val config = globalPermissionConfig()
+        return if (method == "GET") config.read()
+        else config.write(PermissionService.validateRules(body.asObjectOrNull()?.get("rules")))
+    }
+
+    override fun allowGlobalPermission(body: JsonObject, directory: String?): JsonArray {
+        globalPermissionConfig() // Reject V1/attach-only connections before any permission lookup.
+        return permissions.allowGlobal(body, directory)
+    }
+
+    private fun globalPermissionConfig(): GlobalPermissionConfig {
+        requireLocalConfig()
+        require(server.transport.apiVersion == 2) { "Global permission management requires OpenCode V2" }
+        val environment = server.cli.serverEnvironment()
+        val root = Path.of(environment["XDG_CONFIG_HOME"] ?: Path.of(System.getProperty("user.home"), ".config").toString(), "opencode")
+        return GlobalPermissionConfig(root, ::checkPermissionDocument)
+    }
+
+    private fun checkPermissionDocument(path: Path) {
+        val documents = com.intellij.openapi.fileEditor.FileDocumentManager.getInstance()
+        require(documents.unsavedDocuments.none { document -> documents.getFile(document)?.path?.let {
+            runCatching { ProjectPermissionConfig.canonical(Path.of(it)) == path }.getOrDefault(false)
+        } == true }) { "$path has unsaved changes; save or revert the document before updating permissions" }
+    }
+
     private fun notify(message: String, type: NotificationType) {
         NotificationGroupManager.getInstance()
             .getNotificationGroup(VarroProjectService.NOTIFICATION_GROUP)
@@ -297,6 +326,7 @@ class OpenCodeHostServices(
     private val projectPermissionConfig by lazy { ProjectPermissionConfig(
         Path.of(project.guessProjectDir()?.path ?: project.basePath ?: error("Project has no workspace directory")),
         native = { server.transport.apiVersion == 2 },
+        beforeSave = ::checkPermissionDocument,
     ) }
     private fun requireLocalConfig() {
         check(!server.isAttachOnly()) {
@@ -306,7 +336,7 @@ class OpenCodeHostServices(
 
     private fun projectPermissions(directory: String? = null): ProjectPermissionConfig {
         requireLocalConfig()
-        if (directory != null) return ProjectPermissionConfig(Path.of(directory), native = { server.transport.apiVersion == 2 })
+        if (directory != null) return ProjectPermissionConfig(Path.of(directory), native = { server.transport.apiVersion == 2 }, beforeSave = ::checkPermissionDocument)
         return projectPermissionConfig
     }
 

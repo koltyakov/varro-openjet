@@ -12,6 +12,21 @@ import org.junit.Test
  */
 class ApiRoutesTest {
 
+    @Test fun `global permissions use named host routes without arbitrary file paths or native permission writes`() {
+        val config = ApiRoutes.Endpoints.OPENCODE_GLOBAL_PERMISSIONS
+        for (method in listOf("GET", "POST")) {
+            assertTrue(ApiRoutes.isAllowed(method, config))
+            assertFalse(ApiRoutes.isAllowed(method, "$config?directory=/other"))
+            assertFalse(ApiRoutes.isAllowed(method, "$config?path=/private/config"))
+        }
+        for (method in listOf("PATCH", "DELETE", "PUT")) assertFalse(ApiRoutes.isAllowed(method, config))
+        val allow = ApiRoutes.Endpoints.PERMISSION_GLOBAL_ALLOW
+        assertTrue(ApiRoutes.isAllowed("POST", allow)); assertTrue(ApiRoutes.isAllowed("POST", "$allow?directory=%2Frepo"))
+        for (method in listOf("GET", "PATCH", "DELETE")) assertFalse(ApiRoutes.isAllowed(method, allow))
+        for (query in listOf("directory=", "directory=/a&directory=/b", "path=/private/config", "projectID=other")) assertFalse(ApiRoutes.isAllowed("POST", "$allow?$query"))
+        assertFalse(ApiRoutes.isAllowed("POST", "/api/permission/saved"))
+    }
+
     @Test fun `follow-ups expose only scoped POST generation and dismissal`() {
         for (path in listOf("/varro/session/ses_fixture/followups", "/varro/session/ses_fixture/followups/dismiss")) {
             assertTrue(ApiRoutes.isAllowed("POST", path))

@@ -31,7 +31,7 @@ class OpenCodeV2ConfigTest {
         Files.createDirectories(root.resolve(".opencode"))
         Files.writeString(root.resolve(".opencode/opencode.json"), """{"permissions":[{"action":"shell","resource":"*","effect":"ask"}]}""")
         val workspace = Files.createDirectories(root.resolve("project"))
-        val native = ProjectPermissionConfig(workspace) { true }
+        val native = ProjectPermissionConfig(workspace, native = { true })
         val rules = Json.array(listOf(Json.obj("permission" to "bash", "pattern" to "git *", "action" to "ask")))
         native.write(rules)
         assertEquals(workspace.resolve(".opencode/opencode.json"), native.path())
