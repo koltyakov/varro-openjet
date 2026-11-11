@@ -141,11 +141,11 @@ class VarroConfigurable : BoundConfigurable("Varro") {
 
         group("Notifications") {
             row {
-                checkBox("Show desktop notifications when the IDE is in the background")
+                checkBox("Show desktop notifications when this project window is not focused")
                     .bindSelected(settings::notificationsNative)
                     .comment("Permissions, questions, completed replies and plans ready for review. Also requires IDE and operating-system notification permissions.")
             }
-            row { comment("Play the water-bubble sound for selected events. Sound is independent of desktop notifications. On macOS, alerts stay quiet while an IDE window is still visible.") }
+            row { comment("Play the water-bubble sound for selected events when this project window is not focused, including while another IDE window is active. Sound is independent of desktop notifications.") }
             row { checkBox("Permission requests, including subagents").bindSelected(settings::notificationsSoundPermission) }
             row { checkBox("Questions needing your answer").bindSelected(settings::notificationsSoundQuestion) }
             row { checkBox("Completed replies").bindSelected(settings::notificationsSoundCompleted) }
@@ -166,7 +166,7 @@ class VarroConfigurable : BoundConfigurable("Varro") {
             row("Follow-up model:") {
                 textField()
                     .bindText(settings::chatFollowupModel)
-                    .comment("`providerID/modelID`. Empty uses the session model and reasoning. You can also assign a model in Varro's Models view. Hover an action to preview its prompt; click to send with unchanged permissions, draft, and attachments.")
+                    .comment("`providerID/modelID`. Empty uses the session model and reasoning. Hover to preview; click to send, or use the action menu to run in a background chat. Draft and attachments stay unchanged.")
                     .columns(40)
             }
             row("Prompt completion model:") {
@@ -174,6 +174,11 @@ class VarroConfigurable : BoundConfigurable("Varro") {
                     .bindText(settings::chatPromptCompletionModel)
                     .comment("`providerID/modelID`. Empty disables autocomplete. Requires OpenCode V2 and an API key. Drafts and recent chat context are sent directly to the provider. Tab accepts; Escape dismisses.")
                     .columns(40)
+            }
+            row {
+                checkBox("Trace auxiliary inference prompts")
+                    .bindSelected(settings::chatPromptTrace)
+                    .comment("Opt-in VARRO_TRACE_V1 attribution for follow-ups, judges, commit messages, side questions, and completion. Sends session IDs or a workspace hash as prompt text. Requires a compatible proxy to strip the line; otherwise the model receives it. Does not enable inference.")
             }
             row("Auto-approve judge model:") {
                 textField()

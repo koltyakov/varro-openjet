@@ -30,9 +30,9 @@ class AttentionNotificationsTest {
         fun ask(kind: Kind = Kind.QUESTION, id: String = "q", session: String = "root") = event(
             if (kind == Kind.QUESTION) "question.asked" else "permission.asked", Json.obj("id" to id, "sessionID" to session),
         )
-        fun deliver(after: Long = 300, visible: Boolean = false): AttentionNotifications.Delivery? {
+        fun deliver(after: Long = 300): AttentionNotifications.Delivery? {
             time += after
-            return state.deliver(visible)
+            return state.deliver()
         }
         fun finish(id: String = "root") { status("busy", id); status("idle", id) }
     }
@@ -108,7 +108,7 @@ class AttentionNotificationsTest {
         assertNotNull(f.deliver())
     }
 
-    @Test fun `focused or still visible editor consumes a burst without replay after losing focus`() {
+    @Test fun `focused originating window consumes a burst without replay after losing focus`() {
         for (focusedAtAsk in listOf(false, true)) {
             val f = Fixture()
             f.focused = focusedAtAsk
@@ -120,7 +120,7 @@ class AttentionNotificationsTest {
         }
         val f = Fixture()
         f.ask()
-        assertNull(f.deliver(visible = true))
+        assertNotNull(f.deliver()) // Other visible or focused IDE windows do not suppress this project's notice.
         assertNull(f.deliver(10_000))
     }
 
@@ -325,12 +325,12 @@ class AttentionNotificationsTest {
             val state = AttentionNotifications({ AttentionNotifications.Settings(native = true) }, { false }, { scope }, { time })
             state.reconcile(Kind.QUESTION, Json.array(listOf(Json.obj("id" to "q", "sessionID" to "unknown"))), state.snapshotRevision())
             time += 1_000
-            assertNull(state.deliver(false))
+            assertNull(state.deliver())
             assertNull(state.nextDeadline())
             scope = inProject
             state.observeSession(Json.obj("id" to "unknown"))
             time += 300
-            assertEquals(inProject, state.deliver(false) != null)
+            assertEquals(inProject, state.deliver() != null)
         }
     }
 

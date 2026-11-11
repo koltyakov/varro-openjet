@@ -36,7 +36,8 @@ internal class BackgroundProcessJudge(
                     (System.currentTimeMillis() - (shell.obj("time").long("started") ?: System.currentTimeMillis())) / 1000))),
         ).joinToString("\n")
         val text = OneShotGeneration(request).generate(2, prompt,
-            Json.obj("providerID" to providerID, "modelID" to modelID, "variant" to model.get("variant")), options) ?: return null
+            Json.obj("providerID" to providerID, "modelID" to modelID, "variant" to model.get("variant")), options,
+            purpose = "background-process-judge", sessionID = sessionID, requestID = shell.str("id")) ?: return null
         val verdict = runCatching {
             JsonReader(StringReader(text)).use { reader ->
                 reader.strictness = Strictness.STRICT

@@ -10,11 +10,9 @@ import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.ApplicationActivationListener
 import com.intellij.openapi.diagnostic.logger
 import com.intellij.openapi.project.Project
-import com.intellij.openapi.util.SystemInfo
 import com.intellij.openapi.util.text.StringUtil
 import com.intellij.openapi.wm.IdeFrame
 import com.intellij.ui.SystemNotifications
-import com.intellij.ui.mac.foundation.Foundation
 import com.intellij.util.Alarm
 import varro.protocol.*
 import varro.server.OpenCodeServer
@@ -47,7 +45,7 @@ internal class ProjectNotifications(
     private var lastNotification: Notification? = null
     private val soundLock = Any()
     private var clip: Clip? = null
-    private val state = AttentionNotifications(::preferences, { app.isActive }, ::inScope)
+    private val state = AttentionNotifications(::preferences, ::isFocused, ::inScope)
 
     init {
         app.messageBus.connect(this).subscribe(ApplicationActivationListener.TOPIC, object : ApplicationActivationListener {
@@ -113,7 +111,7 @@ internal class ProjectNotifications(
     }
 
     fun revealPermission(id: String) = onEdt { state.revealPermission(id) }
-    fun seen(id: String) = onEdt { if (app.isActive) state.seen(id) }
+    fun seen(id: String) = onEdt { if (isFocused()) state.seen(id) }
     fun settingsChanged() = onEdt {
         state.update()
         if (enabled() && server.currentStatus() is ServerStatus.Running) reconcilePending()
@@ -181,7 +179,7 @@ internal class ProjectNotifications(
         alarm.addRequest({
             if (!disposed && !project.isDisposed) {
                 state.update()
-                val delivery = state.deliver(editorVisible())
+                val delivery = state.deliver()
                 if (delivery != null) deliver(delivery)
                 schedule()
             }
@@ -205,7 +203,7 @@ internal class ProjectNotifications(
     }
 
     private fun playSound() = synchronized(soundLock) {
-        if (disposed || app.isActive) return@synchronized
+        if (disposed || isFocused()) return@synchronized
         val resource = requireNotNull(javaClass.getResource("/notifications/water-bubble.wav")) { "Notification sound is missing" }
         AudioSystem.getAudioInputStream(resource).use { audio ->
             clip?.close()
@@ -222,35 +220,15 @@ internal class ProjectNotifications(
         }
     }
 
-    private fun editorVisible(): Boolean {
-        if (app.isActive) return true
-        if (!SystemInfo.isMac) return false
-        return try {
-            var visible: Boolean? = null
-            // Cocoa owns NSWindow occlusion. Query on its main thread, including detached IDE windows.
-            Foundation.executeOnMainThread(true, true) {
-                val application = Foundation.invoke("NSApplication", "sharedApplication")
-                val windows = Foundation.invoke(application, "windows")
-                val count = Foundation.invoke(windows, "count").toInt()
-                var anyVisible = false
-                for (index in 0 until count) {
-                    val window = Foundation.invoke(windows, "objectAtIndex:", index.toLong())
-                    if (Foundation.invoke(window, "isVisible").booleanValue() &&
-                        Foundation.invoke(window, "occlusionState").toLong() and 2L != 0L) {
-                        anyVisible = true
-                        break
-                    }
-                }
-                visible = anyVisible
-            }
-            visible ?: true
-        } catch (error: LinkageError) {
-            log.debug("Native IDE visibility API is unavailable; suppressing notification", error)
-            true
-        } catch (error: Exception) {
-            log.debug("Could not determine IDE window visibility; suppressing notification", error)
-            true
+    private fun isFocused(): Boolean {
+        val component = com.intellij.openapi.wm.WindowManager.getInstance().getIdeFrame(project)?.component
+        val frame = component?.let(javax.swing.SwingUtilities::getWindowAncestor)
+        var active = java.awt.KeyboardFocusManager.getCurrentKeyboardFocusManager().activeWindow
+        while (active != null) {
+            if (active === frame || (active as? IdeFrame)?.project === project) return true
+            active = active.owner
         }
+        return false
     }
 
     override fun dispose() {

@@ -73,7 +73,7 @@ class CommitMessageService internal constructor(
             options.checkCancelled()
             val text = buildPrompt(bounded, recentMessages, rules)
             val generated = OneShotGeneration(request).generate(
-                apiVersion(), text,
+                apiVersion(), PromptTrace(request, { settings.chatPromptTrace }).prompt("commit-message", text, options),
                 Json.obj("providerID" to model.first, "modelID" to model.second),
                 options,
             )
@@ -142,7 +142,10 @@ class CommitMessageService internal constructor(
             Json.obj(
                 "model" to Json.obj("providerID" to model.first, "modelID" to model.second),
                 "parts" to JsonArray().apply { add(Json.obj("type" to "text", "text" to text)) },
-            ),
+            ).apply {
+                val trace = PromptTrace(request, { settings.chatPromptTrace }).prompt("commit-message", "", options, helperSessionID = sessionId)
+                if (trace.isNotEmpty()) addProperty("system", trace)
+            },
             options,
         )
         return collectAssistantText(sessionId, options) ?: Json.stringify(response.data)

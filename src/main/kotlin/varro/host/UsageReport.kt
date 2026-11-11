@@ -17,24 +17,26 @@ class UsageReport(
     private val ensureServerStarted: () -> Unit = {},
     private val attachOnly: Boolean = false,
     private val readAnnotations: (String) -> JsonObject = OpenCodeV2SessionState()::read,
+    private val apiVersion: () -> Int = { 1 },
     private val request: (String, RequestOptions) -> OpenCodeResponse,
 ) {
     fun build(includeAllTime: Boolean, now: Long = System.currentTimeMillis(), checkCancelled: () -> Unit = {}): String {
         val midnight = Instant.ofEpochMilli(now).atZone(ZoneId.systemDefault()).toLocalDate()
             .atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
         val windows = listOf("Today" to midnight, "Last 7 rolling days" to now - 7 * DAY, "Last 30 rolling days" to now - 30 * DAY) +
-            if (includeAllTime) listOf("All time" to 0L) else emptyList()
+            (if (includeAllTime) listOf("All time" to 0L) else emptyList()) + listOf("Undated session usage" to Long.MIN_VALUE)
         val groups = windows.map { sortedMapOf<String, Total>() }
         var aggregated = 0
         fun addUsage(id: String, info: JsonObject) {
-            val created = info.obj("time").long("completed") ?: info.obj("time").long("created") ?: return
-            if (created > now || created < windows.minOf { it.second }) return
+            val undated = info.str("source") == "unrecorded"
+            val created = info.obj("time").long("completed") ?: info.obj("time").long("created")
+            if (!undated && (created == null || created > now || created < windows.filter { it.second != Long.MIN_VALUE }.minOf { it.second })) return
             check(++aggregated <= 250_000) { "Usage report exceeds the 250,000-message local aggregation limit" }
-            val model = "${info.str("providerID") ?: info.obj("model").str("providerID") ?: "unknown"}\u0000${info.str("modelID") ?: info.obj("model").str("id") ?: info.obj("model").str("modelID") ?: "unknown"}"
+            val model = "${info.str("providerID") ?: info.obj("model").str("providerID") ?: "unknown"}\u0000${info.str("modelID") ?: info.obj("model").str("id") ?: info.obj("model").str("modelID") ?: "unknown"}" + (info.str("source")?.let { "\u0000$it" } ?: "")
             val usage = Total().apply { add(id, info) }
             if (usage.total <= 0) return
             windows.forEachIndexed { index, (_, start) ->
-                if (created >= start) {
+                if (if (start == Long.MIN_VALUE) undated else if (undated) start == 0L else created!! >= start) {
                     check(model in groups[index] || groups[index].size < 4_096) { "Usage report exceeds the 4,096-route aggregation limit" }
                     groups[index].getOrPut(model) { Total() }.merge(usage)
                 }
@@ -63,7 +65,7 @@ class UsageReport(
         do {
             checkCancelled()
             val path = "/experimental/session?archived=true&limit=1000" +
-                (if (includeAllTime) "" else "&start=${now - 30 * DAY}") +
+                (if (includeAllTime || apiVersion() == 2) "" else "&start=${now - 30 * DAY}") +
                 (cursor?.let { "&cursor=${encode(it)}" } ?: "")
             val response = request(path, RequestOptions(unscoped = true, captureNextCursor = true))
             val page = response.data.asArrayOrNull() ?: response.data.asObjectOrNull().arr("data")
@@ -92,13 +94,29 @@ class UsageReport(
                 continue
             }
             val seen = mutableSetOf<String>()
+            val remainder = if (apiVersion() == 2) session.obj("tokens")?.let { tokens ->
+                runCatching { AuxiliaryUsage.validate(Json.obj("source" to "unrecorded", "tokens" to tokens)); AuxiliaryUsage.Remainder(tokens) }.getOrNull()
+            } else null
             val pauses = SessionPauses.read(session.obj("metadata"))
             messages.forEach { value ->
                 val info = value.asObjectOrNull().obj("info") ?: value.asObjectOrNull() ?: return@forEach
                 if (info.str("role") != "assistant") return@forEach
                 val messageId = info.str("id") ?: return@forEach
                 if (!seen.add(messageId)) return@forEach
+                remainder?.subtract(info)
                 addUsage(id, SessionPauses.capUsage(info, pauses))
+            }
+            if (apiVersion() == 2) {
+                val auxiliary = try {
+                    AuxiliaryUsage.log(request("/api/experimental/session/${encode(id)}/log?follow=false&after=0",
+                        RequestOptions(directory = session.str("directory"), maxResponseBytes = 32L * 1024 * 1024)).data, id)
+                } catch (failure: com.intellij.openapi.progress.ProcessCanceledException) { throw failure }
+                catch (failure: Exception) {
+                    com.intellij.openapi.diagnostic.Logger.getInstance(UsageReport::class.java).warn("Could not read auxiliary usage for session $id", failure)
+                    emptyList()
+                }
+                auxiliary.forEach { checkCancelled(); remainder?.subtract(it); addUsage(id, it) }
+                remainder?.info()?.let { addUsage(id, it) }
             }
         }
     }
@@ -114,7 +132,9 @@ class UsageReport(
         appendLine("Generated ${Instant.ofEpochMilli(now)}. Retained history across all projects, $sessionCount sessions scanned.")
         appendLine()
         appendLine("Token counts use compact notation. Cache rate is cache read / (input + cache read + cache write), calculated from summed token counts. A dash in Cache rate means no recorded input tokens.")
+        appendLine("Unattributed rows include session generation, titles and compaction. They add tokens, not prompts or assistant duration. Undated usage is the remainder of native totals after message and retained-event usage. Its date, model and request count are unknown. It is excluded from dated windows and included in All time.")
         windows.forEachIndexed { index, (title, _) ->
+            if (title == "Undated session usage" && groups[index].isEmpty()) return@forEachIndexed
             appendLine("\n## $title\n")
             if (groups[index].isEmpty()) {
                 appendLine("_No token usage._")
@@ -125,8 +145,10 @@ class UsageReport(
             val total = Total()
             groups[index].entries.sortedWith(compareByDescending<Map.Entry<String, Total>> { it.value.prompts.size }
                 .thenByDescending { it.value.total }.thenBy { it.key }).forEach { (route, usage) ->
-                val (provider, model) = route.split('\u0000', limit = 2)
-                appendLine(usage.row(provider, model))
+                val fields = route.split('\u0000')
+                val source = fields.getOrNull(2)
+                val label = when (source) { "generate" -> "Session generation"; "title" -> "Session titles"; "compaction" -> "Compaction"; "unrecorded" -> "Other session usage"; else -> fields[1] }
+                appendLine(usage.row(if (source == null) fields[0] else "Unattributed", label))
                 total.merge(usage)
             }
             appendLine(total.row("**Total**", ""))

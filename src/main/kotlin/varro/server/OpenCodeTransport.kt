@@ -88,6 +88,7 @@ class OpenCodeTransport(
     initialSavedPermissions: com.google.gson.JsonArray = com.google.gson.JsonArray(),
     persistSavedPermissions: (com.google.gson.JsonArray) -> Unit = {},
     canAliasWorkspacePaths: () -> Boolean = { true },
+    private val beforeReload: () -> Unit = {},
 ) {
     private val log = logger<OpenCodeTransport>()
     private val pathAliases = OpenCodePathAliases(canAliasWorkspacePaths)
@@ -189,6 +190,10 @@ class OpenCodeTransport(
             options.timeoutMs ?: requestTimeoutMs(method.uppercase(), path))
         val bounded = options.copy(deadlineNanos = minOf(options.deadlineNanos ?: requestedDeadline, requestedDeadline))
         bounded.checkCancelled()
+        if (method.equals("POST", true) && path.substringBefore('?') == "/global/dispose") {
+            beforeReload()
+            bounded.checkCancelled()
+        }
         activeRequestCount.incrementAndGet()
         if (method.uppercase() !in setOf("GET", "HEAD")) lastMutationAt.set(System.currentTimeMillis())
         try {

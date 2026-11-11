@@ -111,6 +111,21 @@ class OpenCodeHostServices(
     override fun clearFollowups(sessionId: String, directory: String?, messageId: String?) =
         followups.clearPreviousTurn(sessionId, directory ?: server.workspaceDirectory(), messageId)
 
+    override fun linkFollowupSession(sessionId: String, body: JsonElement?, directory: String?, isCancelled: () -> Boolean): JsonElement {
+        val scope = directory ?: server.workspaceDirectory()
+        require(workspaceRoots().any { varro.server.WorkspacePaths.isSame(scope, it) } || varro.server.WorkspacePaths.isSame(scope, server.workspaceDirectory())) { "Workspace directory is not an open project folder" }
+        val action = body.asObjectOrNull().obj("action") ?: error("Invalid follow-up action")
+        val linked = action.str("sessionId") ?: error("Invalid follow-up session")
+        require(linked != sessionId && Regex("[A-Za-z0-9_-]{1,200}").matches(linked) && action.str("title") != null && action.str("prompt") != null) { "Invalid follow-up session link" }
+        val options = RequestOptions(directory = scope, maxResponseBytes = 64 * 1024,
+            deadlineNanos = System.nanoTime() + 3_000_000_000L, isCancelled = isCancelled)
+        for (id in listOf(sessionId, linked)) {
+            val session = server.transport.request("GET", "/session/$id", options = options).data.asObjectOrNull()
+            require(session.str("id") == id && varro.server.WorkspacePaths.isSame(session.str("directory"), scope)) { "Follow-up session is outside this workspace" }
+        }
+        return com.google.gson.JsonPrimitive(followups.linkSession(sessionId, Followups.source(body), scope, action, isCancelled))
+    }
+
     private val promptCompletion = PromptCompletionService(
         apiVersion = { server.transport.apiVersion },
         serverUrl = server::url,

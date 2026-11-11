@@ -68,7 +68,9 @@ class NativeDecisions(
         }
         val response = request("POST", DECISION_PATH, Json.obj(
             "model" to Json.obj("providerID" to model.str("providerID"), "id" to model.str("modelID")),
-            "input" to listOf(Json.obj("type" to "text", "text" to Json.stringify(Json.obj("permission" to permission, "priorUserDecisions" to prior)))),
+            "input" to listOf(Json.obj("type" to "text", "text" to PromptTrace(request).prompt("permission-judge",
+                Json.stringify(Json.obj("permission" to permission, "priorUserDecisions" to prior)), options,
+                permission.str("sessionID"), permission.str("id")))),
             "questions" to questions,
         ), options.copy(maxResponseBytes = 64 * 1024)).data
         options.checkCancelled()

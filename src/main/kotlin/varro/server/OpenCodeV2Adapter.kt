@@ -273,7 +273,8 @@ internal class OpenCodeV2Adapter(
                     (directory == null || WorkspacePaths.isSame(sessionDirectory, directory))) {
                     "Conversation location changed. Reopen it before asking a side question."
                 }
-                val generated = data("POST", "$endpoint/generate", Json.obj("prompt" to prompt))
+                val traced = varro.host.PromptTrace(::request).prompt("side-question", prompt, options.copy(directory = directory), id)
+                val generated = data("POST", "$endpoint/generate", Json.obj("prompt" to traced))
                 options.checkCancelled()
                 return result(OpenCodeV2SideQuestions.answer(generated))
             }

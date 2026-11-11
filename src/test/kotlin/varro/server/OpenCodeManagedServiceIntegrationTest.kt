@@ -5,6 +5,7 @@ import org.junit.Assume.assumeTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
+import varro.protocol.*
 import java.net.ServerSocket
 import java.nio.file.Files
 import java.util.concurrent.TimeUnit
@@ -41,6 +42,14 @@ class OpenCodeManagedServiceIntegrationTest {
             while (server.currentStatus() !is ServerStatus.Running && System.nanoTime() < deadline) Thread.sleep(50)
             assertTrue(server.currentStatus().toString(), server.currentStatus() is ServerStatus.Running)
             val original = listener()
+            assertEquals("random", server.transport.request("GET", "/config").data.asObjectOrNull().obj("websearch").str("provider"))
+            val preference = workspace.resolve("opencode.json")
+            Files.writeString(preference, "{\"websearch\":false}")
+            server.transport.request("POST", "/global/dispose")
+            assertEquals(false, server.transport.request("GET", "/config").data.asObjectOrNull().bool("websearch"))
+            Files.delete(preference)
+            server.transport.request("POST", "/global/dispose")
+            assertEquals("random", server.transport.request("GET", "/config").data.asObjectOrNull().obj("websearch").str("provider"))
             assertEquals("preserved", server.withStoppedServer {
                 assertFalse(original.isAlive)
                 assertEquals(OpenCodeServer.RestartOutcome.BUSY, server.restart(false))

@@ -343,6 +343,7 @@ import {
   readFileAsDataUrl,
   readItemByType,
 } from './chat-input/drop-paths';
+import { readDroppedDirectory } from './chat-input/drop-directories';
 import {
   getPastedContextFiles,
   getPromptTextWithoutContextReferences,
@@ -850,7 +851,6 @@ export function ChatInput(props: { newSession?: boolean; onBeforeSend?: () => vo
   let richEditorRef: HTMLDivElement | undefined;
   let containerRef: HTMLDivElement | undefined;
   let inputFrameRef: HTMLDivElement | undefined;
-  let attachmentRowOwnsPaste = false;
   let composerDisposed = false;
   let pdfAttachmentEpoch = 0;
   let permissionPickerRef: HTMLButtonElement | undefined;
@@ -877,7 +877,6 @@ export function ChatInput(props: { newSession?: boolean; onBeforeSend?: () => vo
   let providerLimitPopupRef: HTMLDivElement | undefined;
   let busyMenuRef: HTMLDivElement | undefined;
   let busyToggleRef: HTMLButtonElement | undefined;
-  let dragStartedInChat = false;
   const [isDraggingOver, setIsDraggingOver] = createSignal(false);
   const [showAgentPicker, setShowAgentPicker] = createSignal(false);
   const [showWorkspacePicker, setShowWorkspacePicker] = createSignal(false);
@@ -2849,6 +2848,18 @@ export function ChatInput(props: { newSession?: boolean; onBeforeSend?: () => vo
   });
 
   function handleKeydown(e: KeyboardEvent) {
+    if (e.key.toLowerCase() === 's' && (e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey) {
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.isComposing || e.repeat) return;
+      if (getSendBlockedReason()) {
+        reportBlockedSend();
+        return;
+      }
+      sendFromUi('queue-paused');
+      return;
+    }
+
     const historyAction = getComposerHistoryAction(e);
     if (historyAction) {
       // Always swallow the shortcut so native contenteditable undo never
@@ -3425,33 +3436,52 @@ export function ChatInput(props: { newSession?: boolean; onBeforeSend?: () => vo
     };
   }
 
-  function sendFromUi(mode?: 'queue' | 'steer') {
+  function sendFromUi(mode?: 'queue' | 'queue-paused' | 'steer') {
     void handleSend(mode).catch((err) => logError('Failed to send message', err));
   }
 
-  async function handleSend(mode?: 'queue' | 'steer' | 'after-stop') {
+  async function handleSend(mode?: 'queue' | 'queue-paused' | 'steer' | 'after-stop') {
     if (editReconciliationPending()) return;
+    const savePaused = mode === 'queue-paused';
+    if (savePaused) {
+      if (!composerSessionId()) {
+        showSessionActionFeedback('Open a conversation', 'warning');
+        return;
+      }
+      if (composerEditingMessage()) {
+        showSessionActionFeedback('Finish editing first', 'warning');
+        return;
+      }
+    }
     const text = inputText();
     const command = getLeadingSlashCommand(text);
-    if (!composerEditingMessage() && (command?.name === 'mcp' || command?.name === 'mcps')) {
+    if (
+      !savePaused &&
+      !composerEditingMessage() &&
+      (command?.name === 'mcp' || command?.name === 'mcps')
+    ) {
       await runSlashCommand(text);
       return;
     }
     const sideQuestion = getSideQuestionText(text);
-    if (sideQuestion !== null) {
+    if (!savePaused && sideQuestion !== null) {
       requestSideQuestion(sideQuestion);
       return;
     }
-    if (isPauseSlashCommand(text)) {
+    if (!savePaused && isPauseSlashCommand(text)) {
       await requestPauseSession();
       return;
     }
-    if (isAbortSlashCommand(text)) {
+    if (!savePaused && isAbortSlashCommand(text)) {
       requestAbortSession();
       return;
     }
-    if (pendingProblems() || problemsPickerScope()) return;
-    if (/^\/(?:problems|promlems)(?:\s|$)/i.test(text.trim()) && state.autoAttachProblems) {
+    if (pendingProblems() || (!savePaused && problemsPickerScope())) return;
+    if (
+      !savePaused &&
+      /^\/(?:problems|promlems)(?:\s|$)/i.test(text.trim()) &&
+      state.autoAttachProblems
+    ) {
       await runSlashCommand(text);
       return;
     }
@@ -3477,7 +3507,7 @@ export function ChatInput(props: { newSession?: boolean; onBeforeSend?: () => vo
     ) {
       return;
     }
-    const shouldQueue = mode === 'queue' || pendingApproval;
+    const shouldQueue = savePaused || mode === 'queue' || pendingApproval;
     const sendableText = getSendableInputText(text);
     const hasImagePreviewErrors = state.clipboardImages.some((image) => imageError(image.id));
     const hasSendableImages = hasSendableClipboardImages();
@@ -3699,7 +3729,7 @@ export function ChatInput(props: { newSession?: boolean; onBeforeSend?: () => vo
         sessionId,
         text: sendableText,
         agent: state.selectedAgent ? state.selectedAgent : undefined,
-        paused: queuedMessagePaused ? true : undefined,
+        paused: savePaused || queuedMessagePaused ? true : undefined,
         droppedFiles: queuedDroppedFiles,
         clipboardImages: queuedAttachments.clipboardImages,
         nativePdfs: queuedAttachments.nativePdfs,
@@ -4509,11 +4539,8 @@ export function ChatInput(props: { newSession?: boolean; onBeforeSend?: () => vo
   }
 
   function isInternalDrag(event: DragEvent) {
-    return (
-      dragStartedInChat ||
-      Array.from(event.dataTransfer?.types ?? []).some(
-        (type) => type === QUEUED_MESSAGE_DRAG_TYPE || type.startsWith('application/x-varro-')
-      )
+    return Array.from(event.dataTransfer?.types ?? []).some(
+      (type) => type === QUEUED_MESSAGE_DRAG_TYPE || type.startsWith('application/x-varro-')
     );
   }
 
@@ -4530,15 +4557,25 @@ export function ChatInput(props: { newSession?: boolean; onBeforeSend?: () => vo
     const dataTransfer = e.dataTransfer;
     if (!dataTransfer) return;
 
-    // Snapshot File objects now - DataTransfer is invalidated after the drop
-    // event returns, so FileReader fallback later wouldn't see them otherwise.
+    // Capture entries and start path reads before yielding. The browser invalidates
+    // DataTransfer when the drop handler returns, but captured entries remain readable.
+    const directoryEntries = Array.from(dataTransfer.items || [])
+      .map((item) => item.webkitGetAsEntry?.())
+      .filter((entry): entry is FileSystemDirectoryEntry => entry?.isDirectory === true);
+    const directoryNames = new Set(directoryEntries.map((entry) => entry.name));
     const droppedFiles = Array.from(dataTransfer.files || []);
-    const pdfFiles = droppedFiles.filter(isPdfFile);
+    const regularFiles = droppedFiles.filter((file) => !directoryNames.has(file.name));
+    const pdfFiles = regularFiles.filter(isPdfFile);
+    const remainingFiles = regularFiles.filter((file) => !isPdfFile(file));
+    const preferFileContent =
+      isRemoteExtensionHost() && (remainingFiles.length > 0 || directoryEntries.length > 0);
+    const pathsPromise = collectDroppedPaths(dataTransfer, {
+      includeFilePaths: !preferFileContent,
+      preferFileContent,
+    });
     if (pdfFiles.length > 0) {
       await attachNativePdfFiles(pdfFiles);
     }
-    const remainingFiles = droppedFiles.filter((file) => !isPdfFile(file));
-    const preferFileContent = isRemoteExtensionHost() && remainingFiles.length > 0;
 
     const pdfPaths = new Set<string>();
     for (const file of pdfFiles) {
@@ -4546,17 +4583,22 @@ export function ChatInput(props: { newSession?: boolean; onBeforeSend?: () => vo
       const path = (file as File & { path?: string }).path;
       if (path) pdfPaths.add(path);
     }
-    const paths = (
-      await collectDroppedPaths(dataTransfer, {
-        includeFilePaths: !preferFileContent,
-        preferFileContent,
-      })
-    ).filter((path) => !pdfPaths.has(path));
+    const paths = (await pathsPromise).filter((path) => !pdfPaths.has(path));
     if (paths.length > 0) {
       postMessage({ type: 'files/drop', payload: { paths } });
       return;
     }
-    if (preferFileContent) {
+    for (const directory of directoryEntries) {
+      try {
+        postMessage({ type: 'files/drop-content', payload: await readDroppedDirectory(directory) });
+      } catch (err) {
+        showSessionActionFeedback(
+          err instanceof Error ? err.message : 'The dropped folder could not be read.',
+          'warning'
+        );
+      }
+    }
+    if (preferFileContent || directoryEntries.length > 0) {
       await sendDroppedContent(remainingFiles);
       return;
     }
@@ -5248,8 +5290,6 @@ export function ChatInput(props: { newSession?: boolean; onBeforeSend?: () => vo
       // SAFETY: The surrounding shape or discriminator check establishes the Node contract used below.
       const target = e.target as Node | null;
       if (target && mcpAuthDialogRef?.contains(target)) return;
-      attachmentRowOwnsPaste =
-        !!target && !!inputFrameRef?.querySelector('.chat-attachments-container')?.contains(target);
       const clickedInsideInteractiveArea =
         !!target && (containerRef?.contains(target) || modelPopoverRef?.contains(target));
 
@@ -5311,21 +5351,21 @@ export function ChatInput(props: { newSession?: boolean; onBeforeSend?: () => vo
 
     const hideDropTarget = () => setIsDraggingOver(false);
 
-    const handleWindowDragStart = () => {
-      // Native text, link, and image drags have no Varro MIME marker.
-      // Keep their origin until dragend, including while they leave the webview.
-      dragStartedInChat = true;
+    const handleWindowDragStart = (e: DragEvent) => {
       hideDropTarget();
-    };
-
-    const handleWindowDragEnd = () => {
-      dragStartedInChat = false;
-      hideDropTarget();
+      if (e.defaultPrevented) return;
+      // Mark this drag, not the composer: cancelled/outgoing drags can miss
+      // dragend. Run after source handlers, which may clear the native payload.
+      e.dataTransfer?.setData('application/x-varro-chat-origin', 'true');
     };
 
     const beginDropTarget = (e: DragEvent) => {
       if (isInternalDrag(e)) return;
       e.preventDefault();
+      // VS Code's bubbling dragover handler forwards even default-prevented
+      // native drags to the workbench, which disables webview pointer events.
+      // Claim accepted drags across the whole chat, not just the composer.
+      e.stopPropagation();
       setAttachmentDropEffect(e.dataTransfer);
       setIsDraggingOver(true);
     };
@@ -5357,17 +5397,17 @@ export function ChatInput(props: { newSession?: boolean; onBeforeSend?: () => vo
     };
 
     const handleAttachmentPaste = (e: ClipboardEvent) => {
-      // SAFETY: Clipboard event targets are DOM nodes when dispatched by the document.
-      const target = e.target as Node | null;
-      if (target && richEditorRef?.contains(target)) return;
       const attachmentRow = inputFrameRef?.querySelector('.chat-attachments-container');
-      if (!attachmentRowOwnsPaste && (!target || !attachmentRow?.contains(target))) return;
+      // VS Code's execCommand('paste') can target the retained document selection
+      // instead of the focused row. Focus owns placement, not the event target.
+      if (!attachmentRow?.contains(document.activeElement)) return;
       const hasImage = Array.from(e.clipboardData?.items ?? []).some(
         (item) => item.kind === 'file' && item.type.startsWith('image/')
       );
       if (!hasImage) return;
 
       e.preventDefault();
+      e.stopPropagation();
       handlePaste(e);
       handlePasteInsertion(e, null);
     };
@@ -5375,10 +5415,10 @@ export function ChatInput(props: { newSession?: boolean; onBeforeSend?: () => vo
     window.addEventListener('keydown', handlePopupEscape, true);
     window.addEventListener('click', handleWindowClick, true);
     window.addEventListener('blur', hideDropTarget);
-    document.addEventListener('paste', handleAttachmentPaste);
+    document.addEventListener('paste', handleAttachmentPaste, true);
     document.addEventListener('visibilitychange', handleVisibilityChange);
-    document.addEventListener('dragstart', handleWindowDragStart, true);
-    document.addEventListener('dragend', handleWindowDragEnd, true);
+    document.addEventListener('dragstart', handleWindowDragStart);
+    document.addEventListener('dragend', hideDropTarget, true);
     document.addEventListener('dragenter', beginDropTarget, true);
     document.addEventListener('dragover', handleWindowDragOver, true);
     document.addEventListener('drop', handleWindowDrop, true);
@@ -5389,10 +5429,10 @@ export function ChatInput(props: { newSession?: boolean; onBeforeSend?: () => vo
       window.removeEventListener('keydown', handlePopupEscape, true);
       window.removeEventListener('click', handleWindowClick, true);
       window.removeEventListener('blur', hideDropTarget);
-      document.removeEventListener('paste', handleAttachmentPaste);
+      document.removeEventListener('paste', handleAttachmentPaste, true);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
-      document.removeEventListener('dragstart', handleWindowDragStart, true);
-      document.removeEventListener('dragend', handleWindowDragEnd, true);
+      document.removeEventListener('dragstart', handleWindowDragStart);
+      document.removeEventListener('dragend', hideDropTarget, true);
       document.removeEventListener('dragenter', beginDropTarget, true);
       document.removeEventListener('dragover', handleWindowDragOver, true);
       document.removeEventListener('drop', handleWindowDrop, true);

@@ -640,7 +640,9 @@ class VarroProjectService(private val project: Project) : Disposable {
                     pickAttachments(payload?.getAsJsonArray("paths")?.strings().orEmpty(), host)
                 }
                 "files/drop-content" -> {
-                    payload?.getAsJsonArray("files")?.take(20)?.forEach { file ->
+                    if (payload?.has("directory") == true) {
+                        host?.post("files/dropped", Json.array(listOf(attachments.storeDirectory(payload))))
+                    } else payload?.getAsJsonArray("files")?.take(20)?.forEach { file ->
                         host?.post("files/dropped", Json.array(listOf(attachments.store(file.asJsonObject))))
                     }
                 }
@@ -1173,7 +1175,7 @@ class VarroProjectService(private val project: Project) : Disposable {
             object : com.intellij.openapi.progress.Task.Backgroundable(project, "Building OpenCode usage report", true) {
                 override fun run(indicator: com.intellij.openapi.progress.ProgressIndicator) {
                     try {
-                        val report = UsageReport(attachOnly = server.isAttachOnly(), ensureServerStarted = {
+                        val report = UsageReport(attachOnly = server.isAttachOnly(), apiVersion = { server.transport.apiVersion }, ensureServerStarted = {
                             ensureServerStarted()
                             val deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(30)
                             while (lastStatus.get() !is ServerStatus.Running) {

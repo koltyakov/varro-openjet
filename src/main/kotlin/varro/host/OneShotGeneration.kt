@@ -11,7 +11,8 @@ import varro.server.RequestOptions
 internal class OneShotGeneration(
     private val request: (String, String, JsonElement?, RequestOptions) -> OpenCodeResponse,
 ) {
-    fun generate(apiVersion: Int, prompt: String, model: JsonObject?, options: RequestOptions): String? {
+    fun generate(apiVersion: Int, prompt: String, model: JsonObject?, options: RequestOptions,
+                 purpose: String? = null, sessionID: String? = null, requestID: String? = null): String? {
         if (apiVersion != 2) return null
         options.checkCancelled()
         val specification = try {
@@ -23,8 +24,9 @@ internal class OneShotGeneration(
         val paths = specification.asObjectOrNull().obj("paths")
         val generatePath = GENERATE_PATHS.firstOrNull { paths.obj(it).obj("post") != null } ?: return null
         options.checkCancelled()
+        val traced = if (purpose == null) prompt else PromptTrace(request).prompt(purpose, prompt, options, sessionID, requestID)
         val response = try {
-            request("POST", generatePath, Json.obj("prompt" to prompt, "model" to model?.let {
+            request("POST", generatePath, Json.obj("prompt" to traced, "model" to model?.let {
                 Json.obj("providerID" to it.get("providerID"), "id" to it.get("modelID")).apply {
                     if (it.has("variant")) add("variant", it.get("variant"))
                 }

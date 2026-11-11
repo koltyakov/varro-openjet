@@ -6,6 +6,9 @@ import varro.protocol.long
 import varro.protocol.str
 import varro.protocol.bool
 import varro.protocol.int
+import varro.protocol.arr
+import varro.protocol.asObjectOrNull
+import varro.protocol.strings
 import varro.server.WorkspacePaths
 import java.net.URI
 import java.nio.file.Files
@@ -79,8 +82,65 @@ class AttachmentStore(private val root: Path, private val workspace: () -> Strin
         }
     }
 
+    /** Validate the complete tree before creating anything; a failed folder is never partially attached. */
+    fun storeDirectory(payload: JsonObject): JsonObject {
+        val directory = payload.getAsJsonObject("directory") ?: error("Missing dropped folder")
+        val name = directory.str("name") ?: error("Missing folder name")
+        require(safeRelativePath(name) && '/' !in name && name.length <= 255) { "Invalid dropped folder name" }
+        val folders = directory.arr("directories") ?: error("Missing folder entries")
+        require(folders.all { it.isJsonPrimitive && it.asJsonPrimitive.isString }) { "Invalid folder entries" }
+        val paths = folders.strings()
+        val files = payload.arr("files") ?: error("Missing folder files")
+        require(files.size() <= 20 && paths.size + files.size() <= 200 && paths.all(::safeRelativePath)) { "Invalid or oversized dropped folder" }
+        var total = 0L
+        val decoded = files.map { value ->
+            val file = value.asObjectOrNull() ?: error("Invalid folder file")
+            val relative = file.str("name") ?: error("Missing file path")
+            val size = file.long("size") ?: error("Missing file size")
+            val content = file.str("content") ?: error("Missing file content")
+            require(safeRelativePath(relative) && size in 0..10L * 1024 * 1024 && file.get("size").asDouble == size.toDouble() &&
+                content.length <= 4 * ((size + 2) / 3)) { "Invalid dropped file" }
+            val bytes = Base64.getDecoder().decode(content)
+            total += bytes.size
+            require(bytes.size.toLong() == size && total <= 50L * 1024 * 1024) { "Dropped folder exceeds content limits" }
+            relative to bytes
+        }
+        require(decoded.map { it.first.lowercase(java.util.Locale.ROOT) }.distinct().size == decoded.size) { "Duplicate dropped file paths" }
+        val owner = root.resolve(UUID.randomUUID().toString())
+        val target = owner.resolve(name)
+        fun mkdir(path: Path) {
+            if (path.fileSystem.supportedFileAttributeViews().contains("posix")) Files.createDirectories(path,
+                java.nio.file.attribute.PosixFilePermissions.asFileAttribute(java.nio.file.attribute.PosixFilePermissions.fromString("rwx------")))
+            else Files.createDirectories(path)
+        }
+        try {
+            mkdir(target)
+            paths.forEach { mkdir(target.resolve(it)) }
+            decoded.forEach { (relative, bytes) ->
+                val file = target.resolve(relative)
+                mkdir(file.parent)
+                val permissions = if (file.fileSystem.supportedFileAttributeViews().contains("posix")) arrayOf(
+                    java.nio.file.attribute.PosixFilePermissions.asFileAttribute(java.nio.file.attribute.PosixFilePermissions.fromString("rw-------"))) else emptyArray()
+                Files.newByteChannel(file, setOf(java.nio.file.StandardOpenOption.CREATE_NEW, java.nio.file.StandardOpenOption.WRITE), *permissions).use {
+                    val buffer = java.nio.ByteBuffer.wrap(bytes)
+                    while (buffer.hasRemaining()) it.write(buffer)
+                }
+            }
+            return Json.obj("path" to target.toString(), "relativePath" to name, "type" to "directory")
+        } catch (failure: Exception) {
+            if (Files.exists(owner)) Files.walk(owner).use { stream -> stream.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists) }
+            throw failure
+        }
+    }
+
     companion object {
         private const val MAX_BYTES = 20L * 1024 * 1024
+
+        internal fun safeRelativePath(path: String): Boolean = path.isNotEmpty() && path.length <= 1024 &&
+            path.split('/').let { parts -> parts.size <= 32 && parts.all {
+                it.isNotEmpty() && it != "." && it != ".." && it.none { char -> char == '\\' || char == ':' || char.code < 32 } &&
+                    !it.endsWith('.') && !it.endsWith(' ')
+            } }
 
         fun databaseContent(snapshot: JsonObject): JsonObject {
             val bytes = snapshot.toString().toByteArray(Charsets.UTF_8)

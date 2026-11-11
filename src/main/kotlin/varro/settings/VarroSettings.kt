@@ -77,6 +77,8 @@ class VarroSettings : PersistentStateComponent<VarroSettings> {
     var chatFollowupsEnabled: Boolean = true
     /** Empty uses the current session model and reasoning. */
     var chatFollowupModel: String = ""
+    /** Application-only opt-in. Sends correlation identifiers as auxiliary prompt text. */
+    var chatPromptTrace: Boolean = false
 
     /**
      * Mirrors `varro.decisions.jev.autoApprove`: let TypeSafe's Jev judge Auto-mode

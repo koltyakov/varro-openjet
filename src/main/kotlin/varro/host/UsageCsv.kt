@@ -8,12 +8,15 @@ import java.time.Instant
 import java.time.ZoneOffset
 
 internal object UsageCsv {
-    private data class Key(val day: String, val provider: String, val model: String, val variant: String)
+    private data class Key(val day: String, val provider: String, val model: String, val variant: String, val source: String)
     private class Group {
         val usage = UsageReport.Total()
         var messages = 0
         var cost = 0.0
         var costed = 0
+        var auxiliary = 0
+        var costedAuxiliary = 0
+        var costedUnrecorded = 0
     }
     data class Export(val csv: String, val rows: Int)
 
@@ -21,30 +24,34 @@ internal object UsageCsv {
         check: () -> Unit = {}): Export {
         val groups = linkedMapOf<Key, Group>()
         val count = LocalUsageDatabase(path, readAnnotations, boundedBodies = false).read(null, check) { session, info ->
-            val timestamp = info.obj("time").long("completed") ?: info.obj("time").long("created") ?: error("Cannot export usage with a missing timestamp")
-            require(timestamp >= 0) { "Cannot export usage with an invalid timestamp" }
+            val source = info.str("source") ?: "assistant"
+            val undated = source == "unrecorded"
+            val timestamp = info.obj("time").long("completed") ?: info.obj("time").long("created")
+            require(undated || timestamp != null && timestamp >= 0) { "Cannot export usage with a missing or invalid timestamp" }
             val provider = info.text("providerID") ?: info.obj("model").text("providerID") ?: error("Cannot export usage without provider identity")
             val model = info.text("modelID") ?: info.obj("model").text("id") ?: info.obj("model").text("modelID") ?: error("Cannot export usage without model identity")
             val usage = UsageReport.Total().apply { add(session, info) }
             val cost = info.num("cost")?.takeIf { it.isFinite() && it >= 0 }
             if (usage.total > 0 || cost != null) {
-                val day = Instant.ofEpochMilli(timestamp).atZone(ZoneOffset.UTC).toLocalDate().toString()
-                val key = Key(day, provider, model, info.obj("model").text("variant") ?: info.text("variant") ?: "unknown")
+                val day = if (undated) "unknown" else Instant.ofEpochMilli(timestamp!!).atZone(ZoneOffset.UTC).toLocalDate().toString()
+                val key = Key(day, provider, model, info.obj("model").text("variant") ?: info.text("variant") ?: "unknown", source)
                 check(key in groups || groups.size < 100_000) { "Usage CSV exceeds the daily row limit. No partial export was saved." }
                 groups.getOrPut(key) { Group() }.apply {
-                    this.usage.merge(usage); messages++
-                    if (cost != null) { this.cost += cost; costed++ }
+                    this.usage.merge(usage)
+                    if (!undated) { if (source == "assistant") messages++ else auxiliary++ }
+                    if (cost != null) { this.cost += cost; if (undated) costedUnrecorded++ else if (source == "assistant") costed++ else costedAuxiliary++ }
                 }
             }
         }
         check(count != null) { "No local OpenCode usage database or statistics archive was found" }
-        val csv = StringBuilder("\uFEFFday_utc,provider,model,reasoning_setting,messages,input_tokens,output_tokens,reasoning_tokens,cache_read_tokens,cache_write_tokens,total_tokens,reported_cost_usd,costed_messages\r\n")
+        val csv = StringBuilder("\uFEFFday_utc,provider,model,reasoning_setting,messages,input_tokens,output_tokens,reasoning_tokens,cache_read_tokens,cache_write_tokens,total_tokens,reported_cost_usd,costed_messages,usage_source,auxiliary_requests,costed_auxiliary_requests\r\n")
         var bytes = csv.toString().toByteArray().size.toLong()
-        groups.entries.sortedWith(compareBy({ it.key.day }, { it.key.provider }, { it.key.model }, { it.key.variant })).forEach { (key, group) ->
+        groups.entries.sortedWith(compareBy({ it.key.day }, { it.key.provider }, { it.key.model }, { it.key.variant }, { it.key.source })).forEach { (key, group) ->
             check()
             val usage = group.usage
             val line = listOf(key.day, key.provider, key.model, key.variant, group.messages, usage.input, usage.output, usage.reasoning,
-                usage.cacheRead, usage.cacheWrite, usage.total, if (group.costed == 0) "" else java.math.BigDecimal.valueOf(group.cost).round(java.math.MathContext(15)).stripTrailingZeros().toPlainString(), group.costed)
+                usage.cacheRead, usage.cacheWrite, usage.total, if (group.costed + group.costedAuxiliary + group.costedUnrecorded == 0) "" else java.math.BigDecimal.valueOf(group.cost).round(java.math.MathContext(15)).stripTrailingZeros().toPlainString(), group.costed,
+                key.source, if (key.source == "unrecorded") "" else group.auxiliary, if (key.source == "unrecorded") "" else group.costedAuxiliary)
                 .joinToString(",") { cell(it.toString()) } + "\r\n"
             bytes += line.toByteArray().size
             check(bytes <= 64L * 1024 * 1024) { "Usage CSV exceeds the 64 MB export limit. No partial export was saved." }

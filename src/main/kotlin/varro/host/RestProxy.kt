@@ -94,6 +94,7 @@ class RestProxy(
      */
     interface HostServices {
         fun followups(sessionId: String, body: JsonElement?, directory: String?, dismiss: Boolean, isCancelled: () -> Boolean): JsonElement
+        fun linkFollowupSession(sessionId: String, body: JsonElement?, directory: String?, isCancelled: () -> Boolean): JsonElement = error("Follow-up links unavailable")
         fun clearFollowups(sessionId: String, directory: String?, messageId: String?)
         fun promptCompletionModels(isCancelled: () -> Boolean): JsonObject
         fun completePrompt(body: JsonElement?, directory: String?, isCancelled: () -> Boolean): JsonObject
@@ -395,6 +396,14 @@ class RestProxy(
             pathname == ApiRoutes.Endpoints.PROVIDER_LIMIT ->
                 services.providerLimit(q("providerID")!!, q("modelID"))
 
+            pathname == ApiRoutes.Endpoints.STARTUP_DIAGNOSTICS -> {
+                val directory = q("directory") ?: server.workspaceDirectory()
+                val roots = listOfNotNull(project.basePath, server.workspaceDirectory()) +
+                    context.context.arr("workspaceFolders")?.mapNotNull { it.asObjectOrNull().text("path") }.orEmpty()
+                require(directory == null || roots.any { WorkspacePaths.isSame(it, directory) }) { "Workspace directory is not an open project folder" }
+                StartupDiagnostics({ server.transport.apiVersion }, server.transport::request).read(directory, isCancelled)
+            }
+
             // The client types this as `string | null`: the file's text, not a
             // descriptor around it.
             pathname == ApiRoutes.Endpoints.WORKSPACE_FILE ->
@@ -533,6 +542,12 @@ class RestProxy(
         if (action in setOf("permission-mode", "rename-if-untitled", "delete")) transfers?.checkWritable(sessionId)
 
         return when (action) {
+            "session" -> {
+                require(sessionId !in store.hiddenSessionIds) { "404 Session not found" }
+                val linked = body.asObjectOrNull().obj("action").str("sessionId")
+                require(linked != null && linked != sessionId && linked !in store.hiddenSessionIds && Regex("[A-Za-z0-9_-]{1,200}").matches(linked)) { "Invalid follow-up session link" }
+                services.linkFollowupSession(sessionId, body, directory, isCancelled)
+            }
             "followups", "dismiss" -> {
                 require(sessionId !in store.hiddenSessionIds) { "404 Session not found" }
                 services.followups(sessionId, body, directory, action == "dismiss", isCancelled)

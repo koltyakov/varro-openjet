@@ -85,23 +85,26 @@ internal class PromptCompletionService(
         val connection = resolve(model, directory, check)
         val generation = revision.get()
         val context = input.deepCopy().apply { remove("variant") }
+        val prompt = PromptTrace({ method, path, payload, options ->
+            varro.server.OpenCodeResponse(request(method, path, payload, options) ?: com.google.gson.JsonNull.INSTANCE)
+        }).prompt("prompt-completion", context.toString(), RequestOptions(directory = directory, isCancelled = { check(); false }))
         val budget = if (connection.reasoning) if (connection.protocol == "openrouter") 1280 else 1024 else 256
         val body = connection.body.deepCopy().apply {
             addProperty("model", connection.modelID)
             addProperty("stream", false)
             when (connection.protocol) {
                 "responses" -> {
-                    addProperty("instructions", SYSTEM_PROMPT); addProperty("input", context.toString())
+                    addProperty("instructions", SYSTEM_PROMPT); addProperty("input", prompt)
                     addProperty("max_output_tokens", budget); addProperty("store", false)
                 }
                 "messages" -> {
                     addProperty("system", SYSTEM_PROMPT)
-                    add("messages", Json.array(listOf(Json.obj("role" to "user", "content" to context.toString()))))
+                    add("messages", Json.array(listOf(Json.obj("role" to "user", "content" to prompt))))
                     addProperty("max_tokens", budget); add("thinking", Json.obj("type" to "disabled"))
                 }
                 else -> {
                     add("messages", Json.array(listOf(Json.obj("role" to "system", "content" to SYSTEM_PROMPT),
-                        Json.obj("role" to "user", "content" to context.toString()))))
+                        Json.obj("role" to "user", "content" to prompt))))
                     addProperty(connection.maxTokensField, budget)
                 }
             }

@@ -121,6 +121,11 @@ internal class FollowupService(
     fun dismiss(sessionId: String, source: JsonObject, directory: String?) =
         cache.dismiss(turnKey(sessionId, directory, source.str("userMessageId")!!), hash(source))
 
+    fun linkSession(sessionId: String, source: JsonObject, directory: String?, action: JsonObject, isCancelled: () -> Boolean): Boolean {
+        if (apiVersion() != 2 || !sourceIsCurrent(sessionId, source, readOptions(directory, isCancelled))) return false
+        return cache.linkSession(turnKey(sessionId, directory, source.str("userMessageId")!!), hash(source), action)
+    }
+
     @Synchronized fun clearPreviousTurn(sessionId: String, directory: String?, userMessageId: String?) {
         val sessionKey = sessionKey(sessionId, directory)
         val exceptKey = userMessageId?.let { turnKey(sessionId, directory, it) }
@@ -134,7 +139,9 @@ internal class FollowupService(
 
     private fun generate(sessionId: String, source: JsonObject, model: JsonObject, key: String,
                           digest: String, attempt: Attempt, options: RequestOptions, isModelCurrent: () -> Boolean): JsonObject {
-        if (!isModelCurrent() || !waitForIdle(sessionId, options) || !sourceIsCurrent(sessionId, source, options) || !isModelCurrent()) return Followups.empty()
+        if (!isModelCurrent() || !waitForIdle(sessionId, options)) return Followups.empty()
+        val trace = PromptTrace(request).prompt("followup", "", options, sessionId)
+        if (!sourceIsCurrent(sessionId, source, options) || !isModelCurrent()) return Followups.empty()
         synchronized(this) {
             options.checkCancelled()
             // Once admission starts, view disposal cannot cancel this bounded generation.
@@ -145,7 +152,7 @@ internal class FollowupService(
         var completed = false
         try {
             options.checkCancelled()
-            val generated = OneShotGeneration(request).generate(apiVersion(), prompt(source), model, options.copy(maxResponseBytes = 16 * 1024))
+            val generated = OneShotGeneration(request).generate(apiVersion(), trace + prompt(source), model, options.copy(maxResponseBytes = 16 * 1024))
                 ?: return Followups.empty()
             val suggestions = Followups.suggestions(generated)
             options.checkCancelled()

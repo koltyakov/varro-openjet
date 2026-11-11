@@ -64,7 +64,7 @@ Quota badges show remaining allowances and reset times when available. Supported
 
 Pin providers in the chat provider list to show remaining quotas in the IDE status bar, including while chats are closed. Custom display names are optional. **Settings > Tools > Varro > Models > Pinned provider quotas** chooses 15-second rotation or all providers at once. Providers selected in visible chats are excluded; the tooltip lists the remaining pinned providers. Quotas refresh every two minutes without running model inference.
 
-Open usage reports from the tool-window menu for prompt counts, tokens, cache usage and assistant duration by provider and model.
+Open usage reports from the tool-window menu for prompt counts, tokens, cache usage and assistant duration by provider and model. V2 auxiliary generation, titles and compaction appear as unattributed usage. Native totals with no retained dated record appear separately as undated usage, not as additional user prompts.
 
 Tools > Varro also provides all-time usage CSV export, confirmed cleanup of old sessions with usage preservation and optional parent transcripts, and separate offline database compaction. See [session cleanup and usage export](docs/session-cleanup.md) for archive locations, safeguards and limits.
 
@@ -76,7 +76,11 @@ Remote Markdown images ask before loading by default. Loading one contacts the i
 
 Enable prompt completion with **Use for prompt completion** in the Models menu. It requires v2 and an API-key model, not an OAuth subscription, and sends your unfinished draft and recent chat directly to the provider. Tab accepts a suggestion; Escape dismisses it.
 
-Follow-up suggestions are enabled by default after completed Build responses when V2 supports stateless generation. They send the current request and final answer for extra inference, which may consume paid tokens or subscription quota. Disable **Suggest follow-up actions after Build responses** under **Settings > Tools > Varro > Models** to opt out. The session's model and reasoning are used unless you assign **Use for follow-ups** in Models. Hover an action to preview its prompt; clicking sends it without changing your permissions, draft or attachments. The action menu can copy a suggestion or queue it paused for review.
+Follow-up suggestions are enabled by default after completed Build responses when V2 supports stateless generation. They send the current request and final answer for extra inference, which may consume paid tokens or subscription quota. Disable **Suggest follow-up actions after Build responses** under **Settings > Tools > Varro > Models** to opt out. The session's model and reasoning are used unless you assign **Use for follow-ups** in Models. Hover an action to preview its prompt; clicking sends it without changing your permissions, draft or attachments. The action menu can copy a suggestion, queue it paused for review, or run it in a background fork. Started actions retain a link to that chat after reload.
+
+**Trace auxiliary inference prompts** in the same settings group is off by default. It adds a `VARRO_TRACE_V1` line with purpose and session identifiers, or a workspace hash, for compatible accounting proxies. The proxy must strip the line before inference; otherwise the model receives it. It does not enable inference or change permissions.
+
+Managed V2 launches default web search to `random` only when no configuration or saved interactive preference exists. Explicit selections and opt-outs, including `false`, remain authoritative. External servers and reused services are not changed.
 
 ## Documentation
 

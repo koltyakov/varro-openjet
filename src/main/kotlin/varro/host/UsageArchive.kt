@@ -100,15 +100,19 @@ internal class UsageArchive(val path: Path, private val readAnnotations: (String
                 HistoryDatabase.execute(archive, "INSERT INTO usage_session VALUES(?,?,?,?)", session.id, session.identity, session.updated, session.version)
             }
             archive.prepareStatement("INSERT INTO usage_message VALUES(?,?,?)").use { insert ->
-                messages.forEach { (id, info) ->
-                    check()
-                    // Keep only the scalar projection, even if future readers return extra fields.
-                    val projected = Json.obj(*listOf("parentID", "cost", "time", "tokens").map { it to info.get(it) }.toTypedArray()).apply {
-                        addProperty("providerID", info.str("providerID") ?: info.obj("model").str("providerID"))
-                        addProperty("modelID", info.str("modelID") ?: info.obj("model").str("id") ?: info.obj("model").str("modelID"))
-                        addProperty("variant", info.obj("model").str("variant") ?: info.str("variant"))
+                archive.prepareStatement("INSERT INTO usage_auxiliary VALUES(?,?,?)").use { auxiliary ->
+                    messages.forEach { (id, info) ->
+                        check()
+                        // Keep only the scalar projection, even if future readers return extra fields.
+                        val projected = Json.obj(*listOf("parentID", "cost", "time", "tokens").map { it to info.get(it) }.toTypedArray()).apply {
+                            info.str("source")?.let { addProperty("source", it) }
+                            addProperty("providerID", info.str("providerID") ?: info.obj("model").str("providerID"))
+                            addProperty("modelID", info.str("modelID") ?: info.obj("model").str("id") ?: info.obj("model").str("modelID"))
+                            addProperty("variant", info.obj("model").str("variant") ?: info.str("variant"))
+                        }
+                        val statement = if (info.hasNonNull("source")) auxiliary else insert
+                        statement.setString(1, info.str("id")); statement.setString(2, id); statement.setString(3, projected.toString()); statement.executeUpdate()
                     }
-                    insert.setString(1, info.str("id")); insert.setString(2, id); insert.setString(3, projected.toString()); insert.executeUpdate()
                 }
             }
             sessions.forEach { session ->
@@ -214,6 +218,7 @@ internal class UsageArchive(val path: Path, private val readAnnotations: (String
             "CREATE TABLE IF NOT EXISTS usage_session(id TEXT PRIMARY KEY,identity TEXT NOT NULL UNIQUE,time_updated INTEGER NOT NULL,version INTEGER NOT NULL)",
             "CREATE TABLE IF NOT EXISTS usage_message(id TEXT NOT NULL,session_id TEXT NOT NULL REFERENCES usage_session(id) ON DELETE CASCADE,data TEXT NOT NULL,PRIMARY KEY(session_id,id))",
             "CREATE INDEX IF NOT EXISTS usage_message_session_idx ON usage_message(session_id)",
+            "CREATE TABLE IF NOT EXISTS usage_auxiliary(id TEXT NOT NULL,session_id TEXT NOT NULL REFERENCES usage_session(id) ON DELETE CASCADE,data TEXT NOT NULL,PRIMARY KEY(session_id,id))",
             "CREATE TABLE IF NOT EXISTS usage_cleanup(id TEXT PRIMARY KEY,directory TEXT NOT NULL,time_updated INTEGER NOT NULL)",
             "CREATE TABLE IF NOT EXISTS usage_cleanup_directory(session_id TEXT NOT NULL,directory TEXT NOT NULL,PRIMARY KEY(session_id,directory))",
             "CREATE TABLE IF NOT EXISTS usage_artifact(session_id TEXT NOT NULL,path TEXT NOT NULL,PRIMARY KEY(session_id,path))",

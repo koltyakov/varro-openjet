@@ -297,14 +297,14 @@ internal class AttentionNotifications(
     fun nextDeadline(): Long? = (pending.values.filter { !it.observed && inScope(it.sessionId) != null }
         .map { it.revealAt } + listOfNotNull(batchAt)).minOrNull()
 
-    /** Visibility is rechecked at delivery, including macOS occlusion. A visible burst is consumed. */
-    fun deliver(editorVisible: Boolean): Delivery? {
+    /** Recheck the originating project window, not app-wide visibility. */
+    fun deliver(): Delivery? {
         update()
         if (batchAt == null || now() < batchAt!!) return null
         val events = queued.values.toList()
         queued.clear()
         batchAt = null
-        if (editorVisible || isFocused() || events.isEmpty()) return null
+        if (isFocused() || events.isEmpty()) return null
         val first = events.first()
         val descriptions = events.filter { it.sessionId == first.sessionId }.map { it.kind.label }.distinct()
         val otherChats = events.map { it.sessionId }.distinct().size - 1

@@ -30,6 +30,25 @@ class ProviderQuotaBackendTest {
     )))
     private fun response(json: String, code: Int = 200) = QuotaResponse(code, json.toByteArray())
 
+    @Test fun `credential rejection retries exponentially and success resets the delay`() {
+        val creds = credentials(Json.obj("openai" to Json.obj("type" to "oauth", "access" to "test-token")))
+        var now = 1_800_000_000_000L
+        var polls = 0; var reject = true
+        ProviderQuotaBackend(creds, { _, _, _, _ -> metadata("openai") }, QuotaHttp {
+            polls++
+            if (reject) response("{}", 401) else response("""{"rate_limit":{"primary_window":{"used_percent":20}}}""")
+        }, clock = { now }).use { backend ->
+            backend.get("openai", "model", null); assertEquals(1, polls)
+            now += 299_999; backend.get("openai", "model", null); assertEquals(1, polls)
+            now++; backend.get("openai", "model", null); assertEquals(2, polls)
+            now += 599_999; backend.get("openai", "model", null); assertEquals(2, polls)
+            now++; reject = false
+            assertEquals("available", backend.get("openai", "model", null).str("status")); assertEquals(3, polls)
+            now += 60_001; reject = true; backend.get("openai", "model", null); assertEquals(4, polls)
+            now += 300_000; backend.get("openai", "model", null); assertEquals(5, polls)
+        }
+    }
+
     @Test fun `Claude Agent file and Keychain rotation bypass caches without reading OpenCode credentials`() {
         for (source in listOf("file", "keychain")) {
             var account = "first"
@@ -64,11 +83,11 @@ class ProviderQuotaBackendTest {
                 assertEquals(2, polls)
                 now += 60_001
                 assertEquals("unsupported", backend.get("claude-agent", "opus", null).str("status"))
-                assertEquals(3, polls)
+                assertEquals(2, polls)
                 account = "third"
                 writeFile()
                 assertEquals("unsupported", backend.get("claude-agent", "opus", null).str("status"))
-                assertEquals(4, polls)
+                assertEquals(3, polls)
             }
         }
     }

@@ -28,6 +28,8 @@ class ProviderQuotaBackend(
     private val cache = ConcurrentHashMap<Key, Entry>()
     private val lastGood = ConcurrentHashMap<Key, Entry>()
     private val backoff = ConcurrentHashMap<Key, Long>()
+    private data class AuthFailure(val identity: String, val note: String, val retryAt: Long, val backoff: Long)
+    private val authFailures = ConcurrentHashMap<String, AuthFailure>()
     private val inFlight = ConcurrentHashMap<Key, CompletableFuture<JsonObject>>()
     private val executor = Executors.newVirtualThreadPerTaskExecutor()
     private val generation = AtomicLong()
@@ -65,6 +67,7 @@ class ProviderQuotaBackend(
 
     private fun load(key: Key, version: Long): JsonObject {
         var identity = ""
+        var rejectedCredentials = false
         var result = try {
             val attached = attachOnly()
             val v2 = apiVersion() == 2
@@ -110,6 +113,10 @@ class ProviderQuotaBackend(
                     token.orEmpty(), claudeAgentToken.orEmpty(),
                     if (key.provider == "github-copilot" && token == null) credentials.copilotFallback().orEmpty() else "")
                 cache[key]?.takeIf { it.identity == identity && it.expires > clock() }?.let { return it.status }
+                authFailures[key.provider]?.let { failure ->
+                    if (failure.identity != identity) authFailures.remove(key.provider, failure)
+                    else if (failure.retryAt > clock()) return status(key, "unsupported", failure.note)
+                }
                 val writeAuth: ((String, JsonObject) -> Unit)? = if (v2) null else { id, value ->
                     check(version == generation.get() && !closed) { "Provider quota poll was retired" }
                     if (credentials.authStore().obj(id) != auth.obj(id)) throw QuotaFailure("Provider credentials changed during refresh; retrying with current credentials")
@@ -129,6 +136,7 @@ class ProviderQuotaBackend(
                 }
             }
         } catch (failure: QuotaFailure) {
+            rejectedCredentials = failure.code in setOf(401, 403)
             status(key, if (failure.code in setOf(401, 403)) "unsupported" else "error", failure.message.orEmpty())
         } catch (_: javax.net.ssl.SSLException) {
             status(key, "error", "Provider TLS connection failed. Check the IDE's certificate settings.")
@@ -141,6 +149,11 @@ class ProviderQuotaBackend(
             if (closed || generation.get() != version) {
                 return@synchronized status(key, "error", "Provider settings changed during the poll; retrying")
             }
+            if (rejectedCredentials && identity.isNotEmpty()) {
+                val previous = authFailures[key.provider]
+                val delay = if (previous?.identity == identity) minOf(previous.backoff * 2, 3_600_000L) else 300_000L
+                authFailures[key.provider] = AuthFailure(identity, result.str("note").orEmpty(), clock() + delay, delay)
+            } else if (result.str("status") == "available") authFailures.remove(key.provider)
             val ttl = when (result.str("status")) {
                 "available" -> { backoff.remove(key); 30_000L }
                 "unsupported" -> { backoff.remove(key); 60_000L }
@@ -194,6 +207,7 @@ class ProviderQuotaBackend(
         cache.clear()
         lastGood.clear()
         backoff.clear()
+        authFailures.clear()
     }
 
     override fun close() = synchronized(lifecycle) {

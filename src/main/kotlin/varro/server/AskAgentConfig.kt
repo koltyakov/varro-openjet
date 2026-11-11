@@ -19,9 +19,12 @@ internal class AskAgentConfig(
     private val log = logger<AskAgentConfig>()
     private var path: Path? = null
     private var content: String? = null
+    private var v2 = false
+    private val webSearch = WebSearchPreference(environment, workspaceCwd, home)
 
-    @Synchronized fun prepare(enabled: Boolean): Map<String, String> {
+    @Synchronized fun prepare(enabled: Boolean, v2: Boolean = false): Map<String, String> {
         close()
+        this.v2 = v2
         if (!environment["OPENCODE_CONFIG"].isNullOrBlank()) {
             log.info("Preserving caller-provided OPENCODE_CONFIG; Varro's Ask agent is not injected")
             return emptyMap()
@@ -43,6 +46,7 @@ internal class AskAgentConfig(
         val file = path ?: return false
         val config = Json.obj()
         if (enabled && !hasConfiguredAsk()) config.add("agent", Json.obj("ask" to definition()))
+        if (v2 && webSearch.useRandomDefault()) config.add("websearch", Json.obj("provider" to "random"))
         val next = Json.stringify(config)
         if (next == content) return false
         JsonJournal(file).write(config)

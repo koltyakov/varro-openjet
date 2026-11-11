@@ -64,6 +64,25 @@ internal class FollowupCache(
         else { retire(entry); true }
     }
 
+    fun linkSession(key: String, digest: String, action: JsonObject): Boolean {
+        val sessionId = action.str("sessionId")
+        require(sessionId != null && Regex("[A-Za-z0-9_-]{1,200}").matches(sessionId)) { "Invalid follow-up session ID" }
+        var linked = false
+        change { entries ->
+            val entry = entries.obj(key)
+            val stored = entry.obj("suggestions").arr("actions")?.mapNotNull { it.asObjectOrNull() }?.firstOrNull {
+                it.str("title") == action.str("title") && it.str("prompt") == action.str("prompt")
+            }
+            if (entry.str("digest") != digest || entry.bool("dismissed") == true || stored == null ||
+                stored.str("sessionId")?.let { it != sessionId } == true) false
+            else {
+                linked = true
+                if (stored.str("sessionId") == sessionId) false else { stored.addProperty("sessionId", sessionId); true }
+            }
+        }
+        return linked
+    }
+
     fun clearSession(sessionKey: String, exceptKey: String?) = change { entries ->
         var changed = false
         entries.entrySet().forEach { (key, value) ->
@@ -93,7 +112,7 @@ internal class FollowupCache(
                 require(hash.matches(key) && hash.matches(entry.str("digest").orEmpty()) &&
                     hash.matches(entry.str("sessionKey").orEmpty())) { "Invalid follow-up admission record" }
                 try {
-                    val suggestions = Followups.suggestions(entry!!.get("suggestions").toString())
+                    val suggestions = Followups.suggestions(entry!!.get("suggestions").toString(), allowSessionId = true)
                     entry.add("suggestions", if (entry.bool("dismissed") == true) Followups.empty() else suggestions)
                 } catch (_: Exception) {
                     retire(entry!!)

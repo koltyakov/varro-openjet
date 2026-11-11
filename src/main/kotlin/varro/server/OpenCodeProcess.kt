@@ -139,6 +139,13 @@ class OpenCodeProcess(
 
     fun updateAskAgent(): Boolean = isManaged && askAgentConfig.rewrite(askAgentEnabled())
 
+    internal fun reconcileInjectedDefaults() {
+        if (isManaged && isRunning) {
+            verifyConnection()
+            askAgentConfig.rewrite(askAgentEnabled())
+        }
+    }
+
     val port: Int get() = currentPort.get().takeIf { it > 0 } ?: configuredPort()
 
     fun adoptPort(port: Int) { currentPort.set(port) }
@@ -204,7 +211,7 @@ class OpenCodeProcess(
         val commandLine = cli.launchCommandLine(info.command, args)
         log.info("Starting OpenCode server: ${info.command} ${args.joinToString(" ")}")
 
-        val environment = services.launchEnvironment(version, cli.serverEnvironment(askAgentConfig.prepare(askAgentEnabled()))).toMutableMap()
+        val environment = services.launchEnvironment(version, cli.serverEnvironment(askAgentConfig.prepare(askAgentEnabled(), v2Launch))).toMutableMap()
         serverPassword = environment["OPENCODE_SERVER_PASSWORD"]?.takeIf { it.isNotEmpty() }
             ?: java.util.UUID.randomUUID().toString() + java.util.UUID.randomUUID().toString()
         serverUsername = environment["OPENCODE_SERVER_USERNAME"]?.takeIf { it.isNotEmpty() } ?: "opencode"

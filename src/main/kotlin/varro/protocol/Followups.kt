@@ -75,7 +75,7 @@ internal object Followups {
         part.str("text")?.takeIf { part.str("type") == "text" && part.bool("synthetic") != true && part.bool("ignored") != true }
     }.joinToString("\n\n").trim()
 
-    fun suggestions(text: String): JsonObject {
+    fun suggestions(text: String, allowSessionId: Boolean = false): JsonObject {
         require(text.length <= 4_096) { "Follow-ups output is too large" }
         val record = strictJson.fromJson(text, JsonElement::class.java).asObjectOrNull()
         val summary = record.str("summary")
@@ -89,10 +89,12 @@ internal object Followups {
             val action = it.asObjectOrNull()
             val title = title(action.str("title"))
             val prompt = action.str("prompt")?.trim()
-            require(action?.keySet() == setOf("title", "prompt") && title != null && prompt != null &&
+            val sessionId = action.str("sessionId")
+            require(action != null && action.keySet().all { key -> key in setOf("title", "prompt") || allowSessionId && key == "sessionId" } &&
+                (!action.has("sessionId") || allowSessionId && sessionId != null && Regex("[A-Za-z0-9_-]{1,200}").matches(sessionId)) && title != null && prompt != null &&
                 prompt.isNotEmpty() && prompt.length <= 600 && !prompt.startsWith('/') && !unsafe.containsMatchIn(prompt) &&
                 titles.add(title.lowercase(Locale.ROOT)) && prompts.add(prompt.lowercase(Locale.ROOT))) { "Invalid follow-up action" }
-            Json.obj("title" to title, "prompt" to prompt)
+            Json.obj("title" to title, "prompt" to prompt).apply { sessionId?.let { addProperty("sessionId", it) } }
         })
     }
 }

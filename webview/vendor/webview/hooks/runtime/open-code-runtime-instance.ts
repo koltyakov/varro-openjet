@@ -179,7 +179,11 @@ export interface OpenCodeRuntime {
   loadOlderSessionPrompts(sessionId: string, isOwnerCurrent?: () => boolean): Promise<boolean>;
   createSession(title?: string, initialPermissionMode?: PermissionMode): Promise<string | null>;
   renameSession(id: string, title: string): Promise<boolean>;
-  forkSession(id: string, messageID?: string): Promise<string | null>;
+  forkSession(
+    id: string,
+    messageID?: string,
+    options?: { select?: boolean }
+  ): Promise<string | null>;
   deleteSession(id: string): Promise<void>;
   deleteSessionImmediately(id: string, options?: { directory?: string }): Promise<void>;
   restoreSession(rootID: string): Promise<void>;
@@ -2313,6 +2317,8 @@ export function createOpenCodeRuntime(): OpenCodeRuntime {
     activeInitializationAttempt = null;
     initializationOperation = null;
     startupStatusSnapshot = null;
+    uiStore.setStartupWaitingForPlugins(false);
+    uiStore.setStartupAddonWarning(null);
   }
 
   function invalidateWorkspaceAsyncWork(
@@ -2417,7 +2423,16 @@ export function createOpenCodeRuntime(): OpenCodeRuntime {
     loadInitialData: async () => {
       const workspace = workspaceGeneration;
       const [snapshots, , statuses] = await Promise.all([
-        dataLoaders.loadEssentialSnapshots(),
+        dataLoaders.loadEssentialSnapshots({
+          onWaitingForPlugins: (waiting) => {
+            if (workspace !== workspaceGeneration) return;
+            uiStore.setStartupWaitingForPlugins(waiting);
+            if (!waiting) uiStore.setStartupAddonWarning(null);
+          },
+          onAddonWarning: (warning) => {
+            if (workspace === workspaceGeneration) uiStore.setStartupAddonWarning(warning);
+          },
+        }),
         syncPendingPermissions({ waitForAutomation: false }),
         loadCurrentSessionStatusSnapshot(),
       ]);
@@ -2425,7 +2440,7 @@ export function createOpenCodeRuntime(): OpenCodeRuntime {
         throw new Error(
           snapshots.state === 'superseded'
             ? 'Startup snapshots were superseded by a workspace change'
-            : `Could not load ${snapshots.failed.join(', ')}`
+            : `Could not load ${snapshots.failed.join(', ')}${snapshots.error ? `: ${snapshots.error}` : ''}`
         );
       if (workspace === workspaceGeneration)
         startupStatusSnapshot = { workspace, snapshot: statuses };
@@ -3238,8 +3253,12 @@ export function createOpenCodeRuntime(): OpenCodeRuntime {
     return load;
   }
 
-  async function forkSession(id: string, messageID?: string): Promise<string | null> {
-    return sessionManagementOperations.forkSession(id, messageID);
+  async function forkSession(
+    id: string,
+    messageID?: string,
+    options?: { select?: boolean }
+  ): Promise<string | null> {
+    return sessionManagementOperations.forkSession(id, messageID, options);
   }
 
   async function renameSession(id: string, title: string): Promise<boolean> {

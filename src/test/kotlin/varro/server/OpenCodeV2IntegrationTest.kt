@@ -414,7 +414,7 @@ class OpenCodeV2IntegrationTest {
                 events.any { it.asObjectOrNull().str("type") == "session.next.text.delta" && it.asObjectOrNull().obj("properties").str("sessionID") == id }
             }
             if (OpenCodeCli.compareVersions(version, "2.0.29") >= 0) {
-                verifySideQuestions(transport, workspace.toString(), providerRequests, streamGate)
+                verifySideQuestions(transport, workspace.toString(), providerRequests, streamGate, version, root)
                 verifyDelegatedCommands(transport, providerInputs)
             }
             for (samplingDelay in listOf(0L, 75L, 250L)) {
@@ -562,7 +562,8 @@ class OpenCodeV2IntegrationTest {
         val sessions = mutableListOf<String>()
         val directories = mutableMapOf<String, String>()
         fun create(directory: java.nio.file.Path, askAll: Boolean = false): String {
-            // Native permission requests do not initialize the location's agent catalog themselves.
+            // 2.2.7 agent reads are snapshots, not an activation barrier. Model reads still await policy plugins.
+            transport.request("GET", "/api/model", options = RequestOptions(directory = directory.toString()))
             transport.request("GET", "/agent", options = RequestOptions(directory = directory.toString()))
             val body = Json.obj("title" to "Permission scope fixture", "agent" to "build")
             if (askAll) body.add("permission", Json.array(listOf(Json.obj("permission" to "*", "pattern" to "*", "action" to "ask"))))
@@ -776,7 +777,7 @@ class OpenCodeV2IntegrationTest {
 
     private fun verifySideQuestions(transport: OpenCodeTransport, directory: String,
         providerRequests: java.util.concurrent.atomic.AtomicInteger,
-        streamGate: AtomicReference<java.util.concurrent.CountDownLatch?>) {
+        streamGate: AtomicReference<java.util.concurrent.CountDownLatch?>, version: String, root: java.nio.file.Path) {
         val id = transport.request("POST", "/session", Json.obj("title" to "Isolated side question fixture",
             "model" to Json.obj("providerID" to "fixture", "modelID" to "fixture"))).data.asObjectOrNull().str("id")!!
         val questions = varro.host.SideQuestions(transport::request, { transport.apiVersion }, { true }, { 1 }, { listOf(directory) })
@@ -799,6 +800,22 @@ class OpenCodeV2IntegrationTest {
             val after = transport.request("GET", "/session/$id").data.asObjectOrNull()
             assertEquals(before.obj("model"), after.obj("model"))
             assertEquals(before.str("agent"), after.str("agent"))
+            if (OpenCodeCli.compareVersions(version, "2.2.7") >= 0) {
+                assertEquals(20L, (after.obj("tokens").long("input") ?: 0) - (before.obj("tokens").long("input") ?: 0))
+                assertEquals(6L, (after.obj("tokens").long("output") ?: 0) - (before.obj("tokens").long("output") ?: 0))
+                val usage = mutableListOf<com.google.gson.JsonObject>()
+                varro.host.LocalUsageDatabase(root.resolve("test.db"), { Json.obj() }).read(null, {}) { sessionID, info -> if (sessionID == id) usage.add(info) }
+                assertEquals(26L, usage.filter { it.str("source") == "unrecorded" }.sumOf { varro.host.UsageReport.Total().apply { add(id, it) }.total })
+                val remote = varro.host.UsageReport(attachOnly = true, apiVersion = { 2 }) { path, options ->
+                    if (path.startsWith("/experimental/session")) OpenCodeResponse(Json.array(listOf(after)))
+                    else transport.request("GET", path, options = options)
+                }.build(true)
+                assertTrue(remote, remote.contains("| Unattributed | Other session usage | 0 | 26 | - |"))
+                val csv = varro.host.UsageCsv.read(root.resolve("test.db"), { Json.obj() }).csv
+                assertTrue(csv, csv.contains(",unrecorded,,"))
+                assertEquals(history, transport.request("GET", "/session/$id/message").data)
+                assertEquals(inbox, transport.request("GET", "/api/session/$id/inbox").data)
+            }
             // Generation must also complete independently of a stalled execution.
             streamGate.set(gate)
             val beforeBusy = providerRequests.get()

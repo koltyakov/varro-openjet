@@ -108,6 +108,7 @@ class OpenCodeServer(
         initialSavedPermissions = initialSavedPermissions,
         persistSavedPermissions = persistSavedPermissions,
         canAliasWorkspacePaths = { !isAttachOnly() },
+        beforeReload = process::reconcileInjectedDefaults,
     )
 
     fun url(): String = "http://127.0.0.1:${process.port}"

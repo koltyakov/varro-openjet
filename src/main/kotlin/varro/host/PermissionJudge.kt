@@ -70,7 +70,12 @@ class PermissionJudge(
             hide(sessionId)
             val response = call("POST", "/session/$sessionId/message", Json.obj(
                 "model" to selected, "variant" to selected.str("variant"),
-                "system" to SYSTEM,
+                "system" to PromptTrace({ method, path, payload, options ->
+                    options.checkCancelled()
+                    varro.server.OpenCodeResponse(request(method, path, payload,
+                        minOf(2000L, maxOf(1L, ((options.deadlineNanos ?: deadline) - System.nanoTime()) / 1_000_000))) ?: com.google.gson.JsonNull.INSTANCE)
+                }).prompt("permission-judge", SYSTEM, varro.server.RequestOptions(deadlineNanos = deadline),
+                    permission.str("sessionID"), permission.str("id"), sessionId),
                 "parts" to Json.array(listOf(Json.obj("type" to "text", "text" to Json.stringify(input)))),
                 "format" to Json.obj("type" to "json_schema", "retryCount" to 1, "schema" to Json.obj(
                     "type" to "object", "additionalProperties" to false,

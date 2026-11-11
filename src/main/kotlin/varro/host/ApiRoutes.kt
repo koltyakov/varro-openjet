@@ -27,6 +27,7 @@ object ApiRoutes {
         const val PROMPT_COMPLETION_TEST = "$NAMESPACE/prompt-completion/test"
         const val MODEL_PRICING = "$NAMESPACE/model-pricing"
         const val PROVIDER_LIMIT = "$NAMESPACE/provider-limit"
+        const val STARTUP_DIAGNOSTICS = "$NAMESPACE/startup-diagnostics"
         const val PLAN_OPEN = "$NAMESPACE/plan/open"
         const val OPENCODE_CONFIG = "$NAMESPACE/opencode-config"
         const val OPENCODE_CONFIG_MODEL_ROUTING = "$NAMESPACE/opencode-config/model-routing"
@@ -319,6 +320,12 @@ object ApiRoutes {
         },
         route("${Endpoints.SESSION}/:id/followups/dismiss") { request, _ ->
             request.method == "POST" && request.optionalDirectory()
+        },
+        route("${Endpoints.SESSION}/:id/followups/session") { request, _ ->
+            request.method == "POST" && request.optionalDirectory()
+        },
+        route(Endpoints.STARTUP_DIAGNOSTICS) { request, _ ->
+            request.method == "GET" && request.optionalDirectory()
         },
         route("${Endpoints.SESSION}/:id/pin") { request, _ ->
             request.method == "POST" && request.optionalDirectory()
