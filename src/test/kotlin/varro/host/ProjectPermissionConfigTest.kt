@@ -13,6 +13,18 @@ class ProjectPermissionConfigTest {
     @JvmField @Rule val temporary = TemporaryFolder()
     private val rules = Json.array(listOf(Json.obj("permission" to "bash", "pattern" to "git *", "action" to "ask")))
 
+    @Test fun `standing approvals retain native fields comments and formatting`() {
+        val root = temporary.newFolder().toPath()
+        val path = root.resolve("opencode.jsonc")
+        val raw = "{\n  \"permissions\": [\n    { \"action\": \"shell\", /* policy */ \"resource\": \"*\", \"effect\": \"ask\", \"extra\": true } // keep\n  ]\n}"
+        Files.writeString(path, raw)
+        ProjectPermissionConfig(root, { true }).allow("webfetch", listOf("https://example.com/*"))
+        val saved = Files.readString(path)
+        assertTrue(saved.startsWith(raw.substringBefore(" // keep") + ", // keep"))
+        assertEquals(true, Json.parse(ProjectPermissionConfig.stripJsonComments(saved)).asJsonObject.arr("permissions")!![0].asJsonObject.bool("extra"))
+        assertEquals(2, ProjectPermissionConfig(root).read().size())
+    }
+
     @Test fun `new V2 rules use native arrays while existing legacy syntax is preserved`() {
         for (legacy in listOf(false, true)) {
             val root = temporary.newFolder().toPath()

@@ -30,8 +30,8 @@ class ProjectPermissionConfig(
     @Synchronized fun write(rules: JsonArray, beforeWrite: () -> Unit = {}) {
         update(beforeWrite) { original, document ->
             val nativeRules = usesNative(document)
-            JsoncEdit.set(original, listOf(if (nativeRules) "permissions" else "permission"),
-                if (nativeRules) OpenCodeV2Projection.rules(rules) else PermissionService.toConfig(rules))
+            if (nativeRules) JsoncEdit.nativePermissions(original, OpenCodeV2Projection.rules(rules).asJsonArray)
+            else JsoncEdit.set(original, listOf("permission"), PermissionService.toConfig(rules))
         }
     }
 
@@ -44,8 +44,9 @@ class ProjectPermissionConfig(
             val additions = Json.array(patterns.map { Json.obj("permission" to permission, "pattern" to it, "action" to "allow") })
             result = if (nativeRules) Json.array(current.toList() + additions.toList())
                 else PermissionService.mergeProjectAllow(current, additions, effective)
-            JsoncEdit.set(original, listOf(if (nativeRules) "permissions" else "permission"),
-                if (nativeRules) OpenCodeV2Projection.rules(result) else PermissionService.toConfig(result))
+            if (nativeRules) JsoncEdit.nativePermissions(original, Json.array(
+                document.getAsJsonArray("permissions")?.toList().orEmpty() + OpenCodeV2Projection.rules(additions).asJsonArray.toList()))
+            else JsoncEdit.set(original, listOf("permission"), PermissionService.toConfig(result))
         }
         return result
     }

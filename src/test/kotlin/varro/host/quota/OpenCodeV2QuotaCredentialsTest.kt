@@ -22,6 +22,7 @@ class OpenCodeV2QuotaCredentialsTest {
         val before = Files.readAllBytes(path)
         val auth = OpenCodeV2QuotaCredentials(path).read(emptyList())
         assertEquals("active-token", auth.obj("xai").str("access"))
+        assertEquals("active", auth.obj("xai").str("credentialID"))
         assertEquals("api", auth.obj("openrouter").str("type"))
         assertEquals("newer-key", auth.obj("openrouter").str("key"))
         assertArrayEquals(before, Files.readAllBytes(path))

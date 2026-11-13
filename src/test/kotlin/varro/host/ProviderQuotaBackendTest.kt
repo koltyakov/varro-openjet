@@ -30,6 +30,46 @@ class ProviderQuotaBackendTest {
     )))
     private fun response(json: String, code: Int = 200) = QuotaResponse(code, json.toByteArray())
 
+    @Test fun `Codex warning identities survive rotation but change with credentials without leaking secrets`() {
+        for (mode in listOf("v1", "local-v2", "attached-v2")) {
+            val creds = credentials()
+            var credential = "credential-one"
+            var token = "token-one"
+            fun value() = Json.obj("type" to "oauth", "methodID" to "chatgpt-token-sharing", "access" to token,
+                "accountId" to "private-account", "metadata" to Json.obj("accountID" to "private-account"))
+            fun save() {
+                if (mode == "v1") Files.writeString(creds.authPath, Json.stringify(Json.obj("openai" to value().apply { addProperty("credentialID", credential) })))
+                else writeQuotaCredentials(creds.v2DatabasePath, Json.array(listOf(Json.obj("id" to credential,
+                    "integrationID" to "openai", "active" to true, "value" to value()))))
+            }
+            save()
+            val updates = mutableListOf<JsonObject>()
+            ProviderQuotaBackend(creds, { _, path, _, _ -> when (path) {
+                "/config/providers" -> metadata("openai")
+                "/api/credential" -> {
+                    assertEquals("attached-v2", mode)
+                    Json.obj("data" to listOf(Json.obj("id" to credential, "integrationID" to "openai", "active" to true, "value" to value())))
+                }
+                else -> error("Unexpected route $path")
+            } }, QuotaHttp { error("Token sharing must not call quota HTTP") }, updates::add,
+                apiVersion = { if (mode == "v1") 1 else 2 }, attachOnly = { mode == "attached-v2" }).use { backend ->
+                val first = backend.get("openai", null, "/work")
+                assertEquals("unsupported", first.str("status"))
+                val identity = first.obj("codexLoginRequired").text("connectionID")!!
+                assertEquals(64, identity.length)
+                token = "rotated-token"; save()
+                assertEquals(identity, backend.get("openai", null, "/work").obj("codexLoginRequired").str("connectionID"))
+                backend.clearCache()
+                assertEquals(identity, backend.get("openai", null, "/work").obj("codexLoginRequired").str("connectionID"))
+                credential = "credential-two"; save()
+                val second = backend.get("openai", null, "/work")
+                assertNotEquals(identity, second.obj("codexLoginRequired").str("connectionID"))
+                for (result in updates + first + second) for (secret in listOf("credential-one", "credential-two", "private-account", "token-one", "rotated-token"))
+                    assertFalse("$mode leaked $secret", Json.stringify(result).contains(secret))
+            }
+        }
+    }
+
     @Test fun `credential rejection retries exponentially and success resets the delay`() {
         val creds = credentials(Json.obj("openai" to Json.obj("type" to "oauth", "access" to "test-token")))
         var now = 1_800_000_000_000L
@@ -255,7 +295,7 @@ class ProviderQuotaBackendTest {
                 assertEquals(mode, if (mode in listOf("malformed", "unavailable")) "error" else "unsupported", result.str("status"))
                 assertFalse(result.has("windows")); assertFalse(result.has("usageLimitResets"))
                 assertFalse(Json.stringify(result).contains("local-token"))
-                if (mode == "token-sharing") assertTrue(result.str("note")!!.contains("Codex browser"))
+                if (mode == "token-sharing") assertTrue(result.str("note")!!.contains("ChatGPT via Codex"))
             }
         }
     }

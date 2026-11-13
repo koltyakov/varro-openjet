@@ -413,6 +413,14 @@ class OpenCodeV2IntegrationTest {
             waitFor("Text delta for $id was not delivered over SSE") {
                 events.any { it.asObjectOrNull().str("type") == "session.next.text.delta" && it.asObjectOrNull().obj("properties").str("sessionID") == id }
             }
+            if (OpenCodeCli.compareVersions(version, "2.3.0") >= 0) {
+                waitFor("First-token cursor for $id was not delivered over SSE") {
+                    events.any { ServerEvents.parse(it)?.let { event ->
+                        event.sequenceOnly && event.seq != null && event.properties.str("sessionID") == id
+                    } == true }
+                }
+                assertFalse(events.any { it.asObjectOrNull().str("type") == "session.next.step.first-token" })
+            }
             if (OpenCodeCli.compareVersions(version, "2.0.29") >= 0) {
                 verifySideQuestions(transport, workspace.toString(), providerRequests, streamGate, version, root)
                 verifyDelegatedCommands(transport, providerInputs)
@@ -770,7 +778,14 @@ class OpenCodeV2IntegrationTest {
                 create("fixture-sharing-token", "sharing-account", "chatgpt-token-sharing")
                 val unsupported = backend.get("openai", null, null)
                 assertEquals("unsupported", unsupported.str("status")); assertEquals(1, polls)
-                assertTrue(unsupported.str("note")!!.contains("Codex browser"))
+                assertTrue(unsupported.str("note")!!.contains("ChatGPT via Codex"))
+                val warningID = unsupported.obj("codexLoginRequired").text("connectionID")!!
+                assertTrue(warningID.matches(Regex("[a-f0-9]{64}")))
+                assertNotEquals(ids.last(), warningID)
+                backend.clearCache()
+                assertEquals(warningID, backend.get("openai", null, null).obj("codexLoginRequired").str("connectionID"))
+                assertFalse(unsupported.toString().contains("fixture-sharing-token"))
+                assertFalse(unsupported.toString().contains("sharing-account"))
             }
         } finally { ids.reversed().forEach { transport.request("DELETE", "/api/credential/$it") } }
     }

@@ -82,7 +82,7 @@ internal object OpenCodeV2Events {
             add("result", if (type == "session.tool.called") data.get("resultState") else native ?: data.get("resultState"))
             addProperty("name", OpenCodeV2Projection.legacyAction(data.str("name"))); addProperty("output", OpenCodeV2Projection.toolOutput(data.get("content")))
         })
-        if (type.startsWith("session.step.")) return next(properties.apply {
+        if (type in setOf("session.step.started", "session.step.ended", "session.step.failed")) return next(properties.apply {
             if (type == "session.step.started" && data.num("started") != null) add("timestamp", data.get("started"))
             add("model", data.obj("model")?.deepCopy()?.apply { add("modelID", get("id")) }); addProperty("executionContinues", true)
         }) + if (type == "session.step.ended" && context.bool("backgroundPending") == true)

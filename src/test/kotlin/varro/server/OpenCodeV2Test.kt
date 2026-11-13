@@ -11,6 +11,42 @@ import varro.protocol.*
 class OpenCodeV2Test {
     @JvmField @Rule val temporary = TemporaryFolder()
 
+    @Test fun `new durable step events preserve sequence without unknown UI activity`() {
+        for (type in listOf("session.step.first-token", "session.step.future")) {
+            val projected = OpenCodeV2Events.project(Json.obj("id" to "evt_first", "type" to type,
+                "created" to 10, "durable" to Json.obj("seq" to 7), "location" to Json.obj("directory" to "/repo"),
+                "data" to Json.obj("sessionID" to "ses_test", "private" to "not forwarded")), Json.obj()).single()
+            assertEquals("session.next.context.updated", projected.str("type"))
+            assertEquals(true, projected.bool("sequenceOnly"))
+            assertEquals(7, projected.int("seq"))
+            assertEquals("evt_first", projected.str("id"))
+            assertEquals("/repo", projected.str("workspaceDirectory"))
+            assertEquals(Json.obj("sessionID" to "ses_test"), projected.obj("properties"))
+            val parsed = ServerEvents.parse(projected)!!
+            assertTrue(parsed.sequenceOnly)
+            assertEquals(7, parsed.seq)
+            assertEquals("session.next.context.updated", parsed.type)
+        }
+    }
+
+    @Test fun `provider methods expose stable OAuth and external IDs but not key IDs`() {
+        val native = adapter { _, path, _ ->
+            if (path == "/api/provider") Json.obj("data" to emptyList<Any>())
+            else {
+                assertEquals("/api/integration", path)
+                Json.obj("data" to listOf(Json.obj("id" to "openai", "methods" to listOf(
+                Json.obj("id" to "key", "type" to "key"),
+                Json.obj("id" to "chatgpt-token-sharing", "type" to "oauth"),
+                Json.obj("id" to "chatgpt-browser", "type" to "oauth"),
+                Json.obj("id" to "external", "type" to "external")))))
+            }
+        }
+        val methods = native.request("GET", "/provider/auth", null, RequestOptions()).data.asObjectOrNull().arr("openai")!!
+        assertEquals(listOf(null, "chatgpt-token-sharing", "chatgpt-browser", "external"), methods.map { it.asJsonObject.text("id") })
+        assertEquals(listOf("api", "oauth", "oauth", "external"), methods.map { it.asJsonObject.str("type") })
+        assertFalse(methods.first().asJsonObject.has("id"))
+    }
+
     @Test fun `MCP account switching disconnects and deletes only its integration credentials before a fresh OAuth attempt`() {
         val calls = mutableListOf<Pair<String, String>>()
         var connected = true

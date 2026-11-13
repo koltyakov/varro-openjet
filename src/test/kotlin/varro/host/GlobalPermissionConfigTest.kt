@@ -11,6 +11,24 @@ class GlobalPermissionConfigTest {
     @JvmField @Rule val temporary = TemporaryFolder()
     private val rules = Json.array(listOf(Json.obj("permission" to "webfetch", "pattern" to "https://trusted.example/*", "action" to "allow")))
 
+    @Test fun `global approvals and panel edits keep compact native entries and comments`() {
+        val root = temporary.newFolder().toPath()
+        val file = root.resolve("opencode.jsonc")
+        val entry = "    { \"action\": \"shell\", \"resource\": \"*\", \"effect\": \"ask\" }"
+        val raw = "{\n  \"permissions\": [\n    // baseline\n$entry // keep attached\n  ]\n}"
+        Files.writeString(file, raw)
+        val config = GlobalPermissionConfig(root)
+        config.allow("webfetch", listOf("https://trusted.example/*"))
+        val appended = Files.readString(file)
+        assertTrue(appended.contains("// baseline\n$entry, // keep attached"))
+        val current = config.read().arr("rules")!!
+        config.write(current)
+        assertEquals(appended, Files.readString(file))
+        current[0].asJsonObject.addProperty("action", "deny")
+        config.write(current)
+        assertEquals(appended.replace("\"effect\": \"ask\"", "\"effect\": \"deny\""), Files.readString(file))
+    }
+
     @Test fun `global config selects only last global file and preserves unrelated fields and comments`() {
         val root = temporary.root.toPath()
         val first = Files.writeString(root.resolve("config.json"), "{\"permission\":\"ask\"}")

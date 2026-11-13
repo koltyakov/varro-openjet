@@ -34,7 +34,7 @@ internal class OpenCodeV2QuotaCredentials(private val path: Path) {
                 })
                 database.autoCommit = false
                 val filter = if (integrations.isEmpty()) "" else " AND integration_id IN (${integrations.joinToString(",") { "?" }})"
-                val query = "SELECT integration_id,value FROM credential WHERE integration_id IS NOT NULL$filter " +
+                val query = "SELECT integration_id,value,id FROM credential WHERE integration_id IS NOT NULL$filter " +
                     "ORDER BY active DESC,time_created DESC,id DESC LIMIT 1025"
                 val auth = JsonObject()
                 database.prepareStatement(query).use { statement ->
@@ -57,6 +57,7 @@ internal class OpenCodeV2QuotaCredentials(private val path: Path) {
                                 "oauth" -> {
                                     if (value.text("access") == null) throw QuotaFailure("OpenCode V2 returned an invalid provider OAuth token")
                                     auth.add(id, value.deepCopy().apply {
+                                        addProperty("credentialID", rows.getString(3))
                                         val metadata = value.obj("metadata")
                                         (metadata.text("accountID") ?: metadata.text("accountId") ?: value.text("accountId"))?.let { addProperty("accountId", it) }
                                     })

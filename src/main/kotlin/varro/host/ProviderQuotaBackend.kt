@@ -145,6 +145,10 @@ class ProviderQuotaBackend(
         } catch (_: Exception) {
             status(key, "error", "Could not poll provider limits. Check the OpenCode connection and IDE HTTP proxy settings.")
         }
+        result.obj("codexLoginRequired")?.let { warning ->
+            // Keep stable credential identities host-only, including in cached and pushed status.
+            warning.text("connectionID")?.let { warning.addProperty("connectionID", QuotaCredentials.fingerprint(it)) }
+        }
         return synchronized(lifecycle) {
             if (closed || generation.get() != version) {
                 return@synchronized status(key, "error", "Provider settings changed during the poll; retrying")
@@ -186,11 +190,13 @@ class ProviderQuotaBackend(
     /** Credentials stay host-only. No local database, files, inactive account or env fallback. */
     private fun attachedOpenAI(response: JsonElement?): JsonObject {
         val entries = response.asObjectOrNull().arr("data") ?: throw QuotaFailure("Invalid OpenCode V2 credential response")
-        val selected = entries.mapNotNull { it.asObjectOrNull() }.firstOrNull {
+        val active = entries.mapNotNull { it.asObjectOrNull() }.firstOrNull {
             it.str("integrationID") == "openai" && it.bool("active") == true
-        }.obj("value")
+        }
+        val selected = active.obj("value")
         if (selected.str("type") != "oauth" || selected.text("access") == null) return JsonObject()
         return Json.obj("openai" to selected!!.deepCopy().apply {
+            active.text("id")?.let { addProperty("credentialID", it) }
             val metadata = selected.obj("metadata")
             (metadata.text("accountID") ?: metadata.text("accountId"))?.let { addProperty("accountId", it) }
         })

@@ -14,7 +14,8 @@ class QuotaAdaptersTest {
         val adapters = QuotaAdapters(QuotaHttp { error("Token sharing must not make quota requests") }, credentials, null)
         val auth = Json.obj("openai" to Json.obj("type" to "oauth", "methodID" to "chatgpt-token-sharing", "access" to "fixture"))
         val result = adapters.poll(Json.obj("id" to "openai"), auth, "model", now)!!
-        assertEquals("unsupported", result.str("status")); assertTrue(result.str("note")!!.contains("Codex browser"))
+        assertEquals("unsupported", result.str("status")); assertTrue(result.str("note")!!.contains("ChatGPT via Codex"))
+        assertEquals("chatgpt-token-sharing", result.obj("codexLoginRequired").str("connectionID"))
         assertFalse(result.has("windows")); assertFalse(result.has("usageLimitResets"))
     }
     @get:Rule val temporary = TemporaryFolder()

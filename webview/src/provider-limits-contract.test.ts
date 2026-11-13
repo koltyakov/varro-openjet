@@ -1,6 +1,27 @@
 import { expect, it } from 'vitest';
 import { parseExtensionMessage } from '../vendor/shared/extension-message';
 
+it('accepts an opaque Codex reconnect warning only for unsupported OpenAI provider limits', () => {
+  const message = {
+    type: 'provider-limit/updated', payload: { directory: '/repo', status: {
+      providerID: 'openai', status: 'unsupported', source: 'provider', checkedAt: 1_800_000_000_000,
+      note: 'Reconnect OpenAI using ChatGPT via Codex to display usage limits.',
+      codexLoginRequired: { connectionID: 'a'.repeat(64) },
+    } },
+  };
+  expect(parseExtensionMessage(message)).toEqual(message);
+  for (const invalid of [
+    { codexLoginRequired: null }, { codexLoginRequired: {} },
+    { codexLoginRequired: { connectionID: 42 } }, { codexLoginRequired: { connectionID: ' ' } },
+    { status: 'error' }, { status: 'available', windows: [] },
+    { providerID: 'anthropic' }, { source: 'opencode' },
+  ]) {
+    expect(parseExtensionMessage({ ...message, payload: {
+      ...message.payload, status: { ...message.payload.status, ...invalid },
+    } })).toBeNull();
+  }
+});
+
 it('accepts the native quota event with nullable bounds and rejects the former stripped-null wire shape', () => {
   const status = {
     providerID: 'openrouter', modelID: null, source: 'provider', status: 'available', checkedAt: 1_800_000_000_000,

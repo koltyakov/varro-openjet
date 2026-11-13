@@ -106,7 +106,8 @@ internal class QuotaAdapters(
             "openai" -> {
                 if (auth.obj(id).str("type") == "oauth" && auth.obj(id).str("methodID") == "chatgpt-token-sharing") {
                     return Json.obj("providerID" to id, "modelID" to model, "checkedAt" to now, "source" to "provider",
-                        "status" to "unsupported", "note" to "ChatGPT token sharing cannot read usage limits or reset credits. Reconnect OpenAI using Codex browser (legacy) to display them.")
+                        "status" to "unsupported", "note" to "ChatGPT token sharing cannot read usage limits or reset credits. Reconnect OpenAI using ChatGPT via Codex to display them.",
+                        "codexLoginRequired" to Json.obj("connectionID" to (auth.obj(id).text("credentialID") ?: auth.obj(id).text("accountId") ?: "chatgpt-token-sharing")))
                 }
                 if (auth.obj(id).str("type") != "oauth" && provider.obj("options").string("apiKey") != QuotaCredentials.OAUTH_DUMMY) {
                     return available(headerWindows("https://api.openai.com/v1/models", token(), now))

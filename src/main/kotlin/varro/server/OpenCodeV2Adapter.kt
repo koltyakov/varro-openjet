@@ -720,7 +720,7 @@ internal class OpenCodeV2Adapter(
                     "options" to if (field.str("type") == "boolean") listOf(Json.obj("value" to "true", "label" to "Yes"), Json.obj("value" to "false", "label" to "No"))
                     else field.arr("options")?.takeIf { field.bool("custom") != true }?.map { option ->
                         Json.obj("label" to option.asObjectOrNull().str("label"), "value" to option.asObjectOrNull()?.get("value")?.asString, "hint" to option.asObjectOrNull().str("description")) })
-            }) })
+            }).apply { if (method.str("type") != "key") method.text("id")?.let { addProperty("id", it) } } })
 
     private fun authAnswers(form: JsonArray?, value: JsonElement?): JsonElement? {
         val answer = value.asObjectOrNull()?.deepCopy() ?: Json.obj()
