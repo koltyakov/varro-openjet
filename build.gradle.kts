@@ -1,6 +1,7 @@
 import org.jetbrains.intellij.platform.gradle.TestFrameworkType
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 import org.jetbrains.kotlin.gradle.dsl.JvmDefaultMode
+import java.security.MessageDigest
 
 plugins {
     id("java")
@@ -47,10 +48,34 @@ dependencies {
         bundledPlugins(commaSeparated("platformBundledPlugins"))
         bundledModules(commaSeparated("platformBundledModules"))
         testFramework(TestFrameworkType.Platform)
+        pluginVerifier(providers.gradleProperty("pluginVerifierVersion"))
     }
 
     testImplementation("junit:junit:4.13.2")
 }
+
+// Resolve the release tool during ordinary CI, before a tag can start publishing.
+// Access the configuration directly so resolution errors retain their real cause,
+// rather than becoming the verifier task's generic "executable not found" error.
+val checkPluginVerifier = tasks.register("checkPluginVerifier") {
+    group = "verification"
+    description = "Resolves and checksums the pinned IntelliJ Plugin Verifier."
+    val verifier = configurations.named("intellijPluginVerifier")
+    val expected = providers.gradleProperty("pluginVerifierSha256")
+    inputs.files(verifier)
+    inputs.property("sha256", expected)
+    doLast {
+        val checksum = expected.get()
+        require(checksum.matches(Regex("[0-9a-f]{64}"))) { "pluginVerifierSha256 must be a SHA-256 checksum" }
+        val executable = verifier.get().singleFile
+        val actual = MessageDigest.getInstance("SHA-256").digest(executable.readBytes())
+            .joinToString("") { "%02x".format(it) }
+        check(actual == checksum) { "IntelliJ Plugin Verifier checksum mismatch: expected $checksum, got $actual" }
+        logger.lifecycle("Verified IntelliJ Plugin Verifier ${providers.gradleProperty("pluginVerifierVersion").get()}: $actual")
+    }
+}
+tasks.named("check") { dependsOn(checkPluginVerifier) }
+tasks.named("verifyPlugin") { dependsOn(checkPluginVerifier) }
 
 intellijPlatform {
     pluginConfiguration {

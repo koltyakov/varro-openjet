@@ -9,6 +9,15 @@ GitHub Actions separates validation from release publishing:
 
 The five IDE verifier jobs can run concurrently, subject to available GitHub runners. Each job forces only `verifyPlugin` to rerun with Gradle's task-scoped `--rerun`, so verification cannot reuse an old verdict while prerequisites can reuse cached work. Runner setup, Gradle configuration and IDE dependency downloads still add overhead to the verifier itself.
 
+`gradle.properties` pins the Plugin Verifier version and SHA-256. `checkPluginVerifier`
+resolves and validates that exact JAR during both `check` and `verifyPlugin`.
+Normal CI therefore tests release-tool resolution and warms its dependency cache
+before a tag is pushed, without running IDE verification. It does not rely on the
+Gradle plugin's floating `latest` default. Update the version and checksum together
+from the official JetBrains release, then run `./gradlew checkPluginVerifier` and
+verify the exact tested ZIP across the configured IDE matrix. A checksum mismatch
+or tool download failure blocks the build; it never skips verification.
+
 ## Tag a release
 
 To release, first set `pluginVersion` in `gradle.properties`, commit it with the changes and push to `main`. Tag that same commit with the matching version:
