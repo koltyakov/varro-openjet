@@ -1,6 +1,6 @@
 # OpenCode V2 support
 
-OpenJet supports V1 from 1.16.0 and V2 from 2.0.5. The webview and shared sources were synced from Varro's `main` branch at `aed79c3bb08e`, version 0.34.14. Tested baselines are V1 1.19.5 and V2 2.3.0. The Kotlin adapter handles released-server contracts, including generated skill, shell and synthetic transcript records. Synthetic text appears as automatic-action notices; canonical subagent completion metadata produces linked subagent activities. Pending and running V2 patch calls render as active edits. Assistant history preserves automatic retry metadata for recovery notices. History attachments use deferred references with Kotlin-generated thumbnails and on-demand original reads. Chat annotations retain bounded display context before deferral. [Session cleanup and usage export](session-cleanup.md) preserve statistics and optional parent transcripts before confirmed deletions.
+OpenJet supports V1 from 1.16.0 and V2 from 2.0.5. The webview and shared sources were synced from Varro's `main` branch at `ad031d16e81c`, version 0.34.15. Tested baselines are V1 1.19.5 and V2 2.3.0. The Kotlin adapter handles released-server contracts, including generated skill, shell and synthetic transcript records. Synthetic text appears as automatic-action notices; canonical subagent completion metadata produces linked subagent activities. Pending and running V2 patch calls render as active edits. Assistant history preserves automatic retry metadata for recovery notices. History attachments use deferred references with Kotlin-generated thumbnails and on-demand original reads. Chat annotations retain bounded display context before deferral. [Session cleanup and usage export](session-cleanup.md) preserve statistics and optional parent transcripts before confirmed deletions.
 
 V2 sessions support `/pause` and a Resume action in the transcript. Pausing parks queued messages and interrupts with `resume=false`. Pause markers persist in the shared Varro session annotations, and session summaries and usage reports exclude paused time. Commit-message generation uses the stateless endpoint when the server advertises it, falling back to a helper session when the endpoint or selected model is unavailable before generation starts.
 
@@ -72,6 +72,15 @@ On V2 2.1.2 and newer, native catalog exclusions for `opencode` and `opencode-go
 are authoritative. Configured-model fallback cannot restore excluded free models.
 Returned models still receive configured overrides; custom providers and older
 servers retain fallback. The policy uses validated health and clears on protocol reset.
+
+Both V2 provider catalogs omit Flex-tier and GPT Cyber models when their effective
+endpoint is the Codex subscription route on `chatgpt.com` or `chat.openai.com`.
+The filter runs after legacy configured-model restoration and before default
+selection. It follows model/provider body and settings overrides, model aliases,
+and OpenAI's subscription redirect for API-origin model overrides. Standard and
+priority models, API-key endpoints and unrelated custom endpoints remain
+available. Changing the endpoint refreshes these choices without rewriting user
+configuration or the native catalog.
 
 OpenCode 2.0.25 external credential methods retain their catalog position alongside key and OAuth methods. The adapter posts the chosen method ID and typed form answers to `/api/integration/:id/connect/external`, then reports completion only after acknowledgement. It does not start or poll an OAuth attempt. Custom string fields remain text inputs even when the server supplies suggested options. Older servers keep their existing key and OAuth flows.
 
@@ -2848,6 +2857,64 @@ the reviewed changes. These limits do not establish full backend/UI parity.
 Tests use isolated fixture HOME/XDG/database/server-state roots and a deterministic
 local provider, never production sessions or service registrations. No commit,
 push or tag was made.
+
+## Upstream sync follow-up, 2026-11-15
+
+Reviewed Varro `aed79c3bb08e23023b4a5d46831a1e488fab6ad0` through
+`ad031d16e81cd0fc912e93d5256f488ebeb9a7f1`, version 0.34.15. All four changed
+upstream files were reviewed. The only runtime change is in
+`src/extension/opencode-v2-adapter.ts`; the other changes add its tests and bump
+the upstream package version. Shared protocol, webview sources, contributed
+configuration, browser dependencies and toolchain are unchanged. The vendor
+content hash is unchanged. V1 remains 1.19.5 and V2 remains 2.3.0, with support
+floors of 1.16.0 and 2.0.5. No new released OpenCode diff requires review. The
+user's plugin version change to 0.10.8 is preserved.
+
+| Upstream change | OpenJet implementation and regression coverage |
+| --- | --- |
+| `opencode-v2-adapter.ts`; filtering `/provider` and `/config/providers` over `/api/provider`, `/api/model` and `/api/config` | `OpenCodeV2Adapter.kt` filters Flex-tier and GPT Cyber models only for matching Codex subscription endpoints, after legacy fallback and before choosing defaults. Model body, provider body, model settings/options and provider settings retain upstream's nullish precedence. Cyber matching uses the underlying model ID rather than the display name. OpenAI API-origin overrides follow the subscription hook; unrelated API endpoints and provider aliases keep their own routing. No config, credential or server-catalog object is mutated. |
+
+`OpenCodeV2SubscriptionCatalogTest.kt` adds five regressions covering unknown,
+floor and modern server versions, both projected catalogs, restored legacy
+models, safe defaults, source immutability, subscription-to-API changes, exact
+hosts/path boundaries, explicit overrides, malformed URLs and non-default API
+ports. Requests in these fixtures are catalog reads only. The unchanged V1
+adapter, HTTP paths, SSE, permissions/forms, session execution and managed
+startup need no port. There are no new VS Code-specific changes in this delta.
+
+Review evidence is `build/upstream-sync-ad031d16-review.diff`. The released
+compatibility helper passed `./gradlew check buildPlugin --rerun-tasks`, including
+the pinned Plugin Verifier checksum gate. All 884 Kotlin tests passed; only the
+optional existing-database usage benchmark and unchanged published V1 fixture
+were skipped. The adapter and both managed-service cases passed against the exact
+published OpenCode 2.3.0 binary without skips, using isolated fixture
+HOME/XDG/database/server-state roots and a deterministic local provider.
+Evidence is `build/opencode-compatibility/2.3.0/verification.json`.
+
+All 112 browser host tests, TypeScript checking, vendor integrity, browser
+bundling, six compatibility-helper regressions and the vendor-integrity script
+test passed. No dependency installation or lockfile refresh was needed.
+`git diff --check` passed. The full build log is
+`build/upstream-sync-ad031d16-full-check.log`; the packaged plugin is
+`build/distributions/varro-openjet-0.10.8.zip`.
+
+Plugin Verifier 1.411 also checked that exact ZIP against all five configured IDE
+builds, including 2026.1.5. Every target was compatible, with only the existing
+deprecated/experimental API warnings. The log is
+`build/upstream-sync-ad031d16-verifier.log`.
+
+Remaining differences and verification limits:
+
+| Status | Upstream files/endpoints and OpenJet code | User-visible impact |
+| --- | --- | --- |
+| Existing backend differences outside this delta | Varro permission/config, state-path, quota coordination, cleanup, Windows inspection and image services; OpenJet `OpenCodeHostServices.kt`, `PermissionJudge.kt`, `OpenCodeV2SessionState.kt`, `ProviderQuotaBackend.kt`, `ArtifactCleanup.kt`, `ServerOwnership.kt`, `RemoteImages.kt`, `ImageThumbnails.kt` | Previously documented inherited-config provenance, repeated reviews, cross-root pending snapshots, annotation-root selection, cross-host quota polling/validation, cleanup limits, Windows inspector warm-up and AVIF differences remain. None of these services changed upstream in this delta. |
+| Existing dependency audit finding | Varro and OpenJet `package.json` retain the `seroval` 1.6.8 override, described in the preceding review. | The earlier serializer advisories remain outside this change. No dependency version was changed or audit-clean result claimed. |
+| Live subscription and native UI not verified | Varro `opencode-v2-adapter.ts`; OpenJet `OpenCodeV2Adapter.kt`, `WebviewHost.kt` and the unchanged model picker | No live Codex login, billed/public-provider request, sandbox JCEF interaction or native Windows/Linux run was performed. Filtering is verified with deterministic catalog fixtures, not a real account. The unchanged released V1 fixture was not rerun. |
+
+No new required Kotlin host or consumed-contract implementation gap remains in
+the reviewed changes. These limits do not establish full backend/UI parity.
+No production session, credential, database or service registration was used.
+No commit, push or tag was made for this sync.
 
 ## Verification
 

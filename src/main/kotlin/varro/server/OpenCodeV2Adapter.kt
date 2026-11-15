@@ -4,6 +4,7 @@ import com.google.gson.JsonArray
 import com.google.gson.JsonElement
 import com.google.gson.JsonObject
 import varro.protocol.*
+import java.net.URI
 import java.net.URLDecoder
 import java.net.URLEncoder
 import java.util.concurrent.ConcurrentHashMap
@@ -33,6 +34,7 @@ internal class OpenCodeV2Adapter(
     @Volatile private var apiCapabilities: OpenCodeApiCapabilities? = null
     @Volatile private var nativeModelExclusions = false
     @Volatile private var nativeChatCatalog = false
+    private val cyberModel = Regex("^gpt-\\d+(?:\\.\\d+)?-cyber(?:-|$)")
 
     fun setServerVersion(version: String?) {
         backgroundJobs.setServerVersion(version)
@@ -637,9 +639,37 @@ internal class OpenCodeV2Adapter(
                 target.obj("models")!!.add(modelID, normalized)
             } }
         } }
+        // Filter native and restored legacy entries before choosing defaults.
+        all.forEach { provider ->
+            val models = provider.obj("models") ?: return@forEach
+            models.entrySet().removeIf { isUnsupportedSubscriptionModel(provider, it.value.asJsonObject) }
+        }
         val defaults = Json.obj().apply { all.forEach { provider -> addProperty(provider.str("id"), provider.obj("models")?.entrySet()?.firstOrNull { it.value.asObjectOrNull().bool("enabled") != false }?.key.orEmpty()) } }
         return if (route == "/config/providers") Json.obj("providers" to all, "default" to defaults)
         else Json.obj("all" to all, "default" to defaults, "connected" to all.filter { it.obj("models")?.entrySet()?.any { it.value.asObjectOrNull().bool("enabled") != false } == true }.map { it.str("id") })
+    }
+
+    private fun isUnsupportedSubscriptionModel(provider: JsonObject, model: JsonObject): Boolean {
+        fun first(vararg values: JsonElement?) = values.firstOrNull { it != null && !it.isJsonNull }
+        fun string(value: JsonElement?) = value?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isString }?.asString
+        fun url(value: String?) = value?.let { runCatching { URI(it) }.getOrNull() }
+        val providerSettings = provider.obj("options")
+        val modelSettings = model.obj("settings") ?: model.obj("options")
+        val tier = first(model.obj("body")?.get("service_tier"), provider.obj("body")?.get("service_tier"),
+            modelSettings?.get("serviceTier"), providerSettings?.get("serviceTier"))
+        // Cyber requires separate Daybreak API access, not a Codex-plan login.
+        val id = string(first(model.get("modelID"), model.obj("api")?.get("id"), model.get("id")))
+        if (string(tier) != "flex" && (id == null || !cyberModel.containsMatchIn(id))) return false
+        var endpoint = url(string(first(modelSettings?.get("baseURL"), providerSettings?.get("baseURL")))) ?: return false
+        // OpenAI's subscription hook also redirects API-origin model overrides.
+        if (provider.str("id") == "openai" && endpoint.scheme.equals("https", ignoreCase = true) &&
+            endpoint.host.equals("api.openai.com", ignoreCase = true) && endpoint.port in setOf(-1, 443)) {
+            url(providerSettings.str("baseURL"))?.let { endpoint = it }
+        }
+        val subscription = endpoint.host.equals("chatgpt.com", ignoreCase = true) ||
+            endpoint.host.equals("chat.openai.com", ignoreCase = true)
+        val path = endpoint.rawPath.orEmpty()
+        return subscription && (path == "/backend-api/codex" || path.startsWith("/backend-api/codex/"))
     }
 
     private fun authenticate(provider: String, action: String, method: String, input: JsonObject, directory: String?, options: RequestOptions, override: String? = null): JsonElement {
