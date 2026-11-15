@@ -12,6 +12,19 @@ import org.junit.Test
  */
 class ApiRoutesTest {
 
+    @Test fun `session location is a scoped read with no arbitrary inventory access`() {
+        val path = "/varro/session/ses_fixture/location"
+        assertTrue(ApiRoutes.isAllowed("GET", path))
+        assertTrue(ApiRoutes.isAllowed("GET", "$path?directory=%2Frepo"))
+        for (method in listOf("POST", "PATCH", "DELETE")) assertFalse(ApiRoutes.isAllowed(method, path))
+        for (query in listOf("directory=", "directory=/a&directory=/b", "projectID=other", "path=/private")) {
+            assertFalse(ApiRoutes.isAllowed("GET", "$path?$query"))
+        }
+        assertFalse(ApiRoutes.isAllowed("GET", "/varro/session/a%2fb/location"))
+        assertFalse(ApiRoutes.isAllowed("GET", "/experimental/worktree?projectID=other"))
+        assertFalse(ApiRoutes.isAllowed("GET", "/project"))
+    }
+
     @Test fun `global permissions use named host routes without arbitrary file paths or native permission writes`() {
         val config = ApiRoutes.Endpoints.OPENCODE_GLOBAL_PERMISSIONS
         for (method in listOf("GET", "POST")) {

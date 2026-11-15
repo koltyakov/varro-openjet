@@ -8,6 +8,31 @@ import varro.protocol.*
 import varro.store.VarroStore
 
 class SessionTransfersTest {
+    @Test fun `status snapshots poll retained destinations without admitting unrelated or hidden sessions`() {
+        val fixture = Fixture()
+        val transfers = fixture.service()
+        transfers.observe(fixture.session)
+        fixture.session = summary("/destination")
+        transfers.observe(fixture.session)
+        val initial = Json.obj("ses_origin" to Json.obj("type" to "busy"))
+        val status = Json.obj("type" to "busy", "background" to true, "backgroundServices" to 2)
+        val calls = mutableListOf<String>()
+        val result = transfers.statuses("/origin", initial, emptySet()) { directory ->
+            calls += directory
+            Json.obj("ses_one" to status, "ses_foreign" to Json.obj("type" to "busy"))
+        }
+        assertEquals(listOf("/destination"), calls)
+        assertEquals(status, result.obj("ses_one"))
+        assertEquals(initial.obj("ses_origin"), result.obj("ses_origin"))
+        assertFalse(result.has("ses_foreign"))
+        assertFalse(initial.has("ses_one"))
+        for ((directory, hidden) in listOf("/destination" to emptySet<String>(), "/origin" to setOf("ses_one"))) {
+            assertEquals(initial, transfers.statuses(directory, initial, hidden) { error("Unexpected status poll") })
+        }
+        assertThrows(IllegalStateException::class.java) { transfers.statuses("/origin", initial, emptySet()) { JsonArray() } }
+        assertThrows(IllegalStateException::class.java) { transfers.statuses("/origin", initial, emptySet()) { error("Snapshot failed") } }
+    }
+
     private class Fixture {
         var server = "http://fixture.local:4096"
         var roots = listOf("/origin")

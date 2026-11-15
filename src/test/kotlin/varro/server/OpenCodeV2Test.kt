@@ -11,6 +11,25 @@ import varro.protocol.*
 class OpenCodeV2Test {
     @JvmField @Rule val temporary = TemporaryFolder()
 
+    @Test fun `project and saved worktree inventories preserve native bare arrays without location loading`() {
+        val calls = mutableListOf<String>()
+        val native = adapter { method, path, _ ->
+            assertEquals("GET", method)
+            calls += path
+            when (path) {
+                "/api/project" -> Json.array(listOf(Json.obj("id" to "project", "vcs" to "git")))
+                "/api/worktree?projectID=project%2Fone" -> Json.array(listOf(Json.obj("directory" to "/worktree", "strategy" to "git")))
+                else -> error("Unexpected request $path")
+            }
+        }
+        val options = RequestOptions(directory = "/approved")
+        assertEquals("git", native.request("GET", "/project", null, options).data!!.asJsonArray.single().asJsonObject.str("vcs"))
+        assertEquals("/worktree", native.request("GET", "/experimental/worktree?projectID=project%2Fone", null, options)
+            .data!!.asJsonArray.single().asJsonObject.str("directory"))
+        assertThrows(IllegalStateException::class.java) { native.request("GET", "/experimental/worktree", null, options) }
+        assertEquals(listOf("/api/project", "/api/worktree?projectID=project%2Fone"), calls)
+    }
+
     @Test fun `new durable step events preserve sequence without unknown UI activity`() {
         for (type in listOf("session.step.first-token", "session.step.future")) {
             val projected = OpenCodeV2Events.project(Json.obj("id" to "evt_first", "type" to type,

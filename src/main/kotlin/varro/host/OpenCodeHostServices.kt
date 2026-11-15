@@ -36,6 +36,7 @@ class OpenCodeHostServices(
     private val editor: EditorIntegration,
     private val settings: VarroSettings,
     private val workspaceRoots: () -> List<String> = { listOfNotNull(project.basePath) },
+    private val authorizeSessionDirectory: (String, String) -> Boolean = { _, _ -> false },
     onProviderLimitUpdate: (JsonObject) -> Unit = {},
 ) : RestProxy.HostServices {
 
@@ -89,7 +90,8 @@ class OpenCodeHostServices(
 
     override fun followups(sessionId: String, body: JsonElement?, directory: String?, dismiss: Boolean, isCancelled: () -> Boolean): JsonElement {
         require(directory == null || varro.server.WorkspacePaths.isSame(directory, server.workspaceDirectory()) ||
-            workspaceRoots().any { varro.server.WorkspacePaths.isSame(directory, it) }) { "Workspace directory is not an open project folder" }
+            workspaceRoots().any { varro.server.WorkspacePaths.isSame(directory, it) } ||
+            authorizeSessionDirectory(sessionId, directory)) { "Workspace directory is not an open project folder" }
         val source = Followups.source(body)
         val scope = directory ?: server.workspaceDirectory()
         if (dismiss) { followups.dismiss(sessionId, source, scope); return com.google.gson.JsonPrimitive(true) }
@@ -113,7 +115,9 @@ class OpenCodeHostServices(
 
     override fun linkFollowupSession(sessionId: String, body: JsonElement?, directory: String?, isCancelled: () -> Boolean): JsonElement {
         val scope = directory ?: server.workspaceDirectory()
-        require(workspaceRoots().any { varro.server.WorkspacePaths.isSame(scope, it) } || varro.server.WorkspacePaths.isSame(scope, server.workspaceDirectory())) { "Workspace directory is not an open project folder" }
+        require(workspaceRoots().any { varro.server.WorkspacePaths.isSame(scope, it) } ||
+            varro.server.WorkspacePaths.isSame(scope, server.workspaceDirectory()) ||
+            scope != null && authorizeSessionDirectory(sessionId, scope)) { "Workspace directory is not an open project folder" }
         val action = body.asObjectOrNull().obj("action") ?: error("Invalid follow-up action")
         val linked = action.str("sessionId") ?: error("Invalid follow-up session")
         require(linked != sessionId && Regex("[A-Za-z0-9_-]{1,200}").matches(linked) && action.str("title") != null && action.str("prompt") != null) { "Invalid follow-up session link" }

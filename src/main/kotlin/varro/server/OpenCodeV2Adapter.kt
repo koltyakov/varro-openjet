@@ -226,7 +226,12 @@ internal class OpenCodeV2Adapter(
                 }
                 return result(commands + skills)
             }
-            "/skill", "/project", "/vcs", "/vcs/status" -> return result(data("GET", scoped("/api$route")))
+            "/experimental/worktree" -> if (method == "GET") {
+                val projectID = query["projectID"]?.takeIf { it.isNotBlank() } ?: error("Worktree inventory requires a project ID")
+                return result(raw("GET", "/api/worktree?projectID=${encode(projectID)}"))
+            }
+            "/project" -> if (method == "GET") return result(raw("GET", "/api/project"))
+            "/skill", "/vcs", "/vcs/status" -> return result(data("GET", scoped("/api$route")))
             "/project/current", "/path" -> {
                 val location = raw("GET", scoped("/api/location")).asObjectOrNull() ?: error("Invalid OpenCode location")
                 val project = location.obj("project") ?: Json.obj()

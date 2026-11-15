@@ -103,6 +103,13 @@ class VarroProjectService(private val project: Project) : Disposable {
     private fun transferRoots(): List<String> = (listOfNotNull(project.basePath) +
         context.context.arr("workspaceFolders")?.mapNotNull { it.asObjectOrNull().text("path") }.orEmpty()).distinct()
 
+    private val sessionLocations = SessionLocations(server.transport::request, { server.transport.apiVersion },
+        { Triple(server.requestGeneration(), server.url(), store.sessionHistoryScope) }, ::transferRoots)
+
+    private fun authorizedTransferDirectory(id: String, directory: String): Boolean = transfers.get(id)?.let {
+        varro.server.WorkspacePaths.isSame(it.str("directory"), directory) && it.obj("transfer").bool("available") == true
+    } == true
+
     private val transfers = SessionTransfers(store.sessionTransfers, { store.sessionTransfers = it }, server::url, ::transferRoots,
         readSession = { id -> server.transport.request("GET", "/session/${java.net.URLEncoder.encode(id, Charsets.UTF_8)}",
             options = varro.server.RequestOptions(unscoped = true)).data },
@@ -111,6 +118,8 @@ class VarroProjectService(private val project: Project) : Disposable {
             broadcast("session/catalog-invalidated")
         },
         invalidateCatalog = { broadcast("session/catalog-invalidated") },
+        authorizeWorktree = sessionLocations::authorizeTransferred,
+        knownWorktree = sessionLocations::knownTransferred,
     )
 
     private val notifications = ProjectNotifications(project, server, settings, store) { sessionId ->
@@ -139,7 +148,8 @@ class VarroProjectService(private val project: Project) : Disposable {
     private fun selectionDirectory(sessionId: String): String? =
         server.transport.observedSessionDirectories()[sessionId] ?: project.basePath
 
-    private val hostServices: OpenCodeHostServices = OpenCodeHostServices(project, server, editor, settings, workspaceRoots = ::transferRoots) { update ->
+    private val hostServices: OpenCodeHostServices = OpenCodeHostServices(project, server, editor, settings,
+        workspaceRoots = ::transferRoots, authorizeSessionDirectory = ::authorizedTransferDirectory) { update ->
         acceptPinnedProviderUpdate(update)
         broadcast("provider-limit/updated", update)
     }
@@ -693,7 +703,7 @@ class VarroProjectService(private val project: Project) : Disposable {
                             cancellableBody = true, isCancelled = { isCancelled() || generation != server.requestGeneration() })
                         FileReferences.open(payload ?: error("Missing file request"), authorizeDirectory = { id, directory ->
                             require(id !in store.hiddenSessionIds) { "Session not found" }
-                            val authorized = FileReferences.authorizeDirectory(id, directory, transferRoots(), store.sessionHistoryScope,
+                            val authorized = authorizedTransferDirectory(id, directory) || FileReferences.authorizeDirectory(id, directory, transferRoots(), store.sessionHistoryScope,
                                 readSession = {
                                     server.transport.request("GET", "/session/${java.net.URLEncoder.encode(id, Charsets.UTF_8)}",
                                         options = options.copy(unscoped = true)).data.asObjectOrNull()
@@ -732,12 +742,9 @@ class VarroProjectService(private val project: Project) : Disposable {
 
                 "vscode/show-output" -> showLog()
 
-                "vscode/open-folder" -> ApplicationManager.getApplication().invokeLater {
-                    com.intellij.ide.actions.OpenFileAction.openFile(
-                        project.basePath ?: return@invokeLater,
-                        project,
-                    )
-                }
+                "vscode/open-folder" -> if (payload == null) ApplicationManager.getApplication().invokeLater {
+                    com.intellij.ide.actions.OpenFileAction.openFile(project.basePath ?: return@invokeLater, project)
+                } else openSessionFolder(payload)
 
                 "webview/reload" -> host?.reload()
 
@@ -984,6 +991,29 @@ class VarroProjectService(private val project: Project) : Disposable {
                 }
             } catch (failure: Exception) {
                 notify(failure.message ?: "Could not open transferred conversation", NotificationType.ERROR)
+            }
+        }
+    }
+
+    private fun openSessionFolder(payload: JsonObject) {
+        if (explainAttachOnly("Opening a conversation's folder")) return
+        ApplicationManager.getApplication().executeOnPooledThread {
+            try {
+                val id = payload.text("sessionId") ?: error("Invalid session ID")
+                val directory = payload.text("directory") ?: error("Invalid session directory")
+                require(directory.length <= 4096 && directory.none(Character::isISOControl) &&
+                    varro.server.WorkspacePaths.isAbsolute(directory)) { "Session folder must be an absolute path" }
+                val location = sessionLocations.location(id, directory, transfers.get(id), store.sessionHistoryScope,
+                    id in store.hiddenSessionIds)
+                val path = java.nio.file.Path.of(location.str("directory")!!)
+                check(java.nio.file.Files.isDirectory(path)) { "The conversation's folder is not available on this computer." }
+                ApplicationManager.getApplication().invokeLater {
+                    if (!project.isDisposed) com.intellij.ide.impl.ProjectUtil.openOrImport(
+                        path, com.intellij.ide.impl.OpenProjectTask.build().withForceOpenInNewFrame(true),
+                    )
+                }
+            } catch (failure: Exception) {
+                notify(failure.message ?: "Could not open conversation folder", NotificationType.ERROR)
             }
         }
     }

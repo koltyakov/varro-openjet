@@ -130,9 +130,6 @@ class UsageReport(
         appendLine("# OpenCode Usage Report")
         appendLine()
         appendLine("Generated ${Instant.ofEpochMilli(now)}. Retained history across all projects, $sessionCount sessions scanned.")
-        appendLine()
-        appendLine("Token counts use compact notation. Cache rate is cache read / (input + cache read + cache write), calculated from summed token counts. A dash in Cache rate means no recorded input tokens.")
-        appendLine("Unattributed rows include session generation, titles and compaction. They add tokens, not prompts or assistant duration. Undated usage is the remainder of native totals after message and retained-event usage. Its date, model and request count are unknown. It is excluded from dated windows and included in All time.")
         windows.forEachIndexed { index, (title, _) ->
             if (title == "Undated session usage" && groups[index].isEmpty()) return@forEachIndexed
             appendLine("\n## $title\n")

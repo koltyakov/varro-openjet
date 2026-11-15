@@ -6,7 +6,7 @@ import com.google.gson.JsonObject
 import varro.protocol.*
 import varro.server.WorkspacePaths
 
-/** Origin links authorize history reads, never execution in a folder outside this project. */
+/** Origin links authorize history reads. Execution also needs an open root or verified saved worktree. */
 class SessionTransfers(
     initial: JsonArray,
     private val persist: (JsonArray) -> Unit,
@@ -15,6 +15,8 @@ class SessionTransfers(
     private val readSession: (String) -> JsonElement?,
     private val publish: (JsonObject) -> Unit,
     private val invalidateCatalog: () -> Unit = {},
+    private val authorizeWorktree: (JsonObject) -> Boolean = { false },
+    private val knownWorktree: (JsonObject) -> Boolean = { false },
 ) {
     private val entries = linkedMapOf<String, JsonObject>()
     private val observed = linkedMapOf<String, String>()
@@ -82,7 +84,7 @@ class SessionTransfers(
         // Persist before exposing a link. Failed persistence must remain retryable.
         persist(Json.array(saved.values))
         entries.clear(); entries.putAll(saved)
-        if (changed) publish(Json.obj("sessionId" to id, "directory" to session.str("directory"), "available" to isOpen(session.str("directory"))))
+        if (changed) publish(Json.obj("sessionId" to id, "directory" to session.str("directory"), "available" to available(session)))
     }
 
     @Synchronized fun list(includeHidden: Boolean = false, directory: String? = null): List<JsonObject> {
@@ -93,14 +95,14 @@ class SessionTransfers(
                 scope.any { WorkspacePaths.isSame(it, origin) } &&
                     (includeHidden || hiddenOrigins.none { WorkspacePaths.isSame(it, origin) })
             }
-        }.mapNotNull { project(it, scope) }
+        }.mapNotNull { project(it, scope, verify = false) }
     }
 
     @Synchronized fun get(id: String): JsonObject? = entry(id)?.let { project(it, roots()) }
 
-    private fun project(entry: JsonObject, scope: List<String>): JsonObject? = entry.obj("session")?.deepCopy()?.apply {
+    private fun project(entry: JsonObject, scope: List<String>, verify: Boolean = true): JsonObject? = entry.obj("session")?.deepCopy()?.apply {
         val hiddenOrigins = entry.arr("hiddenOrigins")?.strings().orEmpty()
-        val available = isOpen(str("directory"))
+        val available = isOpen(str("directory")) || if (verify) authorizeWorktree(this) else knownWorktree(this)
         val hidden = !available && entry.arr("origins")?.strings().orEmpty()
             .filter { origin -> scope.any { WorkspacePaths.isSame(it, origin) } }
             .all { origin -> hiddenOrigins.any { WorkspacePaths.isSame(it, origin) } }
@@ -144,6 +146,19 @@ class SessionTransfers(
         return Json.array(merged.values)
     }
 
+    /** Merge only retained IDs from each destination, never unrelated sessions in that folder. */
+    fun statuses(current: String?, initial: JsonObject, hidden: Set<String>, read: (String) -> JsonElement?): JsonObject {
+        val result = initial.deepCopy()
+        val retained = list().filter { it.str("id") !in hidden }
+        retained.groupBy { WorkspacePaths.normalizeIdentity(it.str("directory")) }.forEach { (_, sessions) ->
+            val directory = sessions.first().str("directory") ?: return@forEach
+            if (WorkspacePaths.isSame(directory, current)) return@forEach
+            val snapshot = read(directory).asObjectOrNull() ?: error("Malformed transferred session status")
+            sessions.forEach { session -> session.str("id")?.let { id -> snapshot.get(id)?.let { result.add(id, it) } } }
+        }
+        return result
+    }
+
     /** Return a verified history scope, rejecting writes and unrelated directory overrides. */
     fun authorizeRequest(method: String, path: String, body: JsonElement? = null): String? {
         val request = ApiRoutes.parse(method, path) ?: return null
@@ -158,11 +173,10 @@ class SessionTransfers(
         } ?: return null
         val session = get(id) ?: return null
         val history = method == "GET" && (Regex("^/session/[^/]+(?:/(?:message(?:/[^/]+(?:/part/[^/]+)?)?|diff|todo))?$").matches(request.pathname) ||
-            Regex("^/varro/session/[^/]+/diff-summary$").matches(request.pathname))
+            Regex("^/varro/session/[^/]+/(?:diff-summary|location)$").matches(request.pathname))
         if (!history && session.obj("transfer").bool("available") == false) {
             error("Conversation moved to ${session.str("directory")}. Open its folder to continue.")
         }
-        if (!history) return null
         val explicit = request.query["directory"]?.firstOrNull()
         require(explicit == null || WorkspacePaths.isSame(explicit, session.str("directory")) ||
             WorkspacePaths.isSame(explicit, session.obj("transfer").str("originDirectory"))) { "404 Session not found" }
@@ -192,6 +206,9 @@ class SessionTransfers(
         }
         return directory
     }
+
+    private fun available(session: JsonObject): Boolean =
+        isOpen(session.str("directory")) || authorizeWorktree(session)
 
     @Synchronized fun remove(id: String) {
         val saved = LinkedHashMap(entries)

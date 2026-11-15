@@ -11,6 +11,7 @@ internal class ChildTasks(
     private val connectionKey: () -> Any,
     private val roots: () -> List<String>,
     private val hidden: (String) -> Boolean,
+    private val authorizeSessionDirectory: (String, String) -> Boolean = { _, _ -> false },
 ) {
     fun request(method: String, path: String, body: JsonElement?, directory: String?, cancelled: () -> Boolean): JsonElement? {
         require(body == null) { "Child task controls do not accept a body" }
@@ -32,7 +33,8 @@ internal class ChildTasks(
         options.checkCancelled()
         val snapshot = request("GET", "/session/${OpenCodeV2Adapter.encode(id)}/child-task-controls", null, options).data.asObjectOrNull()
         val canonicalDirectory = snapshot.str("directory")
-        require(canonicalDirectory != null && roots().any { WorkspacePaths.isSame(it, canonicalDirectory) }) { "404 Session not found" }
+        require(canonicalDirectory != null && (roots().any { WorkspacePaths.isSame(it, canonicalDirectory) } ||
+            authorizeSessionDirectory(id, canonicalDirectory))) { "404 Session not found" }
         snapshot.str("parentID")?.let { require(!hidden(it)) { "404 Session not found" } }
             ?: require(method == "GET") { "Child task controls require a native child" }
         options.checkCancelled()

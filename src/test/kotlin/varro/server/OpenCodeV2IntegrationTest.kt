@@ -543,6 +543,7 @@ class OpenCodeV2IntegrationTest {
             } else transport.request("DELETE", "/session/$id")
             assertFalse(transport.request("GET", "/session").data!!.asJsonArray.any { it.asObjectOrNull().str("id") == id })
             if (OpenCodeCli.compareVersions(version, "2.0.32") >= 0) verifyAttachedQuotaCredentials(transport, root)
+            if (OpenCodeCli.compareVersions(version, "2.3.0") >= 0) verifyTransferredWorktree(transport, root)
         } finally {
             streamGate.getAndSet(null)?.countDown()
             transport.dispose()
@@ -554,6 +555,65 @@ class OpenCodeV2IntegrationTest {
             reader.join(1000)
             provider.stop(0)
             providerExecutor.shutdownNow()
+        }
+    }
+
+    private fun verifyTransferredWorktree(transport: OpenCodeTransport, root: java.nio.file.Path) {
+        val workspace = Files.createDirectory(root.resolve("worktree-project"))
+        val hooks = Files.createDirectory(root.resolve("empty-git-hooks"))
+        fun git(vararg arguments: String) {
+            val builder = ProcessBuilder(listOf("git") + arguments).directory(workspace.toFile()).redirectErrorStream(true)
+            builder.environment().apply {
+                keys.filter { it.startsWith("GIT_", ignoreCase = true) }.toList().forEach(::remove)
+                put("HOME", root.resolve("home").toString())
+                put("XDG_CONFIG_HOME", root.resolve("config").toString())
+                put("GIT_CONFIG_NOSYSTEM", "1")
+                put("GIT_CONFIG_GLOBAL", root.resolve("empty-gitconfig").toString())
+                put("GIT_TERMINAL_PROMPT", "0")
+            }
+            val process = builder.start()
+            try {
+                assertTrue("Fixture Git timed out", process.waitFor(10, TimeUnit.SECONDS))
+                val output = process.inputStream.bufferedReader().readText()
+                assertEquals(output, 0, process.exitValue())
+            } finally { if (process.isAlive) process.destroyForcibly() }
+        }
+        git("init", "--quiet", "--template=")
+        git("-c", "user.name=Varro test", "-c", "user.email=varro-test@example.invalid",
+            "-c", "core.hooksPath=$hooks", "-c", "commit.gpgsign=false", "commit", "--quiet", "--allow-empty",
+            "-m", "Isolated worktree fixture")
+        val options = RequestOptions(directory = workspace.toString())
+        val project = transport.request("GET", "/project/current", options = options).data.asObjectOrNull()!!
+        val projectID = project.str("id")!!
+        val projects = transport.request("GET", "/project", options = options).data!!.asJsonArray
+        assertTrue(projects.any { it.asObjectOrNull().str("id") == projectID && it.asObjectOrNull().str("vcs") == "git" })
+        val worktree = transport.request("POST", "/api/worktree", Json.obj("projectID" to projectID,
+            "directory" to root.resolve("worktrees").toString(), "name" to "continued-chat"), options).data.asObjectOrNull()!!
+        val destination = worktree.str("directory")!!
+        val session = transport.request("POST", "/session", Json.obj("title" to "Worktree continuation fixture",
+            "model" to Json.obj("providerID" to "fixture", "modelID" to "fixture")), options).data.asObjectOrNull()!!
+        val id = session.str("id")!!
+        val locations = varro.host.SessionLocations(transport::request, { transport.apiVersion }, { "fixture" }, { listOf(workspace.toString()) })
+        val transfers = varro.host.SessionTransfers(com.google.gson.JsonArray(), {}, { "fixture" }, { listOf(workspace.toString()) },
+            { transport.request("GET", "/session/$it", options = options).data }, {}, authorizeWorktree = locations::authorizeTransferred)
+        transfers.observe(session)
+        try {
+            transport.request("POST", "/api/session/$id/move", Json.obj("directory" to destination), options)
+            val moved = transport.request("GET", "/session/$id", options = options).data.asObjectOrNull()!!
+            transfers.observe(moved)
+            assertEquals(true, transfers.get(id).obj("transfer").bool("available"))
+            transfers.checkWritable(id)
+            assertEquals(destination, transfers.authorizeRequest("POST", "/session/$id/message"))
+            val location = locations.location(id, destination, transfers.get(id), "directory")
+            assertEquals(true, location.bool("isGitWorktree"))
+            assertEquals(workspace.toString(), location.str("projectDirectory"))
+            assertEquals(true, locations.annotate(Json.array(listOf(moved))) { false }.single().asJsonObject.bool("isGitWorktree"))
+            val reply = transport.request("POST", "/session/$id/message", Json.obj(
+                "parts" to listOf(Json.obj("type" to "text", "text" to "Continue from this worktree. Do not call tools.")),
+                "model" to Json.obj("providerID" to "fixture", "modelID" to "fixture")), options.copy(directory = destination)).data.asObjectOrNull()
+            assertTrue(reply.arr("parts")!!.any { it.asObjectOrNull().str("text") == "OpenJet stream verified." })
+        } finally {
+            transport.request("DELETE", "/session/$id", options = options)
         }
     }
 

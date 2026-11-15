@@ -64,12 +64,20 @@ class RestProxy(
     private val citationPaths = CitationPaths()
     private val sideQuestions = SideQuestions(server.transport::request, { server.transport.apiVersion },
         { server.currentStatus() is varro.server.ServerStatus.Running }, { server.requestGeneration() to server.url() },
-        { (listOfNotNull(project.basePath) + context.context.arr("workspaceFolders")?.mapNotNull { it.asObjectOrNull().text("path") }.orEmpty()).distinct() })
+        { (listOfNotNull(project.basePath) + context.context.arr("workspaceFolders")?.mapNotNull { it.asObjectOrNull().text("path") }.orEmpty()).distinct() },
+        authorizeSessionDirectory = ::authorizedTransfer)
     private val settings get() = varro.settings.VarroSettings.getInstance()
+    private fun workspaceRoots() = (listOfNotNull(project.basePath) +
+        context.context.arr("workspaceFolders")?.mapNotNull { it.asObjectOrNull().text("path") }.orEmpty()).distinct()
+    private val locations = SessionLocations(server.transport::request, { server.transport.apiVersion },
+        { Triple(server.requestGeneration(), server.url(), store.sessionHistoryScope) }, ::workspaceRoots)
+    private fun authorizedTransfer(id: String, directory: String): Boolean = transfers?.get(id)?.let {
+        WorkspacePaths.isSame(it.str("directory"), directory) && it.obj("transfer").bool("available") == true
+    } == true
     private val childTasks = ChildTasks(server.transport::request, { server.transport.apiVersion },
         { server.requestGeneration() to server.url() },
         { (listOfNotNull(project.basePath) + context.context.arr("workspaceFolders")?.mapNotNull { it.asObjectOrNull().text("path") }.orEmpty()).distinct() },
-        { it in store.hiddenSessionIds })
+        { it in store.hiddenSessionIds }, ::authorizedTransfer)
     private val settingsSubscription = com.intellij.openapi.application.ApplicationManager.getApplication().messageBus.connect().apply {
         subscribe(varro.settings.VarroSettings.TOPIC, varro.settings.VarroSettings.Listener {
             if (settings.remoteImageMode() != "on") remoteImages.cancel()
@@ -179,7 +187,7 @@ class RestProxy(
             }
             admitted = payload.obj("queuedMessageDispatch") != null && method == "POST"
             val data = if (path.startsWith(ApiRoutes.NAMESPACE)) {
-                handleVarroRequest(method, path, payload.get("body"), transferDirectory, cancelled)
+                handleVarroRequest(method, forwardedPath, payload.get("body"), transferDirectory, cancelled)
             } else {
                 forward(method, forwardedPath, payload.get("body"), payload.obj("queuedMessageDispatch") != null, transferDirectory) {
                     checkPermissionLease()
@@ -278,6 +286,9 @@ class RestProxy(
         if (method == "GET" && request?.pathname == "/session" && request.query.containsKey("limit")) {
             return sessionPage(path, request, isCancelled)
         }
+        if (method == "GET" && request?.pathname == "/session/status") {
+            return transferredStatuses(isCancelled)
+        }
 
         val outgoing = if (method == "POST" && sessionId != null && request.segments.size == 3 && request.segments[2] in setOf("prompt_async", "message", "command"))
             CitationPaths.withGuidance(body, transferDirectory ?: request.query["directory"]?.firstOrNull() ?: server.workspaceDirectory()) else body
@@ -288,9 +299,9 @@ class RestProxy(
                 ?: server.workspaceDirectory(), body.asObjectOrNull().str("messageID")) }
                 .onFailure { log.warn("Could not clear previous-turn follow-up cache") }
         }
-        if (method == "GET" && request?.pathname == "/session") return Json.array(
+        if (method == "GET" && request?.pathname == "/session") return locations.annotate(Json.array(
             mergeTransfers(result.asArrayOrNull() ?: JsonArray(), request).filter { it.asObjectOrNull().str("id") !in store.hiddenSessionIds },
-        )
+        ), isCancelled)
         if (method == "GET" && sessionId != null && request.segments.size == 2) {
             result.asObjectOrNull()?.let { session ->
                 transfers?.get(sessionId).obj("transfer")?.let { session.add("transfer", it) }
@@ -337,12 +348,23 @@ class RestProxy(
                 ?: 0.0
         }
 
-        val items = JsonArray().apply { ordered.take(limit).forEach(::add) }
+        val items = locations.annotate(JsonArray().apply { ordered.take(limit).forEach(::add) }, isCancelled)
         return Json.obj("items" to items, "hasMore" to (ordered.size > limit || response.nextCursor != null))
     }
 
     private fun mergeTransfers(sessions: JsonArray, request: ApiRoutes.Request): JsonArray =
         transfers?.merge(sessions, request) ?: sessions
+
+    /** A missing folder-scoped status must not erase a retained conversation's activity. */
+    private fun transferredStatuses(isCancelled: () -> Boolean): JsonObject {
+        val current = server.workspaceDirectory()
+        val result = server.transport.request("GET", "/session/status", options = RequestOptions(directory = current,
+            isCancelled = isCancelled)).data.asObjectOrNull() ?: error("Malformed session status")
+        return transfers?.statuses(current, result, store.hiddenSessionIds) { directory ->
+            server.transport.request("GET", "/session/status", options = RequestOptions(directory = directory,
+                isCancelled = isCancelled)).data
+        } ?: result
+    }
 
     // --- Host API namespace ---------------------------------------------------
 
@@ -362,7 +384,7 @@ class RestProxy(
                     require(session !in store.hiddenSessionIds) { "Session not found" }
                     val options = RequestOptions(unscoped = true, timeoutMs = 15_000, maxResponseBytes = 2 * 1024 * 1024,
                         cancellableBody = true, isCancelled = isCancelled)
-                    FileReferences.authorizeDirectory(session, directory, roots, store.sessionHistoryScope,
+                    authorizedTransfer(session, directory) || FileReferences.authorizeDirectory(session, directory, roots, store.sessionHistoryScope,
                         { server.transport.request("GET", "/session/${encode(session)}", options = options).data.asObjectOrNull() },
                         { root -> server.transport.request("GET", "/project/current", options = options.copy(unscoped = false, directory = root)).data.asObjectOrNull() })
                 }
@@ -542,6 +564,8 @@ class RestProxy(
         if (action in setOf("permission-mode", "rename-if-untitled", "delete")) transfers?.checkWritable(sessionId)
 
         return when (action) {
+            "location" -> locations.location(sessionId, directory, transfers?.get(sessionId), store.sessionHistoryScope,
+                sessionId in store.hiddenSessionIds, isCancelled)
             "session" -> {
                 require(sessionId !in store.hiddenSessionIds) { "404 Session not found" }
                 val linked = body.asObjectOrNull().obj("action").str("sessionId")
@@ -556,7 +580,7 @@ class RestProxy(
                 // Activating a session repoints REST scoping and the event stream at
                 // the directory that session actually belongs to, so subsequent
                 // message and diff reads resolve against the right workspace.
-                val target = body.asObjectOrNull().text("directory")
+                val target = directory ?: body.asObjectOrNull().text("directory")
                     ?: server.transport.observedSessionDirectories()[sessionId]
                 server.activateDirectory(target)
                 // The client expects the Session itself, and reads it only after

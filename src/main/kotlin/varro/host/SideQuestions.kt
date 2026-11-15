@@ -15,11 +15,14 @@ internal class SideQuestions(
     private val connectionKey: () -> Any,
     private val workspaceRoots: () -> List<String>,
     private val nanoTime: () -> Long = System::nanoTime,
+    private val authorizeSessionDirectory: (String, String) -> Boolean = { _, _ -> false },
 ) {
     fun ask(path: String, body: JsonElement?, directory: String?, isCancelled: () -> Boolean): JsonElement? {
         check(apiVersion() == 2) { "Side questions require OpenCode V2" }
         check(running()) { "Connect to OpenCode before asking a side question" }
-        require(directory != null && workspaceRoots().any { WorkspacePaths.isSame(it, directory) }) { "404 Session not found" }
+        val id = ApiRoutes.parse("POST", path)?.segments?.getOrNull(1) ?: error("Invalid session ID")
+        require(directory != null && (workspaceRoots().any { WorkspacePaths.isSame(it, directory) } ||
+            authorizeSessionDirectory(id, directory))) { "404 Session not found" }
         val key = connectionKey()
         val deadline = nanoTime() + TimeUnit.MILLISECONDS.toNanos(OpenCodeV2SideQuestions.TIMEOUT_MS)
         val options = RequestOptions(directory = directory, timeoutMs = OpenCodeV2SideQuestions.TIMEOUT_MS,

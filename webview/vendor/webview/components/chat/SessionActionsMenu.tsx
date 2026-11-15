@@ -3,6 +3,7 @@ import { supportsDetachedEditors } from '../../host/extensions';
 import { HostActions } from '../HostActions';
 import { Portal } from 'solid-js/web';
 import { normalizeSessionTitle } from '../../../shared/session-title';
+import { isSameWorkspacePath } from '../../../shared/workspace-path';
 import { renameSession } from '../../hooks/useOpenCode';
 import { postMessage } from '../../lib/bridge';
 import { clampPopupToViewport } from '../../lib/popup-position';
@@ -12,6 +13,11 @@ import { openSideQuestion, sideQuestionUnavailableReason } from '../../lib/side-
 import { writeClipboard } from '../../lib/write-clipboard';
 import type { Session } from '../../types';
 import { showSessionActionFeedback } from './SessionActionFeedback';
+import {
+  copySessionFolderPath,
+  mergeSessionWorktree,
+  moveSessionWorktreeResults,
+} from '../../lib/session-location-actions';
 
 type RenameSelection = { start: number; end: number };
 
@@ -90,6 +96,7 @@ export function SessionActionsMenu(props: {
 }) {
   let menuRef: HTMLDivElement | undefined;
   let renameInputRef: HTMLInputElement | undefined;
+  const isReadOnlyTransfer = () => props.session.transfer?.available === false;
 
   const openAsEditor = (inWindow = false) => {
     const sessionId = props.session.id;
@@ -125,6 +132,7 @@ export function SessionActionsMenu(props: {
   };
 
   const beginRename = () => {
+    if (isReadOnlyTransfer()) return;
     props.state.beginRename(props.session.title);
     queueMicrotask(() => {
       renameInputRef?.focus();
@@ -132,7 +140,7 @@ export function SessionActionsMenu(props: {
     });
   };
   const submitRename = async () => {
-    if (props.state.renamePending()) return;
+    if (props.state.renamePending() || isReadOnlyTransfer()) return;
     const title = props.state.renameValue().trim();
     if (!title) return;
     const sessionId = props.session.id;
@@ -270,7 +278,17 @@ export function SessionActionsMenu(props: {
               </button>
               <Show when={!props.session.parentID}>
                 <div class="session-item-actions-separator" role="separator" />
-                <button type="button" role="menuitem" onClick={beginRename}>
+                <button
+                  type="button"
+                  role="menuitem"
+                  disabled={isReadOnlyTransfer()}
+                  title={
+                    isReadOnlyTransfer()
+                      ? 'Open the destination folder to rename this moved conversation'
+                      : undefined
+                  }
+                  onClick={beginRename}
+                >
                   Rename
                 </button>
                 <button
@@ -285,6 +303,71 @@ export function SessionActionsMenu(props: {
                 >
                   {props.isPinned ? 'Unpin session' : 'Pin session'}
                 </button>
+              </Show>
+              <Show
+                when={
+                  props.session.isGitWorktree ||
+                  (props.session.transfer &&
+                    !isSameWorkspacePath(
+                      props.session.directory,
+                      props.session.transfer.originDirectory
+                    ))
+                }
+              >
+                <div class="session-item-actions-separator" role="separator" />
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    const payload = {
+                      sessionId: props.session.id,
+                      directory: props.session.directory,
+                    };
+                    props.state.close();
+                    postMessage({ type: 'vscode/open-folder', payload });
+                  }}
+                >
+                  Open folder
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    const directory = props.session.directory;
+                    props.state.close();
+                    void copySessionFolderPath(directory);
+                  }}
+                >
+                  Copy folder path
+                </button>
+                <Show when={props.session.isGitWorktree}>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    disabled={isReadOnlyTransfer()}
+                    onClick={() => {
+                      const sessionId = props.session.id;
+                      const directory = props.session.directory;
+                      props.state.close();
+                      void mergeSessionWorktree(sessionId, directory);
+                    }}
+                  >
+                    Merge changes
+                  </button>
+                  <button
+                    type="button"
+                    role="menuitem"
+                    disabled={isReadOnlyTransfer()}
+                    onClick={() => {
+                      const sessionId = props.session.id;
+                      const directory = props.session.directory;
+                      props.state.close();
+                      void moveSessionWorktreeResults(sessionId, directory);
+                    }}
+                  >
+                    Migrate changes
+                  </button>
+                </Show>
               </Show>
               <div class="session-item-actions-separator" role="separator" />
               <button type="button" role="menuitem" onClick={() => void copySessionId()}>
@@ -359,7 +442,7 @@ export function SessionActionsMenu(props: {
               onSelect={(event) => updateRenameSelection(event.currentTarget)}
               onMouseUp={(event) => updateRenameSelection(event.currentTarget)}
               onKeyUp={(event) => updateRenameSelection(event.currentTarget)}
-              disabled={props.state.renamePending()}
+              disabled={props.state.renamePending() || isReadOnlyTransfer()}
             />
             <div class="session-item-rename-actions">
               <button type="button" onClick={props.state.close}>
@@ -367,7 +450,11 @@ export function SessionActionsMenu(props: {
               </button>
               <button
                 type="submit"
-                disabled={!props.state.renameValue().trim() || props.state.renamePending()}
+                disabled={
+                  !props.state.renameValue().trim() ||
+                  props.state.renamePending() ||
+                  isReadOnlyTransfer()
+                }
               >
                 Save
               </button>

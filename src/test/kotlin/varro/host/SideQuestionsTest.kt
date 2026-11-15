@@ -8,6 +8,28 @@ import java.util.concurrent.CancellationException
 import java.util.concurrent.TimeUnit
 
 class SideQuestionsTest {
+    @Test fun `verified retained worktree access is session-bound and does not widen directory scope`() {
+        var calls = 0
+        var authorized = true
+        val questions = SideQuestions({ _, _, _, options ->
+            calls++
+            assertEquals("/worktree", options.directory)
+            OpenCodeResponse(Json.obj("text" to "Answer"))
+        }, { 2 }, { true }, { 1 }, { listOf("/repo") },
+            authorizeSessionDirectory = { id, directory -> authorized && id == "ses_moved" && directory == "/worktree" })
+        assertEquals("Answer", questions.ask("/session/ses_moved/side-question", Json.obj("question" to "Why?"), "/worktree") { false }.asObjectOrNull().str("text"))
+        for ((id, directory) in listOf("ses_other" to "/worktree", "ses_moved" to "/foreign")) {
+            assertThrows(IllegalArgumentException::class.java) {
+                questions.ask("/session/$id/side-question", Json.obj("question" to "Why?"), directory) { false }
+            }
+        }
+        authorized = false
+        assertThrows(IllegalArgumentException::class.java) {
+            questions.ask("/session/ses_moved/side-question", Json.obj("question" to "Why?"), "/worktree") { false }
+        }
+        assertEquals(1, calls)
+    }
+
     @Test fun `proxy side questions reject V1 stopped connections and foreign directories without forwarding`() {
         for ((version, running, directory) in listOf(Triple(1, true, "/repo"), Triple(2, false, "/repo"),
             Triple(2, true, "/foreign"), Triple(2, true, null))) {
