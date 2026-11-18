@@ -17,6 +17,29 @@ class AskAgentConfigTest {
 
     private fun read(path: Path) = Json.parseOrNull(Files.readString(path)).asObjectOrNull()!!
 
+    @Test fun `missing owned config is recreated even when its content is unchanged`() {
+        config().use { config ->
+            val path = Path.of(config.prepare(true).getValue("OPENCODE_CONFIG"))
+            val original = Files.readString(path)
+            Files.delete(path)
+            assertTrue(config.rewrite(true))
+            assertEquals(original, Files.readString(path))
+            assertFalse(config.rewrite(true))
+        }
+    }
+
+    @Test fun `symlink replacement is not followed while restoring a runtime config`() {
+        config().use { config ->
+            val path = Path.of(config.prepare(true).getValue("OPENCODE_CONFIG"))
+            val other = temporary.newFile("other.json").toPath()
+            Files.writeString(other, "{}")
+            Files.delete(path)
+            Files.createSymbolicLink(path, other)
+            assertThrows(IllegalStateException::class.java) { config.rewrite(true) }
+            assertEquals("{}", Files.readString(other))
+        }
+    }
+
     @Test fun `Ask is injected as read only and can be toggled without changing its config path`() {
         val config = config()
         val path = Path.of(config.prepare(true).getValue("OPENCODE_CONFIG"))

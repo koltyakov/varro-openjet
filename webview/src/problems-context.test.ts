@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { registerHostExtension } from '../vendor/webview/host/extensions';
 import { parseExtensionMessage } from '../vendor/shared/extension-message';
 import {
@@ -6,6 +6,12 @@ import {
   getProblemsSeverity,
   parseIssueAttachment,
 } from '../vendor/webview/lib/editor-problems';
+
+// Completion's session-reference parser now reads the browser state module.
+// Keep this host-only test independent of browser bridge initialization.
+vi.mock('../vendor/webview/lib/state', () => ({
+  state: { sessions: [], sessionLookups: {}, editorContext: {} },
+}));
 import { getProblemCompletionItems } from '../vendor/webview/components/chat-input/completion';
 import {
   cloneInlineProblems,

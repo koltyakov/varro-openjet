@@ -21,6 +21,8 @@ internal class AskAgentConfig(
     private var content: String? = null
     private var v2 = false
     private val webSearch = WebSearchPreference(environment, workspaceCwd, home)
+    internal val ownedPath: Path? @Synchronized get() = path
+    @Synchronized fun shouldRestoreAsk(): Boolean = environment["OPENCODE_CONFIG"].isNullOrBlank() && !hasConfiguredAsk()
 
     @Synchronized fun prepare(enabled: Boolean, v2: Boolean = false): Map<String, String> {
         close()
@@ -30,7 +32,7 @@ internal class AskAgentConfig(
             return emptyMap()
         }
         // Keep a file even when disabled, so enabling Ask does not require a server restart.
-        val directory = Files.createTempDirectory(tempDirectory, "varro-openjet-config-")
+        val directory = Files.createTempDirectory(tempDirectory, "varro-opencode-config-")
         path = directory.resolve("opencode.json")
         try {
             rewrite(enabled)
@@ -48,7 +50,8 @@ internal class AskAgentConfig(
         if (enabled && !hasConfiguredAsk()) config.add("agent", Json.obj("ask" to definition()))
         if (v2 && webSearch.useRandomDefault()) config.add("websearch", Json.obj("provider" to "random"))
         val next = Json.stringify(config)
-        if (next == content) return false
+        check(!Files.isSymbolicLink(file) && !Files.isSymbolicLink(file.parent)) { "Managed runtime configuration was replaced by a symbolic link" }
+        if (next == content && Files.isRegularFile(file, java.nio.file.LinkOption.NOFOLLOW_LINKS)) return false
         JsonJournal(file).write(config)
         content = next
         return true
@@ -97,6 +100,7 @@ internal class AskAgentConfig(
     @Synchronized override fun close() {
         val file = path ?: return
         Files.deleteIfExists(file)
+        Files.deleteIfExists(file.parent.resolve("owner.json"))
         Files.deleteIfExists(file.parent)
         path = null
         content = null

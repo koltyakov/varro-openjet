@@ -58,6 +58,17 @@ class OpenCodeHostServices(
         invalidateFollowups()
     }
 
+    override fun openReferencedSession(session: JsonObject) {
+        check(!server.isAttachOnly()) { "Opening a conversation's folder is unavailable in attach-only mode." }
+        val path = Path.of(requireNotNull(session.str("directory")))
+        check(java.nio.file.Files.isDirectory(path)) { "The conversation's folder is not available on this computer." }
+        ApplicationManager.getApplication().invokeLater {
+            if (!project.isDisposed) com.intellij.ide.impl.ProjectUtil.openOrImport(
+                path, com.intellij.ide.impl.OpenProjectTask.build().withForceOpenInNewFrame(true),
+            )
+        }
+    }
+
     fun dispose() {
         promptCompletion.invalidate()
         followups.close()
@@ -225,23 +236,11 @@ class OpenCodeHostServices(
         val global = Path.of(environment["XDG_CONFIG_HOME"] ?: Path.of(System.getProperty("user.home"), ".config").toString(), "opencode")
         return McpDefaults(Path.of(server.workspaceDirectory() ?: project.basePath ?: error("Project has no workspace directory")),
             global, server.transport.apiVersion == 2, beforeWrite = { path ->
-                // The UI only knows this view's sessions. Include other projects and pending input.
-                require(server.readRestartBlockers().get("totalSessionCount").asInt == 0) {
-                    "OpenCode has active work or pending decisions. Wait for it to finish before changing MCP configuration."
-                }
                 val documents = com.intellij.openapi.fileEditor.FileDocumentManager.getInstance()
                 require(documents.unsavedDocuments.none { document -> documents.getFile(document)?.path?.let {
                     varro.server.WorkspacePaths.isSame(it, path.toString()) || runCatching { Path.of(it).toRealPath() == path }.getOrDefault(false)
                 } == true }) { "$path has unsaved changes; save before changing MCP defaults" }
-            }, refresh = { globalScope ->
-                if (globalScope && server.transport.apiVersion == 1) {
-                    // Released V1's global dispose does not invalidate its cached global config.
-                    require(server.restart(false) == OpenCodeServer.RestartOutcome.RESTARTED) {
-                        "MCP defaults were saved, but OpenCode could not restart safely. Restart the managed server when it is idle."
-                    }
-                } else if (globalScope) server.transport.request("POST", "/global/dispose", options = RequestOptions(unscoped = true))
-                else server.transport.request("POST", "/instance/dispose", options = RequestOptions(directory = server.workspaceDirectory()))
-            })
+            }, refresh = server::refreshMcpConfiguration)
     }
 
     private val projectProviderConfig by lazy { ProjectProviderConfig(

@@ -223,6 +223,9 @@ internal object OpenCodeV2Projection {
                 parts.add(part(0, "text", Json.obj("text" to value.str("text").orEmpty(), "synthetic" to true).apply {
                     if (metadata.str("source") == "subagent" && !childID.isNullOrEmpty() && state in setOf("completed", "error", "cancelled")) {
                         add("subagentResult", Json.obj("sessionID" to childID, "state" to state).apply {
+                            val runningChild = Regex("^<subagent sessionID=\"([^\"\\r\\n]+)\" state=\"running\"(?=\\s|>)")
+                                .find(value.str("text").orEmpty())?.groupValues?.get(1)
+                            if (state == "completed" && runningChild == childID) addProperty("backgroundPending", true)
                             value.str("description")?.let { addProperty("description", it) }
                             metadata.str("agent")?.let { addProperty("agent", it) }
                         })

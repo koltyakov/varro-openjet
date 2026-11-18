@@ -21,6 +21,21 @@ class McpDefaultsTest {
     private fun update(scope: String, enabled: Boolean?) = Json.obj("name" to "docs", "scope" to scope, "enabled" to enabled)
     private fun service(native: Boolean = true) = McpDefaults(root, global, native)
 
+    @Test fun `MCP defaults persist while sessions or decisions are active and refresh only after idle`() {
+        val file = write(root.resolve("opencode.json"), config(Json.obj("docs" to server)))
+        var idle = false
+        val reloads = mutableListOf<Boolean>()
+        val refresh = varro.server.McpConfigRefresh({ idle }) { reloads.add(it); true }
+        val defaults = McpDefaults(root, global, true, refresh = refresh::request)
+        assertEquals(false, defaults.update(update("project", false)).obj("effective").bool("docs"))
+        assertEquals(true, Json.parse(Files.readString(file)).asJsonObject.obj("mcp").obj("servers").obj("docs").bool("disabled"))
+        refresh.flush()
+        assertTrue(reloads.isEmpty())
+        idle = true
+        refresh.flush()
+        assertEquals(listOf(false), reloads)
+    }
+
     @Test fun `OAuth server names follow effective replacement and legacy merge without exposing credentials`() {
         val remote = Json.obj("type" to "remote", "url" to "https://example.com/mcp", "headers" to Json.obj("Authorization" to "fixture-secret"))
         for (native in listOf(true, false)) {
@@ -81,7 +96,7 @@ class McpDefaultsTest {
         assertThrows(IllegalArgumentException::class.java) { service().add(batch.deepCopy().apply { addProperty("scope", "project") }) }
     }
 
-    @Test fun `invalid inputs containers dirty buffers busy checks and concurrent edits cannot overwrite an import target`() {
+    @Test fun `invalid inputs containers dirty buffers write failures and concurrent edits cannot overwrite an import target`() {
         val file = write(root.resolve("opencode.json"), "{}")
         val body = Json.obj("scope" to "project", "json" to Json.obj("docs" to server).toString())
         for (invalid in listOf(Json.obj("scope" to "other", "json" to "{}"), Json.obj("scope" to "project", "json" to 1),
@@ -95,7 +110,7 @@ class McpDefaultsTest {
             assertEquals(raw, Files.readString(file))
         }
         write(file, "{}")
-        for (message in listOf("unsaved changes", "active work")) {
+        for (message in listOf("unsaved changes", "not writable")) {
             assertThrows(IllegalStateException::class.java) { McpDefaults(root, global, true, beforeWrite = { error(message) }).add(body) }
             assertEquals("{}", Files.readString(file))
         }

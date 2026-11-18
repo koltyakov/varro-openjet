@@ -9,6 +9,15 @@ import org.junit.rules.TemporaryFolder
 import varro.protocol.*
 
 class OpenCodeV2Test {
+    @Test fun `only matching canonical running envelopes retain a completed child as pending`() {
+        for (child in listOf("ses_child", "ses_wrong")) for (state in listOf("completed", "error", "cancelled")) {
+            val message = OpenCodeV2Projection.message(Json.obj("id" to "msg_notice", "type" to "synthetic",
+                "text" to "<subagent sessionID=\"$child\" state=\"running\" description=\"Audit\">\nPartial\n</subagent>",
+                "metadata" to Json.obj("source" to "subagent", "childID" to "ses_child", "state" to state)), "ses_parent")
+            val result = message.arr("parts")!![0].asJsonObject.obj("subagentResult")
+            assertEquals(child == "ses_child" && state == "completed", result.bool("backgroundPending") == true)
+        }
+    }
     @JvmField @Rule val temporary = TemporaryFolder()
 
     @Test fun `project and saved worktree inventories preserve native bare arrays without location loading`() {

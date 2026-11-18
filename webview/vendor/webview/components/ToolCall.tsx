@@ -1,6 +1,7 @@
 import {
   Show,
   For,
+  Index,
   createEffect,
   createMemo,
   createRenderEffect,
@@ -38,9 +39,13 @@ import { formatCost, formatDuration, formatNumber } from '../lib/message-metrics
 import { getToolFileChanges, getToolReadPath, isToolFileRead } from '../lib/tool-file-change';
 import { prepareForMessageBlockRemoval, trackInlineDiffLoad } from '../lib/message-list-layout';
 import type { FileChange } from '../lib/tool-file-change';
-import { getToolCallExpanded, setToolCallExpanded } from '../lib/tool-call-expansion-state';
+import {
+  getToolCallExpanded,
+  hasObservedTaskWork,
+  setToolCallExpanded,
+} from '../lib/tool-call-expansion-state';
 import type { ToolCallPermissionMatch } from '../lib/tool-call-matching';
-import { resolveTaskSessionId } from '../lib/task-session';
+import { nextTaskLaunchStart, resolveTaskSessionId } from '../lib/task-session';
 import { observeSubagentCard } from '../lib/subagent-visibility';
 import { getToolKind, isApplyPatchTool, normalizeToolName } from '../lib/tool-normalization';
 import type { ToolKind } from '../lib/tool-normalization';
@@ -283,6 +288,36 @@ function getRunningToolOutput(state: ToolPart['state']) {
     if (isString(value)) return value;
   }
   return '';
+}
+
+type CodeModeToolCall = {
+  tool: string;
+  status: 'running' | 'completed' | 'error';
+  input: UnknownRecord;
+};
+
+function getCodeModeToolCalls(toolName: string, state: ToolPart['state']): CodeModeToolCall[] {
+  if (normalizeToolName(toolName) !== 'execute' || state.status === 'pending') return [];
+  const calls = state.metadata?.toolCalls;
+  if (!Array.isArray(calls)) return [];
+  return calls.flatMap((value) => {
+    const call = asRecord(value);
+    if (
+      !isString(call?.tool) ||
+      !call.tool.trim() ||
+      (call.status !== 'running' && call.status !== 'completed' && call.status !== 'error')
+    )
+      return [];
+    return [{ tool: call.tool, status: call.status, input: asRecord(call.input) ?? {} }];
+  });
+}
+
+function isCodeModeFailure(toolName: string, state: ToolPart['state']): boolean {
+  return (
+    normalizeToolName(toolName) === 'execute' &&
+    state.status === 'completed' &&
+    state.metadata.error === true
+  );
 }
 
 export function getVisibleInputEntries(input: UnknownRecord) {
@@ -569,7 +604,9 @@ export function ToolCall(props: {
       case 'running':
         return 'tool-status-running';
       case 'completed':
-        return 'tool-status-completed';
+        return isCodeModeFailure(tool().tool, state())
+          ? 'tool-status-error'
+          : 'tool-status-completed';
       case 'error':
         return isAbortedToolError(state()) ? 'tool-status-aborted' : 'tool-status-error';
     }
@@ -1468,6 +1505,9 @@ function GenericToolCall(props: {
   lightweight?: boolean;
 }) {
   const toolName = () => normalizeToolName(props.tool.tool);
+  const codeModeCalls = createMemo(() => getCodeModeToolCalls(props.tool.tool, props.state));
+  const codeModeFailure = () => isCodeModeFailure(props.tool.tool, props.state);
+  const isFailed = () => props.state.status === 'error' || codeModeFailure();
   const isAborted = () => isAbortedToolError(props.state);
   const isPermissionRejected = () => isPermissionRejectedToolError(props.state);
   const isQuestionSkipped = () => isQuestionSkippedToolError(props.state);
@@ -1481,7 +1521,7 @@ function GenericToolCall(props: {
     const label = type.trim();
     return `${label.charAt(0).toUpperCase()}${label.slice(1)} subagent`;
   };
-  const taskSessionId = () => {
+  const taskSessionId = createMemo(() => {
     if (!isTask()) return null;
     if (
       props.state.status !== 'running' &&
@@ -1494,14 +1534,91 @@ function GenericToolCall(props: {
     // Only the tool's first matching parent message is read from the transcript.
     const parent = getMessageLookup().byId.get(props.tool.messageID);
     return resolveTaskSessionId(props.tool, parent ? [parent] : [], appState.sessions);
+  });
+  const taskChildStatus = () => {
+    const sessionId = taskSessionId();
+    return sessionId ? appState.sessionStatus[sessionId] : undefined;
   };
+  const isBackgroundLaunch = createMemo(() => {
+    const state = props.state;
+    return (
+      isTask() &&
+      state.status === 'completed' &&
+      (state.metadata.status === 'running' ||
+        state.input.background === true ||
+        props.fullOutput.startsWith('The subagent is working in the background'))
+    );
+  });
+  const isNativeBackgroundLaunch = () => {
+    const state = props.state;
+    return (
+      isBackgroundLaunch() && state.status === 'completed' && state.metadata.status === 'running'
+    );
+  };
+  const nextLaunch = createMemo(() => {
+    const childID = taskSessionId();
+    if (!childID || props.state.status !== 'completed') return Infinity;
+    return nextTaskLaunchStart(
+      props.tool,
+      childID,
+      getMessageLookup().bySessionId.get(props.tool.sessionID) ?? []
+    );
+  });
+  const childWorking = createMemo(() => {
+    if (nextLaunch() !== Infinity) return false;
+    if (isSessionStatusWorking(taskChildStatus())) return true;
+    const sessionId = taskSessionId();
+    return (
+      isBackgroundLaunch() &&
+      !!sessionId &&
+      getSessionTreeIds(sessionId).some((id) => isSessionStatusWorking(appState.sessionStatus[id]))
+    );
+  });
+  const observedChildWork = createMemo(() => {
+    const sessionId = taskSessionId();
+    const state = props.state;
+    if (!sessionId || (state.status !== 'running' && state.status !== 'completed')) return null;
+    const server = appState.serverStatus;
+    const run = `${server.state === 'running' ? server.url : ''}\u0000${getToolCallExpansionKey(props.tool)}\u0000${sessionId}:${state.time.start}`;
+    return hasObservedTaskWork(run, childWorking());
+  });
+  const taskResultNotice = createMemo(() => {
+    if (!isBackgroundLaunch() || childWorking()) return undefined;
+    const state = props.state;
+    if (state.status !== 'completed') return undefined;
+    const sessionId = taskSessionId();
+    if (!sessionId) return undefined;
+    const entries = getMessageLookup().bySessionId.get(props.tool.sessionID) ?? [];
+    for (let i = entries.length - 1; i >= 0; i--) {
+      const { info, parts } = entries[i]!;
+      if (
+        info.role !== 'user' ||
+        info.time.created < state.time.start ||
+        info.time.created >= nextLaunch()
+      )
+        continue;
+      for (const part of parts) {
+        if (part.type === 'text' && part.synthetic && part.subagentResult?.sessionID === sessionId)
+          return part.subagentResult;
+      }
+    }
+    return undefined;
+  });
   const isRunning = createMemo(() => {
     if (props.state.status === 'running') return true;
     if (!isTask() || props.state.status !== 'completed') return false;
-    // A background launch completes before its child does, including native
-    // foreground calls handed off to the background after launch.
-    const sessionId = taskSessionId();
-    return !!sessionId && isSessionStatusWorking(appState.sessionStatus[sessionId]);
+    if (childWorking()) return true;
+    const notice = taskResultNotice();
+    // Native idle only ends an execution period. Wait for the child result,
+    // which can itself report that background work is still pending.
+    return (
+      !!notice?.backgroundPending ||
+      (isBackgroundLaunch() &&
+        !notice &&
+        (isNativeBackgroundLaunch() ||
+          (nextLaunch() === Infinity &&
+            (taskChildStatus()?.type !== 'idle' || !observedChildWork()))))
+    );
   });
   const taskExecutionEntries = createMemo<Array<[string, unknown]>>(() => {
     const sessionId = taskSessionId();
@@ -1616,14 +1733,14 @@ function GenericToolCall(props: {
     return entries;
   });
   const taskRetryStatus = () => {
-    if (!isRunning()) return null;
+    if (!isRunning() || nextLaunch() !== Infinity) return null;
     const sessionId = taskSessionId();
     if (!sessionId) return null;
     const status = appState.sessionStatus[sessionId];
     return status?.type === 'retry' ? status : null;
   };
   const taskPermissionPending = createMemo(() => {
-    if (!isRunning()) return false;
+    if (!isRunning() || nextLaunch() !== Infinity) return false;
     const sessionId = taskSessionId();
     if (!sessionId) return false;
     const sessionIds = new Set(getSessionTreeIds(sessionId));
@@ -1636,7 +1753,11 @@ function GenericToolCall(props: {
       ? 'tool-status-pending'
       : isRunning()
         ? 'tool-status-running'
-        : props.statusClass;
+        : taskResultNotice()?.state === 'error'
+          ? 'tool-status-error'
+          : taskResultNotice()?.state === 'cancelled'
+            ? 'tool-status-aborted'
+            : props.statusClass;
   const openTaskSession = () => {
     const sessionId = taskSessionId();
     if (!sessionId) return;
@@ -1674,6 +1795,13 @@ function GenericToolCall(props: {
       };
     }
     if (props.state.status !== 'completed') return null;
+    if (codeModeFailure()) {
+      return {
+        label: 'error',
+        value: isBlank(props.fullOutput) ? '(no output)' : props.fullOutput,
+        status: 'error',
+      };
+    }
     if (isTask()) return taskResult();
     if (isSearchTool()) {
       return {
@@ -1731,7 +1859,7 @@ function GenericToolCall(props: {
   const hasExpandableContent = () => {
     if (props.lightweight) return false;
     if (props.tool.deferred) return true;
-    if (props.state.status === 'error') return true;
+    if (isFailed() || codeModeCalls().length > 0) return true;
     if (taskSessionId()) return true;
     if (hasOnlyHeaderCommand()) return false;
     if (detailInputEntries().length > 0) return true;
@@ -1777,7 +1905,15 @@ function GenericToolCall(props: {
           <ToolCallIcon
             toolName={props.tool.tool}
             statusClass={statusClass()}
-            statusLabel={waitingForPermission() ? 'Waiting for permission' : undefined}
+            statusLabel={
+              waitingForPermission()
+                ? 'Waiting for permission'
+                : isBackgroundLaunch() && isRunning() && !taskRetryStatus()
+                  ? 'Running'
+                  : isBackgroundLaunch() && statusClass() === 'tool-status-completed'
+                    ? 'Completed'
+                    : undefined
+            }
             waiting={waitingForPermission()}
           />
           <span
@@ -1785,6 +1921,11 @@ function GenericToolCall(props: {
           >
             {props.title}
           </span>
+          <Show when={isBackgroundLaunch() && waitingForPermission() && !taskRetryStatus()}>
+            <span class="tool-invocation-task-status" role="status">
+              Waiting for permission
+            </span>
+          </Show>
           <Show when={visibleTaskTokenUsage()}>
             {(tokens) => (
               <span class="tool-invocation-token-stats" title="Subagent tokens">
@@ -1823,10 +1964,12 @@ function GenericToolCall(props: {
           </Show>
           <Show when={taskRetryStatus()}>
             {(retry) => (
-              <span class="tool-invocation-retry-label">retrying #{retry().attempt}</span>
+              <span class="tool-invocation-retry-label" role="status">
+                retrying #{retry().attempt}
+              </span>
             )}
           </Show>
-          <Show when={props.state.status === 'error' && !isExpanded()}>
+          <Show when={isFailed() && !isExpanded()}>
             <span
               class={`tool-invocation-error-label${isAborted() ? ' is-aborted' : ''}${isPermissionRejected() || isQuestionSkipped() ? ' is-rejected' : ''}`}
             >
@@ -1885,6 +2028,11 @@ function GenericToolCall(props: {
                     </Show>
                   }
                   inputEntries={detailInputEntries()}
+                  details={
+                    <Show when={codeModeCalls().length > 0}>
+                      <CodeModeToolCalls calls={codeModeCalls()} />
+                    </Show>
+                  }
                   result={structuredResult()}
                   onOpenPath={openGenericToolFile}
                   toolTitle={props.title}
@@ -2044,8 +2192,40 @@ function LiveTerminalOutput(props: { content: string }) {
   );
 }
 
+function CodeModeToolCalls(props: { calls: CodeModeToolCall[] }) {
+  return (
+    <ol class="code-mode-tool-calls" aria-label="Code Mode tool calls">
+      {/* Calls have no IDs; OpenCode reports them in start order. Keep rows mounted by position. */}
+      <Index each={props.calls}>
+        {(call) => (
+          <li class="code-mode-tool-call" data-status={call().status}>
+            <div class="code-mode-tool-call-header">
+              <ToolCallIcon toolName={call().tool} statusClass={`tool-status-${call().status}`} />
+              <span class="code-mode-tool-call-name">{call().tool}</span>
+              <span class="code-mode-tool-call-status" role="status" aria-live="polite">
+                {call().status === 'running'
+                  ? 'Running'
+                  : call().status === 'completed'
+                    ? 'Completed'
+                    : 'Error'}
+              </span>
+            </div>
+            <StructuredToolCard
+              inputEntries={getVisibleInputEntries(call().input)}
+              result={null}
+              onOpenPath={openGenericToolFile}
+              toolTitle={call().tool}
+            />
+          </li>
+        )}
+      </Index>
+    </ol>
+  );
+}
+
 function StructuredToolCard(props: {
   actions?: JSX.Element;
+  details?: JSX.Element;
   inputEntries: Array<[string, unknown]>;
   result: StructuredToolResult | null;
   onOpenPath: (path: string) => void;
@@ -2109,6 +2289,7 @@ function StructuredToolCard(props: {
           </div>
         )}
       </Show>
+      {props.details}
       <Show when={props.result}>
         {(result) => (
           <div

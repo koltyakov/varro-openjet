@@ -47,6 +47,9 @@ import {
 import { postMessage } from '../../lib/bridge';
 import type { MessageEditContext } from '../../lib/message-edit-state';
 import { splitSessionReferenceText, type SessionReference } from '../../lib/session-reference';
+import { lookupSessionReferences } from '../../lib/session-reference-lookups';
+import { client } from '../../lib/client';
+import { showSessionActionFeedback } from '../chat/SessionActionFeedback';
 import { rememberDirectSessionReturn } from '../../lib/session-navigation';
 import { state } from '../../lib/state';
 import { observeSettledResize } from '../../lib/settled-resize-observer';
@@ -364,8 +367,9 @@ function parseUserMessageParts(parts: Part[]): ParsedUserMessageContent {
 
     if (part.synthetic && part.subagentResult) {
       const result = part.subagentResult;
-      const outcome =
-        result.state === 'completed'
+      const outcome = result.backgroundPending
+        ? 'progress'
+        : result.state === 'completed'
           ? 'completed'
           : result.state === 'error'
             ? 'failed'
@@ -1589,6 +1593,7 @@ function InlineAttachmentText(props: {
   agentParts: AgentPart[];
   onOpenImagePreview: (index: number) => void;
 }) {
+  createEffect(() => lookupSessionReferences(props.content));
   const segments = createMemo(() =>
     buildInlineTextSegments(
       props.content,
@@ -1998,6 +2003,13 @@ function SessionReferenceLink(props: { reference: SessionReference }) {
   const firstWord = props.reference.title.match(/^\S+/)?.[0] ?? '';
   const openSession = (event: MouseEvent) => {
     event.preventDefault();
+    event.stopPropagation();
+    if (props.reference.external) {
+      void client.varro.session
+        .openReference(props.reference.id)
+        .catch(() => showSessionActionFeedback('Could not open the project window', 'warning'));
+      return;
+    }
     if (state.activeSessionId) {
       rememberDirectSessionReturn(props.reference.id, state.activeSessionId);
     }
@@ -2014,7 +2026,12 @@ function SessionReferenceLink(props: { reference: SessionReference }) {
       data-copy-marker={props.reference.marker}
       data-session-id={props.reference.id}
       data-session-directory={props.reference.directory}
-      title={`Open session ${props.reference.id}`}
+      data-session-external={props.reference.external ? 'true' : undefined}
+      title={
+        props.reference.external
+          ? `Open project folder ${props.reference.directory}`
+          : `Open session ${props.reference.id}`
+      }
       onClick={openSession}
     >
       <span class="link-leading-content">

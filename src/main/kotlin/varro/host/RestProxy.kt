@@ -127,6 +127,7 @@ class RestProxy(
         fun allowGlobalPermission(body: JsonObject, directory: String?): JsonArray
         fun providerLimit(providerId: String, modelId: String?): JsonObject
         fun sessionDiffSummary(sessionId: String, directory: String?, revision: String?): JsonObject
+        fun openReferencedSession(session: JsonObject) { error("Session opening is unavailable") }
     }
 
     fun submitRequest(payload: JsonObject, executor: java.util.concurrent.Executor) {
@@ -173,6 +174,19 @@ class RestProxy(
             if (skipNativeRecovery(method, path, payload.bool("interruptedRecovery") == true, server.transport.apiVersion)) {
                 log.info("interrupted-recovery native-owned, generation=${server.requestGeneration()}")
                 respond(id, data = Json.obj("skipped" to true))
+                return
+            }
+            val referenceId = ApiRoutes.varroSessionId(path)?.takeIf {
+                ApiRoutes.parse(method, path)?.segments?.lastOrNull() == "reference"
+            }
+            if (referenceId != null) {
+                val reference = locations.reference(referenceId, { referenceId in store.hiddenSessionIds || trash.isHidden(referenceId) },
+                    { directory -> transfers?.list(includeHidden = true)?.any {
+                        it.str("id") == referenceId && WorkspacePaths.isSame(it.str("directory"), directory) &&
+                            it.obj("transfer").bool("available") == true
+                    } == true }, cancelled)
+                if (method == "POST") services.openReferencedSession(reference)
+                if (!cancelled()) respond(id, data = if (method == "GET") reference else Json.toElement(true))
                 return
             }
             val transferDirectory = transfers?.authorizeRequest(method, path, payload.get("body"))

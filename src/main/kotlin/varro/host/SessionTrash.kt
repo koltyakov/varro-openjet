@@ -22,6 +22,12 @@ class SessionTrash(
         journal?.write(Json.obj("entries" to entries))
         store.recycleBin = entries
     }
+    fun isHidden(id: String): Boolean = synchronized(store) {
+        store.recycleBin.any { entry ->
+            entry.asObjectOrNull().str("rootID") == id ||
+                entry.asObjectOrNull().arr("sessions")?.any { it.asObjectOrNull().str("id") == id } == true
+        }
+    }
     fun recycle(id: String, directory: String?) = synchronized(store) {
         if (store.recycleBin.any { it.asObjectOrNull().str("rootID") == id }) return@synchronized
         val root = request("GET", "/session/${encode(id)}", null, directory).asObjectOrNull()

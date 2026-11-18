@@ -119,7 +119,6 @@ import {
   isSessionCompacting,
   isSessionAwaitingInput,
   isSessionStatusWorking,
-  isSessionTreeStatusWorking,
   replaceClipboardImages,
   replaceNativePdfs,
   setNativePdfContextFile,
@@ -178,8 +177,8 @@ import {
   formatVariantInitial,
   formatVariantLabel,
   getProviderLimitCompactBadges,
-  hasProviderLimitWindowWithinThreshold,
 } from '../lib/format';
+import { createProviderLimitDisplay } from '../lib/provider-limit-display';
 import { getVariantsForModel } from '../lib/model-variants';
 import {
   getContextWindow,
@@ -213,6 +212,8 @@ import {
   TERMINAL_SELECTION_MARKER,
 } from '../../shared/context-files';
 import { normalizeSessionTitle } from '../../shared/session-title';
+import { SESSION_ID_RE } from '../lib/session-reference';
+import { lookupSessionReference } from '../lib/session-reference-lookups';
 import { isSubagentCardVisible } from '../lib/subagent-visibility';
 import { createOpenCodeMessageID } from '../../shared/opencode-id';
 import { getQueuedAttachmentSnapshot } from '../hooks/session/session-send';
@@ -261,7 +262,7 @@ import {
   type QueuedMessageItem,
 } from './chat-input/QueuedMessages';
 import { BackgroundServices } from './chat-input/BackgroundServices';
-import { sessionStore } from '../lib/stores/session-store';
+import { captureSessionStatusSnapshotTime, sessionStore } from '../lib/stores/session-store';
 import { hasUserMessageContent, parseUserMessageContent } from './message/UserMessageContent';
 import { UsageLimitBanner } from './chat-input/UsageLimitBanner';
 import { ProviderQuotaWarning } from './chat-input/ProviderQuotaWarning';
@@ -382,6 +383,7 @@ import { ModelPicker } from './ModelPicker';
 const COMPOSER_BUSY_DISPLAY_SETTLE_DELAY_MS = 700;
 const AUTHORITATIVE_QUEUED_STATUS_MAX_AGE_MS = 5_000;
 const QUEUED_STATUS_RECONCILIATION_DELAY_MS = 1_000;
+const QUEUED_RUNNING_STATUS_RECONCILIATION_DELAY_MS = 5_000;
 
 interface CurrentComposerModel {
   providerID: string | null;
@@ -902,7 +904,7 @@ export function ChatInput(props: { newSession?: boolean; onBeforeSend?: () => vo
   const [workspaceSendPending, setWorkspaceSendPending] = createSignal(false);
   const authoritativeQueuedSessionStatuses = new Map<
     string,
-    { status: 'busy' | 'idle'; observedAt: number; revision: number }
+    { status: 'busy' | 'idle'; observedAt: number; revision: number; snapshotStartedAt?: number }
   >();
   let authoritativeQueuedStatusRevision = 0;
   const queuedStatusReconciliationOwner = Symbol();
@@ -1221,7 +1223,9 @@ export function ChatInput(props: { newSession?: boolean; onBeforeSend?: () => vo
   const [fileSearchResults, setFileSearchResults] = createSignal<DroppedFile[]>([]);
   const [tableSearchResults, setTableSearchResults] = createSignal<DatabaseTableReference[]>([]);
   const [sessionSearchResults, setSessionSearchResults] = createSignal<Session[]>([]);
-  const [sessionReferences, setSessionReferences] = createSignal<Record<string, Session>>({});
+  const [sessionReferences, setSessionReferences] = createSignal<
+    Record<string, Pick<Session, 'id' | 'title' | 'directory'>>
+  >({});
   const [showFileSearchHint, setShowFileSearchHint] = createSignal(false);
   const [suppressCompletion, setSuppressCompletion] = createSignal(false);
   const [toolbarCompactMode, setToolbarCompactMode] = createSignal<ToolbarCompactMode>('full');
@@ -1625,7 +1629,7 @@ export function ChatInput(props: { newSession?: boolean; onBeforeSend?: () => vo
     visibleClipboardImages().length > 0 ||
     visibleNativePdfs().length > 0;
 
-  function rememberSessionReference(session: Session) {
+  function rememberSessionReference(session: Pick<Session, 'id' | 'title' | 'directory'>) {
     setSessionReferences((current) =>
       current[session.id] === session ? current : { ...current, [session.id]: session }
     );
@@ -1643,14 +1647,9 @@ export function ChatInput(props: { newSession?: boolean; onBeforeSend?: () => vo
       }
       if (pendingSessionReferenceIds.has(id)) continue;
       pendingSessionReferenceIds.add(id);
-      void client.session
-        .list({ limit: 30, search: id, roots: true })
-        .then((page) => {
-          const session = (Array.isArray(page) ? page : page.items).find(
-            (candidate) => candidate.id === id
-          );
+      void lookupSessionReference(id)
+        .then((session) => {
           if (!session) return;
-          if (session.parentID || session.time.archived) return;
           if (!getSessionReferenceIds(inputText()).includes(id)) return;
           rememberSessionReference(session);
         })
@@ -1821,11 +1820,15 @@ export function ChatInput(props: { newSession?: boolean; onBeforeSend?: () => vo
     }
 
     for (const session of Object.values(sessionReferences())) {
-      const marker = `session:${session.id}`;
-      if (text.includes(marker)) {
+      const markers = new Set(
+        Array.from(text.matchAll(SESSION_ID_RE))
+          .filter((match) => (match[1] || match[2]) === session.id)
+          .map((match) => match[0])
+      );
+      for (const marker of markers) {
         const title = normalizeSessionTitle(session.title) || 'Untitled';
         chips.push({
-          id: `session:${session.id}`,
+          id: marker.startsWith('session:') ? marker : `session-raw:${session.id}`,
           type: 'mention-session',
           label: title,
           title,
@@ -4005,29 +4008,49 @@ export function ChatInput(props: { newSession?: boolean; onBeforeSend?: () => vo
   const getAuthoritativeQueuedSessionStatus = (sessionId: string) => {
     const entry = authoritativeQueuedSessionStatuses.get(sessionId);
     if (!entry) return undefined;
-    if (Date.now() - entry.observedAt <= AUTHORITATIVE_QUEUED_STATUS_MAX_AGE_MS) {
+    if (
+      Date.now() - entry.observedAt <= AUTHORITATIVE_QUEUED_STATUS_MAX_AGE_MS &&
+      (entry.snapshotStartedAt === undefined ||
+        !sessionStore.isSessionStatusSnapshotStale(sessionId, entry.snapshotStartedAt))
+    ) {
       return entry.status;
     }
-    authoritativeQueuedSessionStatuses.delete(sessionId);
     return undefined;
   };
   const getQueuedSessionStatusType = (sessionId: string) =>
     sessionId !== state.activeSessionId
       ? (getAuthoritativeQueuedSessionStatus(sessionId) ?? state.sessionStatus[sessionId]?.type)
       : state.sessionStatus[sessionId]?.type;
+  const isOtherQueuedTreeSessionWorking = (sessionId: string) =>
+    getSessionTreeIdsForSession(sessionId).some((id) => {
+      if (id === sessionId) return false;
+      const reconciled = getAuthoritativeQueuedSessionStatus(id);
+      return (
+        sessionStore.isProviderRetryScheduled(id) ||
+        (reconciled === undefined
+          ? isSessionStatusWorking(state.sessionStatus[id])
+          : reconciled === 'busy')
+      );
+    });
   const isQueuedSessionTreeWorking = (sessionId: string) => {
-    const authoritativeStatus = getAuthoritativeQueuedSessionStatus(sessionId);
-    return authoritativeStatus
-      ? authoritativeStatus === 'busy'
-      : isSessionTreeStatusWorking(sessionId);
+    const status = getQueuedSessionStatusType(sessionId);
+    return (
+      status === 'busy' ||
+      status === 'retry' ||
+      sessionStore.isProviderRetryScheduled(sessionId) ||
+      isOtherQueuedTreeSessionWorking(sessionId)
+    );
   };
 
   createEffect(() => {
     const queuedStatusSessionIds = new Set(
       state.queuedMessages.filter(ownsQueuedMessage).map((message) => message.sessionId)
     );
+    const queuedTreeSessionIds = new Set(
+      [...queuedStatusSessionIds].flatMap(getSessionTreeIdsForSession)
+    );
     for (const sessionId of authoritativeQueuedSessionStatuses.keys()) {
-      if (!queuedStatusSessionIds.has(sessionId)) {
+      if (!queuedTreeSessionIds.has(sessionId)) {
         authoritativeQueuedSessionStatuses.delete(sessionId);
       }
     }
@@ -4118,13 +4141,21 @@ export function ChatInput(props: { newSession?: boolean; onBeforeSend?: () => vo
   const observeQueuedSessionStatus = (
     sessionId: string,
     status: 'busy' | 'idle',
-    source: 'event' | 'reconciliation' = 'event'
+    snapshotStartedAt?: number
   ) => {
-    if (state.queuedMessages.some((message) => message.sessionId === sessionId)) {
+    if (
+      state.queuedMessages.some(
+        (message) =>
+          ownsQueuedMessage(message) &&
+          (message.sessionId === sessionId ||
+            getSessionTreeIdsForSession(message.sessionId).includes(sessionId))
+      )
+    ) {
       authoritativeQueuedSessionStatuses.set(sessionId, {
         status,
         observedAt: Date.now(),
         revision: ++authoritativeQueuedStatusRevision,
+        snapshotStartedAt,
       });
     } else {
       authoritativeQueuedSessionStatuses.delete(sessionId);
@@ -4134,6 +4165,14 @@ export function ChatInput(props: { newSession?: boolean; onBeforeSend?: () => vo
     if (status === 'busy') {
       dispatch.phase = 'running';
       dispatch.completedBeforeAdmission = false;
+      dispatch.statusCheckAfter = Date.now() + QUEUED_RUNNING_STATUS_RECONCILIATION_DELAY_MS;
+      scheduleQueuedStatusReconciliation();
+      return false;
+    }
+    if (
+      sessionStore.isProviderRetryScheduled(sessionId) ||
+      isOtherQueuedTreeSessionWorking(sessionId)
+    ) {
       scheduleQueuedStatusReconciliation();
       return false;
     }
@@ -4141,7 +4180,7 @@ export function ChatInput(props: { newSession?: boolean; onBeforeSend?: () => vo
       if (dispatch.phase === 'running') dispatch.completedBeforeAdmission = true;
       return false;
     }
-    if (dispatch.phase !== 'running' && source !== 'reconciliation') {
+    if (dispatch.phase !== 'running' && snapshotStartedAt === undefined) {
       scheduleQueuedStatusReconciliation();
       return false;
     }
@@ -4171,7 +4210,14 @@ export function ChatInput(props: { newSession?: boolean; onBeforeSend?: () => vo
     let candidate: { sessionId: string; dispatch: QueuedSessionDispatchPhase } | undefined;
     let reconcileAt = Number.POSITIVE_INFINITY;
     for (const [sessionId, dispatch] of queuedSessionDispatchPhases) {
-      if (dispatch.phase !== 'admitted' || dispatch.statusCheckInFlight) continue;
+      // A reconnect can restore idle through a snapshot without replaying its event.
+      // Keep checking running admissions too, or that lost event blocks the queue forever.
+      if (
+        dispatch.phase === 'dispatching' ||
+        dispatch.admittedAt === undefined ||
+        dispatch.statusCheckInFlight
+      )
+        continue;
       const nextCheckAt = dispatch.statusCheckAfter ?? now;
       if (nextCheckAt >= reconcileAt) continue;
       candidate = { sessionId, dispatch };
@@ -4193,11 +4239,12 @@ export function ChatInput(props: { newSession?: boolean; onBeforeSend?: () => vo
   ) {
     if (queueDispatchDisposed || queuedSessionDispatchPhases.get(sessionId) !== dispatch) return;
     if (dispatch.admittedAt === undefined) return;
-    const statusRevision = authoritativeQueuedSessionStatuses.get(sessionId)?.revision ?? 0;
+    const statusRevision = authoritativeQueuedStatusRevision;
+    const snapshotStartedAt = captureSessionStatusSnapshotTime();
     dispatch.statusCheckInFlight = true;
     dispatch.statusCheckOwner = queuedStatusReconciliationOwner;
     try {
-      const statuses = await client.session.status();
+      const statuses = await client.session.status({ fresh: true });
       if (
         queueDispatchDisposed ||
         queuedSessionDispatchPhases.get(sessionId) !== dispatch ||
@@ -4206,19 +4253,42 @@ export function ChatInput(props: { newSession?: boolean; onBeforeSend?: () => vo
         return;
       }
       const latestStatus = authoritativeQueuedSessionStatuses.get(sessionId);
-      if (latestStatus && latestStatus.revision > statusRevision) {
+      if (
+        (latestStatus && latestStatus.revision > statusRevision) ||
+        sessionStore.isSessionStatusSnapshotStale(sessionId, snapshotStartedAt)
+      ) {
         dispatch.statusCheckInFlight = false;
         dispatch.statusCheckOwner = undefined;
+        dispatch.statusCheckAfter = Date.now() + QUEUED_RUNNING_STATUS_RECONCILIATION_DELAY_MS;
         return;
       }
-      const status = statuses[sessionId];
-      if (status?.type === 'busy' || status?.type === 'retry') {
+      const tree = getSessionTreeIdsForSession(sessionId);
+      for (const id of tree) {
+        if (
+          id === sessionId ||
+          (authoritativeQueuedSessionStatuses.get(id)?.revision ?? 0) > statusRevision ||
+          sessionStore.isSessionStatusSnapshotStale(id, snapshotStartedAt)
+        )
+          continue;
+        // Reconcile only this queue's tree. An idle session can be absent from the snapshot.
+        authoritativeQueuedSessionStatuses.set(id, {
+          status: isSessionStatusWorking(statuses[id]) ? 'busy' : 'idle',
+          observedAt: Date.now(),
+          revision: ++authoritativeQueuedStatusRevision,
+          snapshotStartedAt,
+        });
+      }
+      if (
+        isSessionStatusWorking(statuses[sessionId]) ||
+        isOtherQueuedTreeSessionWorking(sessionId) ||
+        sessionStore.isProviderRetryScheduled(sessionId)
+      ) {
         dispatch.statusCheckInFlight = false;
         dispatch.statusCheckOwner = undefined;
-        observeQueuedSessionStatus(sessionId, 'busy', 'reconciliation');
+        observeQueuedSessionStatus(sessionId, 'busy', snapshotStartedAt);
         return;
       }
-      if (observeQueuedSessionStatus(sessionId, 'idle', 'reconciliation')) {
+      if (observeQueuedSessionStatus(sessionId, 'idle', snapshotStartedAt)) {
         dispatchAfterAuthoritativeIdle(sessionId);
       }
     } catch {
@@ -4240,7 +4310,7 @@ export function ChatInput(props: { newSession?: boolean; onBeforeSend?: () => vo
       const properties = event.properties;
       if (!isString(properties?.sessionID)) return;
       const status = properties.status?.type;
-      if (status === 'busy') {
+      if (status === 'busy' || status === 'retry') {
         observeQueuedSessionStatus(properties.sessionID, 'busy');
         return;
       }
@@ -5973,7 +6043,7 @@ export function ChatInput(props: { newSession?: boolean; onBeforeSend?: () => vo
     }
     return getActiveUsageLimitNotice(activeSessionId);
   });
-  const currentProviderLimit = createMemo(() => {
+  const currentProviderLimit = createProviderLimitDisplay(() => {
     const current = currentModel();
     if (!current.providerID) return null;
     return getProviderLimit(current.providerID, current.modelID);
@@ -5986,15 +6056,13 @@ export function ChatInput(props: { newSession?: boolean; onBeforeSend?: () => vo
       current.modelName
     );
   });
-  const showCurrentProviderLimit = createMemo(() =>
-    hasProviderLimitWindowWithinThreshold(currentCompactProviderLimit(), 100)
+  const currentProviderLimitBadges = createMemo(() =>
+    getProviderLimitCompactBadges(currentCompactProviderLimit())
   );
+  const showCurrentProviderLimit = createMemo(() => currentProviderLimitBadges().length > 0);
 
   const currentProviderLimitTitle = createMemo(() =>
     showCurrentProviderLimit() ? formatProviderLimitTitle(currentCompactProviderLimit()) : null
-  );
-  const currentProviderLimitBadges = createMemo(() =>
-    showCurrentProviderLimit() ? getProviderLimitCompactBadges(currentCompactProviderLimit()) : []
   );
   const availableMcpNames = createMemo(() => [
     ...new Set([

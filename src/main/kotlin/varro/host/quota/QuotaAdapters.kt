@@ -173,20 +173,33 @@ internal class QuotaAdapters(
             }
             "zai", "zai-coding-plan" -> {
                 val payload = json("https://api.z.ai/api/monitor/usage/quota/limit", headers = mapOf("Authorization" to token()))
-                if (payload.bool("success") == false || payload.int("code") in setOf(401, 403)) {
+                if (payload.bool("success") == false || payload.int("code")?.let { it !in setOf(0, 200) } == true) {
                     throw QuotaFailure("Z.ai quota endpoint returned ${payload.int("code") ?: "an error"}", payload.int("code"))
                 }
-                val result = available(QuotaParsers.zai(payload, now))
-                runCatching { json("https://api.z.ai/api/biz/customer-package-reset/list?targetType=PERSONAL", headers = mapOf("Authorization" to token())) }
-                    .getOrNull()?.takeIf { it.int("code") == 200 && it.bool("success") != false }?.obj("data")?.let { data ->
+                require(payload.obj("data").arr("limits") != null) { "Z.ai quota endpoint returned invalid quota data" }
+                val windows = QuotaParsers.zai(payload, now)
+                if (windows.isEmpty()) throw QuotaFailure("Z.ai quota endpoint did not expose any bounded quotas")
+                val result = available(windows)
+                try {
+                    val resets = json("https://api.z.ai/api/biz/customer-package-reset/list?targetType=PERSONAL", headers = mapOf("Authorization" to token()))
+                    if (resets.int("code") !in setOf(401, 403)) {
+                        require(resets.int("code") == 200 && resets.bool("success") != false) { "Reset credits unavailable" }
+                        val data = resets.obj("data")
+                        require(listOf("weekResets", "fiveHourResets").all { key ->
+                            data.arr(key)?.all { it.asObjectOrNull().bool("available") != null } == true
+                        }) { "Invalid reset credits" }
                         val available = listOf("weekResets" to "Weekly quota reset", "fiveHourResets" to "5-hour quota reset").flatMap { (key, title) ->
                             data.elements(key).mapNotNull { entry -> entry.asObjectOrNull()?.takeIf { it.bool("available") == true }?.let { it to title } }
                         }
                         if (available.isNotEmpty()) result.add("usageLimitResets", Json.obj("availableCount" to available.size,
+                            "checkedAt" to now,
                             "credits" to Json.array(available.mapNotNull { (credit, title) ->
                                 credit.reset(now, "expireTime")?.let { Json.obj("title" to title, "expiresAt" to it) }
                             })))
                     }
+                } catch (failure: Exception) {
+                    if (failure !is QuotaFailure || failure.code !in setOf(401, 403)) result.addProperty("usageLimitResetsUnavailable", true)
+                }
                 result
             }
             "minimax" -> {

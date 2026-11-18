@@ -22,6 +22,7 @@ class ProviderQuotaBackend(
     private val requestUsageLimits: (String?) -> JsonElement? = { directory ->
         request("GET", "/api/experimental/usage/limits", null, directory)
     },
+    private val lookupTimeoutMs: Long = 12_000,
 ) : AutoCloseable {
     private data class Key(val provider: String, val model: String?, val directory: String?)
     private data class Entry(val identity: String, val status: JsonObject, val expires: Long)
@@ -34,6 +35,11 @@ class ProviderQuotaBackend(
     private val executor = Executors.newVirtualThreadPerTaskExecutor()
     private val generation = AtomicLong()
     private val lifecycle = Any()
+    private class Poll {
+        @Volatile var identity = ""
+        @Volatile var retired = false
+        var authFailure: AuthFailure? = null
+    }
     @Volatile private var closed = false
 
     fun get(providerId: String, modelId: String?, directory: String?): JsonObject {
@@ -47,8 +53,16 @@ class ProviderQuotaBackend(
             val version = generation.get()
             try {
                 executor.execute {
-                    val result = try { load(key, version) }
-                    catch (_: Exception) { status(key, "error", "Provider quota request failed; retry on the next poll") }
+                    val poll = Poll()
+                    val work = executor.submit<JsonObject> { load(key, version, poll) }
+                    val result = try { work.get(lookupTimeoutMs, TimeUnit.MILLISECONDS) }
+                    catch (_: Exception) {
+                        synchronized(lifecycle) {
+                            poll.retired = true
+                            work.cancel(true)
+                            finish(key, version, poll, status(key, "error", "Provider quota lookup failed or timed out; retry on the next poll"))
+                        }
+                    }
                     finally { inFlight.remove(key, it) }
                     // Retire the poll before waking callers. Their next get must
                     // recheck credentials and expiry instead of joining this result.
@@ -65,7 +79,7 @@ class ProviderQuotaBackend(
         catch (_: Exception) { status(key, "error", "Provider quota request was cancelled") }
     }
 
-    private fun load(key: Key, version: Long): JsonObject {
+    private fun load(key: Key, version: Long, poll: Poll): JsonObject {
         var identity = ""
         var rejectedCredentials = false
         var result = try {
@@ -112,13 +126,17 @@ class ProviderQuotaBackend(
                     if (key.provider in setOf("google", "gemini")) credentials.gemini(key.provider, auth).orEmpty() else "",
                     token.orEmpty(), claudeAgentToken.orEmpty(),
                     if (key.provider == "github-copilot" && token == null) credentials.copilotFallback().orEmpty() else "")
-                cache[key]?.takeIf { it.identity == identity && it.expires > clock() }?.let { return it.status }
+                poll.identity = identity
+                poll.authFailure = authFailures[key.provider]
                 authFailures[key.provider]?.let { failure ->
                     if (failure.identity != identity) authFailures.remove(key.provider, failure)
-                    else if (failure.retryAt > clock()) return status(key, "unsupported", failure.note)
+                    else if (failure.retryAt > clock()) return status(key, "unsupported", failure.note).apply {
+                        if (isZai(key)) { addProperty("failureKind", "authentication"); addProperty("retryAt", failure.retryAt) }
+                    }
                 }
+                cache[key]?.takeIf { it.identity == identity && it.expires > clock() }?.let { return it.status }
                 val writeAuth: ((String, JsonObject) -> Unit)? = if (v2) null else { id, value ->
-                    check(version == generation.get() && !closed) { "Provider quota poll was retired" }
+                    check(version == generation.get() && !closed && !poll.retired) { "Provider quota poll was retired" }
                     if (credentials.authStore().obj(id) != auth.obj(id)) throw QuotaFailure("Provider credentials changed during refresh; retrying with current credentials")
                     request("PUT", "/auth/$id", value, key.directory)
                 }
@@ -149,43 +167,73 @@ class ProviderQuotaBackend(
             // Keep stable credential identities host-only, including in cached and pushed status.
             warning.text("connectionID")?.let { warning.addProperty("connectionID", QuotaCredentials.fingerprint(it)) }
         }
+        poll.identity = identity
         return synchronized(lifecycle) {
-            if (closed || generation.get() != version) {
-                return@synchronized status(key, "error", "Provider settings changed during the poll; retrying")
-            }
-            if (rejectedCredentials && identity.isNotEmpty()) {
-                val previous = authFailures[key.provider]
-                val delay = if (previous?.identity == identity) minOf(previous.backoff * 2, 3_600_000L) else 300_000L
-                authFailures[key.provider] = AuthFailure(identity, result.str("note").orEmpty(), clock() + delay, delay)
-            } else if (result.str("status") == "available") authFailures.remove(key.provider)
-            val ttl = when (result.str("status")) {
-                "available" -> { backoff.remove(key); 30_000L }
-                "unsupported" -> { backoff.remove(key); 60_000L }
-                else -> if (result.str("note")?.contains("429") == true) {
-                    backoff.compute(key) { _, previous -> ((previous ?: 30_000L) * 2).coerceAtMost(3_600_000L) }!!
-                } else { backoff.remove(key); 15_000L }
-            }
-            if (result.str("status") == "error") {
-                lastGood[key]?.takeIf {
-                    it.identity == identity && it.expires > clock() && clock() - (it.status.long("checkedAt") ?: 0) < 900_000
-                }?.let {
-                    result = it.status.deepCopy().apply {
-                        addProperty("note", "Last successful quota snapshot. ${result.str("note")}")
-                    }
-                }
-            } else if (result.str("status") == "available") {
-                lastGood[key] = Entry(identity, result, clock() + 900_000)
-            } else {
-                lastGood.remove(key)
-            }
-            val expires = if (result.str("status") == "available") {
-                minOf(clock() + ttl, (result.long("checkedAt") ?: clock()) + 900_000)
-            } else clock() + ttl
-            cache[key] = Entry(identity, result, expires)
-            onUpdate(Json.obj("directory" to key.directory, "status" to result.deepCopy()))
-            result
+            if (poll.retired) return@synchronized result
+            finish(key, version, poll, result, rejectedCredentials)
         }
     }
+
+    private fun finish(key: Key, version: Long, poll: Poll, initial: JsonObject, rejectedCredentials: Boolean = false): JsonObject {
+        var result = initial
+        val identity = poll.identity
+        if (closed || generation.get() != version) return status(key, "error", "Provider settings changed during the poll; retrying")
+        val currentAuth = authFailures[key.provider]
+        if (isZai(key) && result.str("status") == "available" && currentAuth != null &&
+            currentAuth !== poll.authFailure && currentAuth.identity == identity) return status(key, "unsupported", currentAuth.note).apply {
+            addProperty("failureKind", "authentication"); addProperty("retryAt", currentAuth.retryAt)
+        }
+        if (rejectedCredentials && identity.isNotEmpty()) {
+            val previous = authFailures[key.provider]
+            val delay = if (previous?.identity == identity) minOf(previous.backoff * 2, 3_600_000L) else 300_000L
+            authFailures[key.provider] = AuthFailure(identity, result.str("note").orEmpty(), clock() + delay, delay)
+            if (isZai(key)) {
+                cache.keys.filter { it.provider == key.provider }.forEach(cache::remove)
+                lastGood.keys.filter { it.provider == key.provider }.forEach(lastGood::remove)
+                result.addProperty("failureKind", "authentication")
+            }
+        } else if (result.str("status") == "available") authFailures.remove(key.provider)
+        val ttl = when (result.str("status")) {
+            "available" -> { backoff.remove(key); 30_000L }
+            "unsupported" -> { backoff.remove(key); 60_000L }
+            else -> if (result.str("note")?.contains("429") == true) {
+                backoff.compute(key) { _, previous -> ((previous ?: 30_000L) * 2).coerceAtMost(3_600_000L) }!!
+            } else { backoff.remove(key); 15_000L }
+        }
+        val previous = lastGood[key]?.takeIf { it.identity == identity && identity.isNotEmpty() }
+        val resets = previous?.status.obj("usageLimitResets")?.takeIf {
+            clock() - (it.long("checkedAt") ?: previous?.status.long("checkedAt") ?: 0) < 900_000
+        }?.deepCopy()?.apply {
+            if (!has("checkedAt")) addProperty("checkedAt", previous!!.status.long("checkedAt"))
+            addProperty("stale", true)
+        }
+        if (result.str("status") == "error") {
+            previous?.takeIf { it.expires > clock() && clock() - (it.status.long("checkedAt") ?: 0) < 900_000 }?.let {
+                result = it.status.deepCopy().apply {
+                    addProperty("note", "Last successful quota snapshot. ${result.str("note")}")
+                    if (isZai(key)) addProperty("stale", true)
+                    remove("usageLimitResets")
+                    resets?.let { retained -> add("usageLimitResets", retained) }
+                }
+            }
+        } else if (result.str("status") == "available") {
+            if (result.bool("usageLimitResetsUnavailable") == true && resets != null) result.add("usageLimitResets", resets)
+            lastGood[key] = Entry(identity, result.deepCopy(), clock() + 900_000)
+        } else {
+            lastGood.remove(key)
+        }
+        var expires = if (result.str("status") == "available") minOf(clock() + ttl, (result.long("checkedAt") ?: clock()) + 900_000)
+            else clock() + ttl
+        result.obj("usageLimitResets")?.takeIf { it.bool("stale") == true }?.long("checkedAt")?.let { expires = minOf(expires, it + 900_000) }
+        if (isZai(key) && (result.str("status") != "available" || result.bool("stale") == true)) {
+            result.addProperty("retryAt", if (result.str("failureKind") == "authentication") authFailures[key.provider]?.retryAt ?: expires else expires)
+        }
+        cache[key] = Entry(identity, result, expires)
+        onUpdate(Json.obj("directory" to key.directory, "status" to result.deepCopy()))
+        return result
+    }
+
+    private fun isZai(key: Key) = key.provider in setOf("zai", "zai-coding-plan")
 
     /** Credentials stay host-only. No local database, files, inactive account or env fallback. */
     private fun attachedOpenAI(response: JsonElement?): JsonObject {

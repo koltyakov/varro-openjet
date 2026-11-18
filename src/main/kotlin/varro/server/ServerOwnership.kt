@@ -22,6 +22,7 @@ internal class ServerOwnership(
     private val verifyCredentials: (Connection) -> Boolean = RegisteredConnectionVerifier()::verify,
     private val verifyReplacement: (Connection, Long, () -> Boolean) -> Boolean = RegisteredConnectionVerifier()::verify,
     private val processHandle: (Long) -> ProcessHandle? = { ProcessHandle.of(it).orElse(null) },
+    private val runtimeTemporaryDirectory: Path = Path.of(System.getProperty("java.io.tmpdir")),
 ) {
     internal data class Connection(val port: Int, val password: String?, val username: String = "opencode")
     private val host = UUID.randomUUID().toString()
@@ -240,7 +241,7 @@ internal class ServerOwnership(
         } ?: false
     }
 
-    @Synchronized fun register(port: Int, launchedPid: Long, password: String? = null, username: String = "opencode"): Boolean = coordinated {
+    @Synchronized fun register(port: Int, launchedPid: Long, password: String? = null, username: String = "opencode", configPath: Path? = null): Boolean = coordinated {
         val pid = inspect.listeners(port).singleOrNull() ?: return@coordinated false
         var ancestor = ProcessHandle.of(pid).orElse(null)
         while (ancestor != null && ancestor.pid() != launchedPid) ancestor = ancestor.parent().orElse(null)
@@ -251,6 +252,11 @@ internal class ServerOwnership(
             "executable" to inspect.executable(pid), "birthIdentity" to inspect.birth(pid),
             "owner" to UUID.randomUUID().toString(), "createdAt" to System.currentTimeMillis())
         identifyHost(lease)
+        configPath?.let {
+            check(Files.isRegularFile(it, NOFOLLOW_LINKS) && !Files.isSymbolicLink(it.parent)) { "Unsafe managed runtime configuration" }
+            privateWrite(it.parent.resolve("owner.json"), Json.stringify(Json.obj("pid" to pid, "owner" to lease.str("owner"))))
+            lease.addProperty("configPath", it.toString())
+        }
         password?.let { lease.addProperty("password", it) }
         if (username != "opencode") lease.addProperty("username", username)
         write(marker, lease.deepCopy().apply {
@@ -265,6 +271,34 @@ internal class ServerOwnership(
         }
         true
     } ?: false
+
+    /** Missing temporary configuration is a repair candidate, never process-ownership evidence. */
+    @Synchronized fun needsRuntimeConfigRecovery(): Boolean {
+        if (credentialOnly) return false
+        val lease = record(path) ?: return false
+        if (lease.str("host") != host || lease.str("state") != "active") return false
+        val config = lease.str("configPath")?.let(Path::of) ?: return true
+        if (config.fileName.toString() != "opencode.json" ||
+            config.parent?.fileName?.toString()?.let { it.startsWith("varro-opencode-config-") || it.startsWith("varro-openjet-config-") } != true) return false
+        if (!config.isAbsolute || config.normalize() != config || Files.isSymbolicLink(config) || Files.isSymbolicLink(config.parent)) return false
+        val temporary = runCatching { runtimeTemporaryDirectory.toRealPath() }.getOrNull() ?: return false
+        val parent = config.parent
+        if (Files.exists(parent, NOFOLLOW_LINKS)) {
+            if (!Files.isDirectory(parent, NOFOLLOW_LINKS) || runCatching { parent.toRealPath().parent }.getOrNull() != temporary) return false
+        } else if (runCatching { parent.parent.toRealPath() }.getOrNull() != temporary) return false
+        if (!Files.notExists(config, NOFOLLOW_LINKS)) return false
+        val ownerPath = config.parent.resolve("owner.json")
+        if (Files.notExists(ownerPath, NOFOLLOW_LINKS)) return true
+        if (!Files.isRegularFile(ownerPath, NOFOLLOW_LINKS)) return false
+        val owner = runCatching { read(ownerPath) }.getOrNull() ?: return false
+        return owner.get("pid") == lease.get("pid") && owner.str("owner") == lease.str("owner")
+    }
+
+    @Synchronized fun <T> withLaunchClaim(action: () -> T): T {
+        if (launchClaim != null) return action()
+        check(beginLaunch()) { "Another Varro host is preparing OpenCode" }
+        try { return action() } finally { endLaunch() }
+    }
 
     @Synchronized fun retainConnection(port: Int, password: String, username: String): Boolean {
         val connection = Connection(port, password, username)
@@ -550,6 +584,11 @@ internal open class ProcessIdentity {
         return output.get(2, TimeUnit.SECONDS).trim()
     }
     open fun listeners(port: Int): Set<Long> {
+        if (windows) {
+            try { return WindowsListeners.read(port) }
+            catch (_: Exception) { /* A failed native read supplies no evidence. Inspect afresh below. */ }
+            catch (_: LinkageError) { /* Older Windows/JNA installations retain the existing fallback. */ }
+        }
         if (!windows && !mac) {
             val inodes = listOf("tcp", "tcp6").flatMap { protocol ->
                 val file = Path.of("/proc/net/$protocol")

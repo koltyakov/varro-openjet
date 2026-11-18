@@ -62,16 +62,32 @@ class OpenCodeV2BackgroundJobsTest {
         fun event(type: String, data: JsonObject) = adapter.events(Json.obj("type" to type, "data" to data, "location" to Json.obj("directory" to "/repo")))
     }
 
-    @Test fun `native shell subagent and image jobs restore waiting for owners and ancestors`() {
-        for (kind in listOf("shell", "subagent", "image")) {
+    @Test fun `native shell subagent image and Code Mode jobs restore waiting for owners and ancestors`() {
+        for (kind in listOf("shell", "subagent", "image", "codemode")) {
             val fixture = Fixture(listOf(job(kind, "ses_nested"), job(kind, "ses_other")))
             fixture.shells = emptyList()
             val status = fixture.status()
             assertEquals(setOf("ses_root", "ses_child"), status.keySet())
             assertEquals(true, status.obj("ses_root").bool("background"))
             assertEquals(10L, status.obj("ses_root").long("backgroundStartedAt"))
+            if (kind == "codemode") assertEquals("Code Mode script", status.obj("ses_root").str("backgroundCommand"))
             assertEquals(1, fixture.calls.count { it == "/api/session/ses_root" })
             assertEquals(1, fixture.calls.count { it == "/api/session/ses_nested" })
+        }
+    }
+
+    @Test fun `Code Mode titles and native idle preserve waiting until consumption`() {
+        for (outcome in listOf("running", "completed", "error", "cancelled")) {
+            val fixture = Fixture(listOf(job("codemode", status = outcome).apply { addProperty("title", "Check the build") }))
+            fixture.shells = emptyList()
+            if (outcome == "cancelled") {
+                assertEquals(Json.obj(), fixture.status())
+                continue
+            }
+            assertEquals("Check the build", fixture.status().obj("ses_root").str("backgroundCommand"))
+            val idle = fixture.event("session.status.updated", Json.obj("sessionID" to "ses_root", "status" to Json.obj("type" to "idle"))).single()
+            assertEquals(true, idle.obj("properties").obj("status").bool("background"))
+            assertEquals("busy", idle.obj("properties").obj("status").str("type"))
         }
     }
 
@@ -81,10 +97,10 @@ class OpenCodeV2BackgroundJobsTest {
     }
 
     @Test fun `completed and errored jobs wait until consumption and completion handoff`() {
-        for (outcome in listOf("completed", "error")) {
+        for (outcome in listOf("completed", "error")) for (kind in listOf("image", "codemode")) {
             var now = 0L
             val work = OpenCodeV2BackgroundWork { now }
-            val jobs = mapOf("ses_root" to listOf(job("image", status = outcome)))
+            val jobs = mapOf("ses_root" to listOf(job(kind, status = outcome)))
             assertEquals(listOf("ses_root"), work.reconcile(emptyList(), emptySet(), "/repo", work.snapshotVersion(), nativeJobs = jobs))
             now = 60000
             work.reconcile(emptyList(), emptySet(), "/repo", work.snapshotVersion(), nativeJobs = jobs)

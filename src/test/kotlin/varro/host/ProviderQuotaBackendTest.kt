@@ -15,6 +15,103 @@ import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 
 class ProviderQuotaBackendTest {
+    private val zaiQuota = """{"code":200,"data":{"limits":[{"type":"TOKENS_LIMIT","percentage":25,"usage":100,"currentValue":25}]}}"""
+    private val zaiResets = """{"code":200,"data":{"weekResets":[{"available":true,"expireTime":1800086400000}],"fiveHourResets":[]}}"""
+
+    @Test fun `Zai failures retain same-identity quotas and reset credits only until their original deadlines`() {
+        for (provider in listOf("zai", "zai-coding-plan")) {
+            val creds = credentials(Json.obj(provider to Json.obj("type" to "api", "key" to "fixture-secret")))
+            var now = 1_800_000_000_000L
+            val first = now
+            var quotaFails = false
+            var resetsFail = false
+            var resetPayload = zaiResets
+            ProviderQuotaBackend(creds, { _, _, _, _ -> metadata(provider) }, QuotaHttp {
+                if (it.url.contains("quota/limit")) {
+                    if (quotaFails) response("{}", 503) else response(zaiQuota)
+                } else if (resetsFail) response("{}", 503) else response(resetPayload)
+            }, clock = { now }).use { backend ->
+                assertEquals(first, backend.get(provider, "model", "/work").obj("usageLimitResets").long("checkedAt"))
+                now += 30_000; resetsFail = true
+                val staleCredits = backend.get(provider, "model", "/work")
+                assertEquals(true, staleCredits.obj("usageLimitResets").bool("stale"))
+                assertEquals(first, staleCredits.obj("usageLimitResets").long("checkedAt"))
+                assertNull(staleCredits.bool("stale"))
+                now += 30_000; quotaFails = true
+                val stale = backend.get(provider, "model", "/work")
+                assertEquals(true, stale.bool("stale"))
+                assertEquals(now + 15_000, stale.long("retryAt"))
+                assertEquals(first + 30_000, stale.long("checkedAt"))
+                assertFalse(stale.toString().contains("fixture-secret"))
+                now = first + 900_000
+                val expiredCredits = backend.get(provider, "model", "/work")
+                assertFalse(expiredCredits.has("usageLimitResets"))
+                now += 30_000
+                assertEquals("error", backend.get(provider, "model", "/work").str("status"))
+                quotaFails = false; resetsFail = false
+                resetPayload = """{"code":200,"data":{"weekResets":[],"fiveHourResets":[]}}"""
+                now += 30_000
+                assertFalse(backend.get(provider, "model", "/work").has("usageLimitResets"))
+            }
+        }
+    }
+
+    @Test fun `Zai rejection invalidates every model cache and credential changes cannot reuse retained quotas`() {
+        val creds = credentials(Json.obj("zai" to Json.obj("type" to "api", "key" to "first")))
+        var now = 1_800_000_000_000L
+        var rejected = false
+        ProviderQuotaBackend(creds, { _, _, _, _ -> metadata("zai") }, QuotaHttp {
+            if (rejected) response("{}", 401) else if (it.url.contains("quota/limit")) response(zaiQuota) else response(zaiResets)
+        }, clock = { now }).use { backend ->
+            assertEquals("available", backend.get("zai", "one", "/work").str("status"))
+            assertEquals("available", backend.get("zai", "two", "/work").str("status"))
+            now += 30_000; rejected = true
+            val failure = backend.get("zai", "one", "/work")
+            assertEquals("authentication", failure.str("failureKind"))
+            assertEquals(now + 300_000, failure.long("retryAt"))
+            assertEquals("authentication", backend.get("zai", "two", "/work").str("failureKind"))
+            Files.writeString(creds.authPath, """{"zai":{"type":"api","key":"second"}}""")
+            rejected = false
+            assertEquals("available", backend.get("zai", "one", "/work").str("status"))
+            now += 30_000; rejected = true
+            Files.writeString(creds.authPath, """{"zai":{"type":"api","key":"third"}}""")
+            assertFalse(backend.get("zai", "one", "/work").has("windows"))
+        }
+    }
+
+    @Test fun `quota deadline covers unresolved identity and resolved provider work without late cache publication`() {
+        for (identityResolved in listOf(false, true)) {
+            val creds = credentials(Json.obj("zai" to Json.obj("type" to "api", "key" to "fixture")))
+            val entered = CountDownLatch(1)
+            val release = CountDownLatch(1)
+            var blocked = false
+            val updates = java.util.concurrent.CopyOnWriteArrayList<JsonObject>()
+            var now = 1_800_000_000_000L
+            fun block() {
+                entered.countDown()
+                // Model a transport which ignores cancellation until its body settles.
+                while (release.count > 0) try { release.await() } catch (_: InterruptedException) { }
+            }
+            ProviderQuotaBackend(creds, { _, _, _, _ ->
+                if (blocked && !identityResolved) block()
+                metadata("zai")
+            }, QuotaHttp {
+                if (blocked && identityResolved) block()
+                response(if (it.url.contains("quota/limit")) zaiQuota else zaiResets)
+            }, updates::add, clock = { now }, lookupTimeoutMs = 100).use { backend ->
+                backend.get("zai", "model", "/work")
+                now += 30_000; blocked = true
+                val result = backend.get("zai", "model", "/work")
+                assertTrue(entered.await(1, TimeUnit.SECONDS))
+                assertEquals(if (identityResolved) "available" else "error", result.str("status"))
+                if (identityResolved) assertEquals(true, result.bool("stale"))
+                assertEquals(now + 15_000, result.long("retryAt"))
+                release.countDown()
+                backend.clearCache()
+            }
+        }
+    }
+
     @get:Rule val temporary = TemporaryFolder()
 
     private fun credentials(auth: JsonObject = JsonObject()): QuotaCredentials {

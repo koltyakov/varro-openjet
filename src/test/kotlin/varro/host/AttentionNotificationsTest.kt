@@ -12,6 +12,32 @@ import java.security.MessageDigest
 import javax.sound.sampled.AudioSystem
 
 class AttentionNotificationsTest {
+    @Test fun `status-only resumes do not repeat a completion but a distinct assistant can complete without a new prompt`() {
+        val f = Fixture()
+        f.session()
+        fun assistant(id: String, completed: Long) = f.event("message.updated", Json.obj("info" to Json.obj(
+            "id" to id, "sessionID" to "root", "role" to "assistant", "finish" to "stop", "time" to Json.obj("completed" to completed))))
+        f.status("busy")
+        assistant("first", 2000)
+        f.status("idle")
+        assertNotNull(f.deliver())
+        f.status("retry")
+        assistant("first", 2000)
+        f.status("idle")
+        assertNull(f.deliver(10_000))
+        f.status("busy")
+        assistant("second", 3000)
+        f.status("idle")
+        assertNotNull(f.deliver())
+        f.status("busy")
+        assistant("first", 2000)
+        f.status("idle")
+        assertNull(f.deliver(10_000))
+        f.status("busy")
+        assistant("second", 3000)
+        f.status("idle")
+        assertNull(f.deliver(10_000))
+    }
     private class Fixture {
         var time = 1_000L
         var focused = false

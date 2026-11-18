@@ -9,6 +9,49 @@ import varro.server.OpenCodeResponse
 import varro.server.RequestOptions
 
 class SessionLocationsTest {
+    @Test fun `references read a bounded summary through an open root without granting destination access`() {
+        val f = Fixture()
+        assertEquals(Json.obj("id" to "ses_one", "title" to "Fixture", "directory" to "/destination", "external" to true),
+            f.locations.reference("ses_one", { false }))
+        assertEquals(listOf("/session/ses_one"), f.calls)
+        assertFalse(f.locations.knownTransferred(f.session))
+        assertEquals(false, f.locations.reference("ses_one", { false }, { it == "/destination" }).bool("external"))
+        f.session.addProperty("directory", "/origin")
+        assertEquals(false, f.locations.reference("ses_one", { false }).bool("external"))
+        assertTrue(ApiRoutes.isAllowed("GET", "/varro/session/ses_one/reference"))
+        assertTrue(ApiRoutes.isAllowed("POST", "/varro/session/ses_one/reference"))
+        for (method in listOf("GET", "POST")) {
+            assertFalse(ApiRoutes.isAllowed(method, "/varro/session/ses_one/reference?directory=/destination"))
+        }
+        assertFalse(ApiRoutes.isAllowed("DELETE", "/varro/session/ses_one/reference"))
+    }
+
+    @Test fun `reference lookup rejects hidden malformed stale cancelled and expired summaries`() {
+        for (scenario in listOf("hidden", "hidden-after", "id", "directory", "title", "connection", "roots", "cancelled", "deadline")) {
+            val f = Fixture()
+            var hidden = scenario == "hidden"
+            var cancelled = false
+            when (scenario) {
+                "id" -> f.session.addProperty("id", "other")
+                "directory" -> f.session.addProperty("directory", "../relative")
+                "title" -> f.session.addProperty("title", 5)
+            }
+            f.duringRead = {
+                when (scenario) {
+                    "hidden-after" -> hidden = true
+                    "connection" -> f.connection++
+                    "roots" -> f.roots = listOf("/other")
+                    "cancelled" -> cancelled = true
+                    "deadline" -> f.clock += 5_000_000_000
+                }
+            }
+            assertThrows(scenario, Exception::class.java) {
+                f.locations.reference("ses_one", { hidden }, cancelled = { cancelled })
+            }
+            if (scenario == "hidden") assertTrue(f.calls.isEmpty())
+        }
+    }
+
     private class Fixture {
         var roots = listOf("/origin")
         var connection = 1

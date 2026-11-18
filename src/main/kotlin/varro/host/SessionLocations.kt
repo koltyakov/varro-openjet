@@ -42,6 +42,23 @@ class SessionLocations(
         return request("GET", path, null, options).data.also { options.checkCancelled() }
     }
 
+    /** Reference lookup does not grant access to the destination's catalog, events or writes. */
+    fun reference(id: String, hidden: () -> Boolean, authorized: (String) -> Boolean = { false },
+        cancelled: () -> Boolean = { false }): JsonObject {
+        require(!hidden() && id.matches(Regex("[A-Za-z0-9_-]{1,512}"))) { "404 Session not found" }
+        val root = roots().firstOrNull() ?: error("Workspace folder is not open")
+        val options = options(root, cancelled)
+        val session = read("/session/${encode(id)}", options).asObjectOrNull()
+        val directory = session.text("directory")
+        require(session.str("id") == id && session?.get("title")?.let { it.isJsonPrimitive && it.asJsonPrimitive.isString } == true &&
+            directory != null && directory.length <= 4096 && directory.none(Character::isISOControl) &&
+            WorkspacePaths.isAbsolute(directory)) { "404 Session not found" }
+        val external = roots().none { WorkspacePaths.isSame(it, directory) } && !authorized(directory)
+        options.checkCancelled()
+        require(!hidden()) { "404 Session not found" }
+        return Json.obj("id" to id, "title" to session.str("title"), "directory" to directory, "external" to external)
+    }
+
     /** This capability belongs only to a retained session, not every session in the destination. */
     fun authorizeTransferred(transfer: JsonObject): Boolean {
         val id = transfer.text("id")?.takeIf { it.matches(Regex("[A-Za-z0-9_-]{1,512}")) } ?: return false

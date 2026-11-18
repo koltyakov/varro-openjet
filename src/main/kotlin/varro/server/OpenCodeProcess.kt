@@ -116,7 +116,7 @@ class OpenCodeProcess(
 
     fun confirmOwnership(): Boolean {
         val pid = handler.get()?.process?.pid() ?: return false
-        val registered = runCatching { ownership.register(port, pid, serverPassword, serverUsername) }
+        val registered = runCatching { ownership.register(port, pid, serverPassword, serverUsername, askAgentConfig.ownedPath) }
         ownershipRegistered = registered.getOrDefault(false)
         managed.set(ownershipRegistered)
         if (ownershipRegistered) return true
@@ -138,6 +138,9 @@ class OpenCodeProcess(
     }
 
     fun updateAskAgent(): Boolean = isManaged && askAgentConfig.rewrite(askAgentEnabled())
+    internal fun needsRuntimeConfigRecovery(): Boolean = isManaged && askAgentEnabled() &&
+        askAgentConfig.shouldRestoreAsk() && ownership.needsRuntimeConfigRecovery()
+    internal fun <T> withLaunchClaim(action: () -> T): T = ownership.withLaunchClaim(action)
 
     internal fun reconcileInjectedDefaults() {
         if (isManaged && isRunning) {

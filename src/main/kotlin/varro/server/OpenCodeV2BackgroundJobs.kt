@@ -38,6 +38,7 @@ internal class OpenCodeV2BackgroundJobs {
                     "shell" -> string("shellID") && string("command")
                     "subagent" -> string("childSessionID") && string("agent") && string("description")
                     "image" -> string("path") && string("model")
+                    "codemode" -> true
                     else -> false
                 }) { "Invalid OpenCode v2 background job" }
         }

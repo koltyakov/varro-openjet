@@ -137,6 +137,7 @@ internal class OpenCodeV2BackgroundWork(private val now: () -> Long = System::cu
             Pending(native.directory, job.obj("time").num("started"), summary(when (job.str("kind")) {
                 "shell" -> job.str("command")
                 "subagent" -> job.str("title") ?: job.str("description")
+                "codemode" -> job.str("title") ?: "Code Mode script"
                 else -> job.str("title") ?: job.str("path")
             }))
         } + live

@@ -5,6 +5,7 @@ import com.intellij.openapi.Disposable
 import com.intellij.openapi.diagnostic.logger
 import varro.settings.VarroSettings
 import varro.protocol.asObjectOrNull
+import varro.protocol.asArrayOrNull
 import varro.protocol.str
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
@@ -84,6 +85,7 @@ class OpenCodeServer(
         },
     )
     private val maintenanceStarted = AtomicBoolean(false)
+    private val runtimeConfigRecoveryPending = AtomicBoolean(false)
     private var recoveryAttempts = 0
     private var runningSince = 0L
     @Volatile private var followsManagedRegistration = false
@@ -93,6 +95,29 @@ class OpenCodeServer(
 
     private val scheduler: ScheduledExecutorService = Executors.newSingleThreadScheduledExecutor { runnable ->
         Thread(runnable, "varro-opencode-server").apply { isDaemon = true }
+    }
+    private val mcpConfigRefresh = McpConfigRefresh(
+        idle = { phase.get() == Phase.IDLE && (status.get() !is ServerStatus.Running ||
+            !hasHostWork() && transport.isQuiet() && readRestartBlockers().get("totalSessionCount").asInt == 0) },
+        refresh = { global ->
+            when {
+                status.get() !is ServerStatus.Running -> true
+                isAttachOnly() -> false
+                global && transport.apiVersion == 1 -> restart(false) == RestartOutcome.RESTARTED
+                else -> {
+                    transport.request("POST", if (global) "/global/dispose" else "/instance/dispose",
+                        options = RequestOptions(unscoped = global, directory = if (global) null else workspaceCwd()))
+                    true
+                }
+            }
+        },
+    )
+
+    fun refreshMcpConfiguration(global: Boolean) {
+        mcpConfigRefresh.request(global)
+        scheduler.execute {
+            runCatching { mcpConfigRefresh.flush() }.onFailure { log.info("Deferring saved MCP configuration reload", it) }
+        }
     }
 
     val transport: OpenCodeTransport = OpenCodeTransport(
@@ -473,6 +498,7 @@ class OpenCodeServer(
 
     private fun finishStart(generation: Int) {
         if (disposeGeneration.get() != generation) return
+        if (!recoverMissingRuntimeConfig(generation)) return
         followsManagedRegistration = false
         // `degraded` until the stream actually connects; the transport promotes it
         // to healthy, so the UI never claims live updates it does not have.
@@ -491,8 +517,55 @@ class OpenCodeServer(
                 .onFailure { log.info("OpenCode registration inspection was inconclusive", it) }.getOrDefault(false)
             if (changed) { recoverRegisteredServer(disposeGeneration.get()); return@scheduleWithFixedDelay }
             runCatching { process.refreshOwnership() }.onFailure { log.info("OpenCode ownership check failed", it) }
+            runCatching { mcpConfigRefresh.flush() }.onFailure { log.info("Deferring saved MCP configuration reload", it) }
+            if (runtimeConfigRecoveryPending.get() && !hasHostWork() && phase.get() == Phase.IDLE) runCatching {
+                if (!settings.chatEnableAskAgent || !process.needsRuntimeConfigRecovery()) runtimeConfigRecoveryPending.set(false)
+                else {
+                    val agents = transport.request("GET", "/agent", options = RequestOptions(timeoutMs = 2_000,
+                        maxResponseBytes = 1024 * 1024, cancellableBody = true)).data.asArrayOrNull()
+                    if (agents?.any { it.asObjectOrNull().str("name").equals("ask", true) } == true) runtimeConfigRecoveryPending.set(false)
+                    else if (agents != null && restart(false) == RestartOutcome.RESTARTED) return@scheduleWithFixedDelay
+                }
+            }.onFailure { log.info("Deferring optional OpenCode runtime configuration recovery", it) }
             runCatching { maintenance.tick() }.onFailure { log.info("OpenCode maintenance check failed", it) }
         }, 30, 30, TimeUnit.SECONDS)
+    }
+
+    private fun recoverMissingRuntimeConfig(generation: Int): Boolean {
+        if (isAttachOnly() || !settings.chatEnableAskAgent) return true
+        var stopped = false
+        try {
+            if (!java.util.concurrent.CompletableFuture.supplyAsync { process.needsRuntimeConfigRecovery() }.get(2, TimeUnit.SECONDS)) {
+                runtimeConfigRecoveryPending.set(false)
+                return true
+            }
+            runtimeConfigRecoveryPending.set(true)
+            val agents = transport.request("GET", "/agent", options = RequestOptions(timeoutMs = 2_000,
+                maxResponseBytes = 1024 * 1024, cancellableBody = true,
+                isCancelled = { disposeGeneration.get() != generation })).data.asArrayOrNull() ?: return true
+            if (agents.any { it.asObjectOrNull().str("name").equals("ask", true) }) {
+                runtimeConfigRecoveryPending.set(false)
+                return true
+            }
+            if (hasHostWork() || readRestartBlockers().get("totalSessionCount").asInt > 0) return true
+            return process.withLaunchClaim {
+                if (disposeGeneration.get() != generation || !process.refreshOwnership() ||
+                    !process.needsRuntimeConfigRecovery() || hasHostWork() ||
+                    readRestartBlockers().get("totalSessionCount").asInt > 0) return@withLaunchClaim true
+                log.info("Restoring the missing managed OpenCode runtime Ask configuration")
+                process.stop()
+                stopped = true
+                transport.resetProtocol()
+                spawnAndAwaitHealth(generation).also { if (it) runtimeConfigRecoveryPending.set(false) }
+            }
+        } catch (failure: Exception) {
+            if (stopped) {
+                setStatus(ServerStatus.Error("Could not restore the managed OpenCode runtime configuration: ${failure.message}"))
+                return false
+            }
+            log.info("Deferring optional OpenCode runtime configuration recovery", failure)
+            return true
+        }
     }
 
     private fun isIdleForMaintenance(): Boolean {

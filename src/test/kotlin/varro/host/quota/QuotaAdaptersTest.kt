@@ -9,6 +9,34 @@ import org.junit.rules.TemporaryFolder
 import java.nio.file.Files
 
 class QuotaAdaptersTest {
+    @Test fun `Zai distinguishes invalid quotas authentication and reset-credit outages from confirmed zero`() {
+        val creds = QuotaCredentials(temporary.newFolder().toPath(), emptyMap())
+        val auth = Json.obj("zai" to Json.obj("type" to "api", "key" to "fixture"))
+        val provider = Json.obj("id" to "zai")
+        val good = """{"code":200,"data":{"limits":[{"type":"TOKENS_LIMIT","usage":100,"percentage":25}]}}"""
+        for (quota in listOf("{}", """{"code":500}""", """{"code":200,"data":{"limits":[]}}""", """{"code":403}""")) {
+            val adapter = QuotaAdapters(QuotaHttp { QuotaResponse(200, quota.toByteArray()) }, creds, null)
+            val failure = assertThrows(Exception::class.java) { adapter.poll(provider, auth, "model", now) }
+            if (quota.contains("403")) assertEquals(403, (failure as QuotaFailure).code)
+        }
+        for (scenario in listOf("http-denied", "payload-denied", "http-error", "malformed", "zero", "credits")) {
+            val adapter = QuotaAdapters(QuotaHttp {
+                if (it.url.contains("quota/limit")) QuotaResponse(200, good.toByteArray()) else when (scenario) {
+                    "http-denied" -> QuotaResponse(401, "{}".toByteArray())
+                    "payload-denied" -> QuotaResponse(200, """{"code":403}""".toByteArray())
+                    "http-error" -> QuotaResponse(503, "{}".toByteArray())
+                    "malformed" -> QuotaResponse(200, """{"code":200,"data":{"weekResets":[{"available":"yes"}],"fiveHourResets":[]}}""".toByteArray())
+                    "zero" -> QuotaResponse(200, """{"code":200,"data":{"weekResets":[],"fiveHourResets":[]}}""".toByteArray())
+                    else -> QuotaResponse(200, """{"code":200,"data":{"weekResets":[{"available":true,"expireTime":1800086400000}],"fiveHourResets":[]}}""".toByteArray())
+                }
+            }, creds, null)
+            val result = adapter.poll(provider, auth, "model", now)!!
+            assertEquals("available", result.str("status"))
+            assertEquals(scenario, scenario in listOf("http-error", "malformed"), result.bool("usageLimitResetsUnavailable") == true)
+            assertEquals(scenario, scenario == "credits", result.has("usageLimitResets"))
+            if (scenario == "credits") assertEquals(now, result.obj("usageLimitResets").long("checkedAt"))
+        }
+    }
     @Test fun `token sharing never calls Codex usage or falls back to local credentials`() {
         val credentials = QuotaCredentials(temporary.newFolder().toPath(), emptyMap())
         val adapters = QuotaAdapters(QuotaHttp { error("Token sharing must not make quota requests") }, credentials, null)

@@ -9,6 +9,42 @@ import java.nio.file.Path
 import java.nio.file.attribute.PosixFilePermissions
 
 class ServerOwnershipTest {
+    @Test fun `missing runtime config repair requires an owned lease and absent or matching regular owner`() = fixture { shared, legacy, identity ->
+        for (scenario in listOf("missing", "matching", "removed-directory", "wrong-owner", "wrong-pid", "malformed", "symlink-owner", "symlink-config", "symlink-parent", "present", "unsafe", "outside-temp", "foreign", "unreadable")) {
+            val parent = if (scenario == "outside-temp") Files.createTempDirectory(shared, "outside-") else shared
+            val configDirectory = Files.createTempDirectory(parent, if (scenario == "unsafe") "other-" else "varro-opencode-config-")
+            val config = configDirectory.resolve("opencode.json")
+            val path = shared.resolve("varro-opencode-server-4096.json")
+            privateFile(Path.of("$path.managed"), Json.stringify(marker().apply { addProperty("configPath", config.toString()) }))
+            val manager = ServerOwnership(4096, shared, legacy, identity, runtimeTemporaryDirectory = shared)
+            assertTrue(manager.refresh(4096, takeover = true))
+            val owner = configDirectory.resolve("owner.json")
+            when (scenario) {
+                "matching", "wrong-owner", "wrong-pid" -> privateFile(owner, Json.stringify(Json.obj(
+                    "owner" to if (scenario == "wrong-owner") "other" else "varro-server-nonce",
+                    "pid" to if (scenario == "wrong-pid") 456 else 123)))
+                "malformed" -> privateFile(owner, "{broken")
+                "symlink-owner" -> Files.createSymbolicLink(owner, shared.resolve("absent"))
+                "symlink-config" -> Files.createSymbolicLink(config, shared.resolve("absent"))
+                "symlink-parent" -> {
+                    Files.delete(configDirectory)
+                    Files.createSymbolicLink(configDirectory, Files.createTempDirectory(shared, "foreign-config-"))
+                }
+                "removed-directory" -> Files.delete(configDirectory)
+                "present" -> privateFile(config, "{}")
+                "foreign" -> {
+                    val other = ServerOwnership(4096, shared, legacy, identity)
+                    assertTrue(other.refresh(4096, takeover = true))
+                }
+                "unreadable" -> Files.createDirectory(owner)
+            }
+            val before = Files.readString(path)
+            assertEquals(scenario, scenario in listOf("missing", "matching", "removed-directory"), manager.needsRuntimeConfigRecovery())
+            assertEquals(before, Files.readString(path))
+            Files.delete(path)
+            Files.deleteIfExists(Path.of("$path.managed"))
+        }
+    }
     private class Identity : ProcessIdentity() {
         var serverBirth = "darwin:original-start"
         var fail = false

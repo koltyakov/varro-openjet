@@ -1759,19 +1759,13 @@ body:is(.vscode-high-contrast, .vscode-high-contrast-light) .assistant-activity-
 .assistant-file-edit-stack {
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: var(--assistant-bordered-block-gap, 9px);
 }
 
+/* The stack gap owns spacing; the note's standalone margin would make one gap wider. */
 .assistant-file-edit-stack:not(:has(.file-change-inline-diffs-unwrapped))
-  > :is(.file-change-card, .file-change-truncated-summary)
-  + .file-change-card {
-  margin-top: -0.5px;
-}
-
-.assistant-file-edit-stack:not(:has(.file-change-inline-diffs-unwrapped))
-  > :is(.file-change-card, .file-change-truncated-summary)
-  + .file-change-truncated-summary {
-  margin-top: 2.5px;
+  > .file-change-truncated-summary {
+  margin-top: 0;
 }
 
 .assistant-file-edit-stack:has(.file-change-inline-diffs-unwrapped) {
@@ -2173,14 +2167,14 @@ body:is(.vscode-light, .vscode-high-contrast-light) .chat-empty-logo {
   text-wrap: wrap;
 }
 
-.rendered-markdown p:not(.markdown-bold-heading):has(+ p),
+.rendered-markdown p:where(:not(li > p)):not(.markdown-bold-heading):has(+ p),
 .rendered-markdown
   > [data-markdown-segment='stable'][data-markdown-tail-tag='p']
   > p:last-child:not(.markdown-bold-heading) {
   margin-bottom: 12px;
 }
 
-.rendered-markdown p:has(+ :is(ul, ol, .streaming-markdown-pending-list)),
+.rendered-markdown p:where(:not(li > p)):has(+ :is(ul, ol, .streaming-markdown-pending-list)),
 .rendered-markdown
   > [data-markdown-segment='stable']:is(
     [data-markdown-tail-tag='ul'],
@@ -2209,7 +2203,7 @@ body:is(.vscode-light, .vscode-high-contrast-light) .chat-empty-logo {
   margin-right: 0.3em;
 }
 
-.rendered-markdown p.markdown-bold-heading {
+.rendered-markdown p.markdown-bold-heading:where(:not(li > p)) {
   margin-top: 14px;
   margin-bottom: 8px;
 }
@@ -2334,6 +2328,8 @@ body:is(.vscode-light, .vscode-high-contrast-light) .chat-empty-logo {
   margin: 1px 0;
 }
 .rendered-markdown li > p {
+  /* Tight lists gain paragraph wrappers when later streamed text makes them loose.
+     Prose adjacency and bold-heading spacing must not apply to these wrappers. */
   margin: 0;
 }
 
@@ -2358,6 +2354,12 @@ body:is(.vscode-light, .vscode-high-contrast-light) .chat-empty-logo {
 .link-leading-content {
   display: inline-block;
   white-space: nowrap;
+}
+
+/* Carry the anchor's decoration through code into the atomic icon/letter wrapper. */
+.rendered-markdown a.external-link code,
+.rendered-markdown a.external-link .link-leading-content {
+  text-decoration: inherit;
 }
 
 .rendered-markdown .link-leading-content.file-icon-selected {
@@ -2387,14 +2389,38 @@ body:is(.vscode-light, .vscode-high-contrast-light) .chat-empty-logo {
   text-decoration-skip-ink: none;
 }
 
-.external-link-icon {
+.external-link-icon,
+.file-path-icon,
+.session-reference-icon {
   display: inline-block;
-  width: 12px;
-  height: 12px;
+  width: 0.875em;
+  height: 0.875em;
   margin-right: 2px;
-  vertical-align: -2px;
-  color: var(--color-vscode-muted);
+  /* An integer offset keeps the image and the text baseline snapping together. */
+  vertical-align: round(nearest, -0.11em, 1px);
   object-fit: contain;
+}
+
+.file-path-icon.low-ink-icon {
+  /* Low-drawn ink lands between whole pixels at 1x, so either integer offset reads a pixel off.
+     The box stays on the baseline to snap with the text; the transform moves only the paint. */
+  vertical-align: baseline;
+  transform: translateY(calc((1 - var(--file-icon-ink-bottom)) * 0.875em));
+}
+
+.external-link-icon,
+.session-reference-icon {
+  color: var(--color-vscode-muted);
+}
+
+.rendered-markdown :is(.file-path-icon, .session-reference-icon, .external-link-icon) {
+  /* The icon artwork and the first glyph already leave some space. */
+  margin-right: 0.5px;
+}
+
+.rendered-markdown .file-path-icon {
+  /* File artwork ends between 3/4 and the full box width; keep the visible gap constant. */
+  margin-right: calc(0.175em - (1 - var(--file-icon-ink-right, 0.844)) * 0.875em);
 }
 
 .rendered-markdown a.file-path-link,
@@ -2442,15 +2468,6 @@ body:is(.vscode-light, .vscode-high-contrast-light) .chat-empty-logo {
   outline: none;
 }
 
-.file-path-icon {
-  display: inline-block;
-  width: 12px;
-  height: 12px;
-  margin-right: 2px;
-  vertical-align: -2px;
-  object-fit: contain;
-}
-
 .rendered-markdown a.session-reference-link {
   display: inline;
   overflow-wrap: normal;
@@ -2460,16 +2477,6 @@ body:is(.vscode-light, .vscode-high-contrast-light) .chat-empty-logo {
 .session-reference-folder {
   color: var(--color-vscode-muted);
   font-size: 0.9em;
-}
-
-.session-reference-icon {
-  display: inline-block;
-  width: 12px;
-  height: 12px;
-  margin-right: 2px;
-  vertical-align: -2px;
-  color: var(--color-vscode-muted);
-  object-fit: contain;
 }
 
 .rendered-markdown img {

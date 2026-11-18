@@ -33,6 +33,8 @@ internal class AttentionNotifications(
     private val seenEvents = linkedSetOf<String>()
     private val seenUserMessages = linkedSetOf<String>()
     private val finished = linkedSetOf<String>()
+    private data class Completion(val messageId: String?, val completedAt: Long?, val observedAt: Long)
+    private val completions = linkedMapOf<String, Completion>()
     private val awaitingMetadata = linkedSetOf<String>()
     private val resolved = linkedSetOf<String>()
     private val mutations = linkedMapOf<String, Long>()
@@ -76,8 +78,7 @@ internal class AttentionNotifications(
                 requestId(info)?.let { resolve(Kind.QUESTION, it) }
             "session.status" -> if (sessionId != null) when (props.obj("status").str("type")) {
                 "busy", "retry" -> {
-                    // V1 can repeat a trailing busy/idle pair after terminal message events.
-                    if (sessionId in finished && props.obj("status").bool("background") != true) return
+                    // Status-only resumes still count as work. Deduplicate terminal evidence, not busy events.
                     queued.remove("completion:$sessionId")
                     awaitingMetadata.remove(sessionId)
                     runs.getOrPut(sessionId) { Run() }.apply { serverBusy = true; failed = false }
@@ -87,7 +88,13 @@ internal class AttentionNotifications(
             "session.idle" -> sessionId?.let(::finish)
             "session.error", "session.next.step.failed" -> sessionId?.let(::cancelCompletion)
             "session.next.prompt.admitted", "session.next.prompted", "session.next.step.started" -> if (sessionId != null) {
-                finished.remove(sessionId)
+                val previous = completions[sessionId]
+                val promptedAt = props.long("timestamp")
+                if (event.type != "session.next.step.started" && (promptedAt == null ||
+                    previous?.completedAt == null || promptedAt > previous.completedAt)) {
+                    finished.remove(sessionId)
+                    completions.remove(sessionId)
+                }
                 awaitingMetadata.remove(sessionId)
                 queued.remove("completion:$sessionId")
                 runs.getOrPut(sessionId) { Run() }.apply {
@@ -106,8 +113,8 @@ internal class AttentionNotifications(
                     val startedAt = runs[sessionId]?.startedAt
                     if (completedAt != null && startedAt != null && completedAt < startedAt) return
                     if (info.obj("error") != null) cancelCompletion(sessionId)
-                    else if (completedAt != null && info.str("finish") !in CONTINUATIONS) terminal(sessionId)
-                    else if (info.obj("time").long("completed") == null && sessionId !in finished &&
+                    else if (completedAt != null && info.str("finish") !in CONTINUATIONS) terminal(sessionId, info.text("id"), completedAt)
+                    else if (info.obj("time").long("completed") == null &&
                         pending.values.none { root(it.sessionId) == root(sessionId) }) {
                         // An automatic permission may resume without a fresh busy transition.
                         runs.getOrPut(sessionId) { Run(serverBusy = true) }
@@ -115,7 +122,12 @@ internal class AttentionNotifications(
                 } else if (info.str("role") == "user") {
                     val messageId = info.text("id")
                     if (messageId != null && remember(seenUserMessages, "$sessionId:$messageId")) {
-                        finished.remove(sessionId)
+                        val previous = completions[sessionId]
+                        val createdAt = info.obj("time").long("created")
+                        if (createdAt == null || previous == null || createdAt > (previous.completedAt ?: previous.observedAt)) {
+                            finished.remove(sessionId)
+                            completions.remove(sessionId)
+                        }
                         awaitingMetadata.remove(sessionId)
                         queued.remove("completion:$sessionId")
                         runs.getOrPut(sessionId) { Run() }.apply {
@@ -128,7 +140,7 @@ internal class AttentionNotifications(
             "session.next.step.ended" -> if (sessionId != null && props.bool("executionContinues") != true && props.str("finish") !in CONTINUATIONS) {
                 val completedAt = props.long("timestamp")
                 val startedAt = runs[sessionId]?.startedAt
-                if (completedAt == null || startedAt == null || completedAt >= startedAt) terminal(sessionId)
+                if (completedAt == null || startedAt == null || completedAt >= startedAt) terminal(sessionId, props.text("assistantMessageID"), completedAt)
             }
             "server.connected", "server.instance.disposed", "global.disposed" -> {
                 // Reconnect snapshots may restore pending asks, but must not announce historical completions.
@@ -194,15 +206,23 @@ internal class AttentionNotifications(
         update()
     }
 
-    private fun terminal(sessionId: String) {
+    private fun terminal(sessionId: String, messageId: String? = null, completedAt: Long? = null) {
         val run = runs[sessionId] ?: return
+        val previous = completions[sessionId]
+        val distinct = previous != null && ((messageId != null && previous.messageId != null && messageId != previous.messageId &&
+                (completedAt == null || previous.completedAt == null || completedAt > previous.completedAt)) ||
+                (completedAt != null && previous.completedAt != null && completedAt > previous.completedAt && messageId != previous.messageId))
+        if (distinct) finished.remove(sessionId)
+        completions[sessionId] = if (previous == null || distinct) Completion(messageId, completedAt, now())
+            else Completion(previous.messageId ?: messageId, previous.completedAt ?: completedAt, previous.observedAt)
+        if (completions.size > 4096) completions.remove(completions.keys.first())
         if (!run.serverBusy) finish(sessionId)
     }
 
     private fun finish(sessionId: String) {
         val run = runs.remove(sessionId) ?: return
         if (run.failed) return
-        remember(finished, sessionId)
+        if (!remember(finished, sessionId)) return
         if (!knowsSession(sessionId)) {
             remember(awaitingMetadata, sessionId)
             return
@@ -256,6 +276,7 @@ internal class AttentionNotifications(
         runs.remove(id)
         awaitingMetadata.remove(id)
         sessions.remove(id)
+        completions.remove(id)
         queued.remove("completion:$id")
     }
 
