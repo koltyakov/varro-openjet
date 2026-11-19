@@ -6,7 +6,7 @@ import com.google.gson.JsonObject
 import varro.protocol.*
 import varro.server.WorkspacePaths
 
-/** Origin links authorize history reads. Execution also needs an open root or verified saved worktree. */
+/** Retained origin links grant only the session whose current location the server verifies. */
 class SessionTransfers(
     initial: JsonArray,
     private val persist: (JsonArray) -> Unit,
@@ -159,7 +159,7 @@ class SessionTransfers(
         return result
     }
 
-    /** Return a verified history scope, rejecting writes and unrelated directory overrides. */
+    /** Return a verified session scope, rejecting unverified writes and unrelated overrides. */
     fun authorizeRequest(method: String, path: String, body: JsonElement? = null): String? {
         val request = ApiRoutes.parse(method, path) ?: return null
         val parts = request.segments
@@ -175,7 +175,7 @@ class SessionTransfers(
         val history = method == "GET" && (Regex("^/session/[^/]+(?:/(?:message(?:/[^/]+(?:/part/[^/]+)?)?|diff|todo))?$").matches(request.pathname) ||
             Regex("^/varro/session/[^/]+/(?:diff-summary|location)$").matches(request.pathname))
         if (!history && session.obj("transfer").bool("available") == false) {
-            error("Conversation moved to ${session.str("directory")}. Open its folder to continue.")
+            error("Could not verify the current location of this conversation. Refresh and try again.")
         }
         val explicit = request.query["directory"]?.firstOrNull()
         require(explicit == null || WorkspacePaths.isSame(explicit, session.str("directory")) ||
@@ -193,7 +193,7 @@ class SessionTransfers(
             observe(current!!)
         }
         get(id)?.takeIf { it.obj("transfer").bool("available") == false }?.let {
-            error("Conversation moved to ${it.str("directory")}. Open its folder to continue.")
+            error("Could not verify the current location of this conversation. Refresh and try again.")
         }
     }
 

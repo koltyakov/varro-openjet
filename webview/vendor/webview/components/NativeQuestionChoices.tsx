@@ -1,4 +1,5 @@
-import { For, Show, createEffect, createSignal } from 'solid-js';
+import { createEffect, For, Show, createSignal, untrack } from 'solid-js';
+import { ariaBoolean } from '../lib/aria';
 import type { NativeFormValue } from '../../shared/protocol';
 import { isString } from '../../shared/type-utils';
 
@@ -20,16 +21,22 @@ export function NativeQuestionChoices(props: {
 }) {
   const unmatchedValue = () =>
     isString(props.value) && !props.options.some((option) => option.value === props.value);
-  const [customSelected, setCustomSelected] = createSignal(!!props.custom && unmatchedValue());
+  // Initial state only: the effect below follows value and option changes.
+  const [customSelected, setCustomSelected] = createSignal(
+    untrack(() => !!props.custom && unmatchedValue())
+  );
   const customText = () =>
     unmatchedValue() && isString(props.value) ? props.value : (props.customValue ?? '');
   const name = () => `native-question-${props.id}`;
   let customInput: HTMLTextAreaElement | undefined;
 
-  createEffect(() => {
-    if (props.value === undefined) setCustomSelected(false);
-    else if (props.custom && unmatchedValue()) setCustomSelected(true);
-  });
+  createEffect(
+    () => ({ value: props.value, custom: props.custom, unmatched: unmatchedValue() }),
+    ({ value, custom, unmatched }) => {
+      if (value === undefined) setCustomSelected(false);
+      else if (custom && unmatched) setCustomSelected(true);
+    }
+  );
 
   function choose(option: QuestionChoice) {
     if (customSelected()) props.onCustomChange?.(customText());
@@ -48,16 +55,18 @@ export function NativeQuestionChoices(props: {
       class="native-form-choices"
       role="radiogroup"
       aria-label={props.label}
-      aria-required={props.required}
+      aria-required={ariaBoolean(props.required)}
       aria-describedby={props.describedBy}
     >
       <For each={props.options}>
         {(option, index) => {
-          const descriptionID = `${props.id}-choice-${index()}-description`;
+          const descriptionID = () => `${props.id}-choice-${index()}-description`;
           return (
             <label
-              class="question-option native-question-choice"
-              classList={{ selected: !customSelected() && props.value === option.value }}
+              class={[
+                'question-option native-question-choice',
+                { selected: !customSelected() && props.value === option.value },
+              ]}
             >
               <input
                 class="native-question-choice-input"
@@ -65,10 +74,10 @@ export function NativeQuestionChoices(props: {
                 name={name()}
                 value={String(option.value)}
                 aria-label={option.label}
-                aria-invalid={props.invalid}
-                aria-required={props.required}
+                aria-invalid={ariaBoolean(props.invalid)}
+                aria-required={ariaBoolean(props.required)}
                 aria-describedby={
-                  [props.describedBy, option.description ? descriptionID : undefined]
+                  [props.describedBy, option.description ? descriptionID() : undefined]
                     .filter(Boolean)
                     .join(' ') || undefined
                 }
@@ -79,7 +88,7 @@ export function NativeQuestionChoices(props: {
               <span class="question-option-text">
                 <span class="question-option-label">{option.label}</span>
                 <Show when={option.description}>
-                  <span id={descriptionID} class="question-option-desc">
+                  <span id={descriptionID()} class="question-option-desc">
                     {' '}
                     {option.description}
                   </span>
@@ -91,8 +100,10 @@ export function NativeQuestionChoices(props: {
       </For>
       <Show when={props.custom}>
         <div
-          class="question-option question-option-custom native-question-choice"
-          classList={{ selected: customSelected() }}
+          class={[
+            'question-option question-option-custom native-question-choice',
+            { selected: customSelected() },
+          ]}
         >
           <input
             class="native-question-choice-input"
@@ -100,7 +111,7 @@ export function NativeQuestionChoices(props: {
             type="radio"
             name={name()}
             aria-label="Custom answer"
-            aria-invalid={props.invalid}
+            aria-invalid={ariaBoolean(props.invalid)}
             disabled={props.disabled}
             aria-describedby={props.describedBy}
             checked={customSelected()}
@@ -114,7 +125,7 @@ export function NativeQuestionChoices(props: {
               rows={1}
               class="question-custom-input native-form-text-input"
               aria-label={`${props.label}: custom answer`}
-              aria-invalid={props.invalid}
+              aria-invalid={ariaBoolean(props.invalid)}
               aria-describedby={props.describedBy}
               placeholder="Type your own answer"
               autocomplete="off"

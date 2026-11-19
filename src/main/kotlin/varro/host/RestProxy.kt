@@ -61,6 +61,7 @@ class RestProxy(
     private val log = logger<RestProxy>()
     private val modelPricing = ModelPricingCatalog()
     private val remoteImages = RemoteImages()
+    private val localImages = LocalImages()
     private val citationPaths = CitationPaths()
     private val sideQuestions = SideQuestions(server.transport::request, { server.transport.apiVersion },
         { server.currentStatus() is varro.server.ServerStatus.Running }, { server.requestGeneration() to server.url() },
@@ -234,6 +235,7 @@ class RestProxy(
         disposed.set(true)
         activeRequests.close()
         remoteImages.close()
+        localImages.close()
         settingsSubscription.disconnect()
     }
 
@@ -405,6 +407,19 @@ class RestProxy(
                 }
                 if (pathname == ApiRoutes.Endpoints.CITATION_SYMBOLS) context.citationSymbols.find(body, server.workspaceDirectory(), authorize, isCancelled)
                 else citationPaths.validate(body, server.workspaceDirectory(), authorize, isCancelled)
+            }
+            pathname == ApiRoutes.Endpoints.LOCAL_IMAGE -> {
+                require(!server.isAttachOnly()) { "Local images are unavailable for an attached server" }
+                val roots = workspaceRoots()
+                val options = RequestOptions(unscoped = true, timeoutMs = 5_000, maxResponseBytes = 2 * 1024 * 1024,
+                    cancellableBody = true, isCancelled = isCancelled)
+                localImages.load(body, server.workspaceDirectory(), roots, { session, directory ->
+                    if (session == null) roots.any { WorkspacePaths.isSame(it, directory) }
+                    else session !in store.hiddenSessionIds && (authorizedTransfer(session, directory) ||
+                        FileReferences.authorizeDirectory(session, directory, roots, store.sessionHistoryScope,
+                            { server.transport.request("GET", "/session/${encode(session)}", options = options).data.asObjectOrNull() },
+                            { root -> server.transport.request("GET", "/project/current", options = options.copy(unscoped = false, directory = root)).data.asObjectOrNull() }))
+                }, isCancelled)
             }
             pathname == ApiRoutes.Endpoints.REMOTE_IMAGE -> {
                 val record = body.asObjectOrNull()
@@ -607,30 +622,22 @@ class RestProxy(
 
             "pin" -> {
                 val pinned = body.asObjectOrNull().bool("pinned") ?: true
-                val current = store.pinnedSessionIds.toMutableList()
-                if (pinned) {
-                    if (sessionId !in current) current.add(sessionId)
-                } else {
-                    current.remove(sessionId)
-                }
-                store.pinnedSessionIds = current
-                // The client types this as the new pinned-id list.
-                Json.array(current)
+                Json.array(store.updatePins { current ->
+                    if (pinned) listOf(sessionId) + current.filter { it != sessionId } else current.filter { it != sessionId }
+                })
             }
 
             "reorder-pin" -> {
                 // The client sends the session this one was dropped onto; the move
                 // is "put source where target currently is".
                 val targetId = body.asObjectOrNull().text("targetSessionID")
-                val current = store.pinnedSessionIds.toMutableList()
-                val from = current.indexOf(sessionId)
-                val to = targetId?.let(current::indexOf) ?: -1
-                if (from >= 0 && to >= 0 && from != to) {
-                    current.removeAt(from)
-                    current.add(to, sessionId)
-                    store.pinnedSessionIds = current
-                }
-                Json.array(store.pinnedSessionIds)
+                Json.array(store.updatePins { ids ->
+                    ids.toMutableList().apply {
+                        val from = indexOf(sessionId)
+                        val to = targetId?.let(::indexOf) ?: -1
+                        if (from >= 0 && to >= 0 && from != to) { removeAt(from); add(to, sessionId) }
+                    }
+                })
             }
 
             "permission-mode" -> {

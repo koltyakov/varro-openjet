@@ -116,13 +116,42 @@ internal class PinnedProviderLimits(
             "${pins.str(it.str("id")!!)?.trim()?.takeIf(String::isNotEmpty) ?: it.str("name")}: ${summary(limits[it.str("id")])}"
         }, entries.joinToString("\n\n") {
             val status = limits[it.str("id")]
-            "${it.str("name")}: ${summary(status)}" + (status.str("note")?.let { note -> "\n$note" } ?: "")
-        } + (refreshError?.let { "\n\n$it" } ?: "") + "\n\nPercentages show remaining quota. Manage pins and names in the provider list.")
+            tooltip(it.str("name")!!, status, clock())
+        } + (refreshError?.let { "\n\n$it" } ?: ""))
     }
 
     override fun close() { synchronized(this) { closed = true; generation++; limits.clear() }; executor.shutdownNow() }
 
     companion object {
+        internal fun tooltip(name: String, status: JsonObject?, now: Long): String {
+            val zone = java.time.ZoneId.systemDefault()
+            val timeFormat = java.time.format.DateTimeFormatter.ofLocalizedTime(java.time.format.FormatStyle.SHORT)
+            val dateFormat = java.time.format.DateTimeFormatter.ofLocalizedDate(java.time.format.FormatStyle.SHORT)
+            fun time(value: Long) = java.time.Instant.ofEpochMilli(value).atZone(zone)
+            val lines = mutableListOf("$name: ${summary(status)}")
+            if (status.str("status") == "available") {
+                status.arr("windows")?.forEach { value ->
+                    val window = value.asObjectOrNull()
+                    val reset = window.num("resetAt")?.takeIf { it.isFinite() && it >= -8.64e15 && it <= 8.64e15 }?.toLong()
+                        ?: return@forEach
+                    val minutes = kotlin.math.ceil((reset.toDouble() - now).coerceAtLeast(0.0) / 60_000).toLong()
+                    val hours = minutes / 60
+                    val days = hours / 24
+                    val duration = if (days > 0) listOf("${days}d", "${hours % 24}h".takeIf { hours % 24 != 0L })
+                        else listOf("${hours}h".takeIf { hours > 0 }, "${minutes % 60}m".takeIf { minutes % 60 != 0L || hours == 0L })
+                    val at = time(reset)
+                    val date = if (at.toLocalDate() == time(now).toLocalDate()) "" else "${at.format(dateFormat)} "
+                    lines += "${window.str("label")} reset in ${duration.filterNotNull().joinToString(" ")} (at $date${at.format(timeFormat)})"
+                }
+                if (status.bool("stale") == true || status.str("note")?.startsWith("Showing the last successful quota snapshot") == true) {
+                    status.num("checkedAt")?.takeIf { it.isFinite() && it >= -8.64e15 && it <= 8.64e15 }?.let {
+                        lines += "The latest quota refresh failed. Showing data from ${time(it.toLong()).format(timeFormat)}."
+                    }
+                }
+            }
+            return lines.joinToString("\n")
+        }
+
         internal fun summary(status: JsonObject?): String {
             if (status.str("status") != "available") return ""
             val periods = listOf("5h", "D", "W", "M")

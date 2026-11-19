@@ -58,7 +58,7 @@ class SessionTransfersTest {
         assertEquals("/origin", transfers.get("ses_one").obj("transfer").str("originDirectory"))
         assertEquals(false, transfers.get("ses_one").obj("transfer").bool("available"))
         assertEquals(Json.obj("sessionId" to "ses_one", "directory" to "/destination", "available" to false), fixture.events.single())
-        assertEquals("Conversation moved to /destination. Open its folder to continue.",
+        assertEquals("Could not verify the current location of this conversation. Refresh and try again.",
             assertThrows(IllegalStateException::class.java) { transfers.checkWritable("ses_one") }.message)
         val restored = fixture.service()
         assertEquals(transfers.list(), restored.list())

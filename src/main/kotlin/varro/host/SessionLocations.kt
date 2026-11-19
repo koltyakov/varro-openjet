@@ -66,25 +66,15 @@ class SessionLocations(
         val directory = transfer.text("directory")?.takeIf {
             it.length <= 4096 && it.none(Character::isISOControl) && WorkspacePaths.isAbsolute(it)
         } ?: return false
-        val projectID = transfer.text("projectID")?.takeUnless { it == "global" } ?: return false
+        val projectID = transfer.text("projectID") ?: return false
         val key = connectionKey()
         val open = roots()
         return try {
             val options = options(open.firstOrNull())
             open.any { root ->
                 val scoped = options.copy(directory = root, unscoped = false)
-                val project = read("/project/current", scoped).asObjectOrNull()
-                if (project.str("id") != projectID) return@any false
-                val projects = read("/project", scoped).asArrayOrNull() ?: return@any false
-                if (projects.none { it.asObjectOrNull().str("id") == projectID && it.asObjectOrNull().str("vcs") == "git" }) return@any false
-                // Authorization always uses fresh inventory, not the presentation cache.
-                val worktrees = read("/experimental/worktree?projectID=${encode(projectID)}", scoped).asArrayOrNull()
-                    ?: return@any false
-                if (worktrees.none {
-                    val info = it.asObjectOrNull()
-                    val path = if (it.isJsonPrimitive && it.asJsonPrimitive.isString) it.asString else info.str("directory")
-                    WorkspacePaths.isSame(path, directory) && (info?.has("strategy") != true || info.str("strategy") == "git")
-                }) return@any false
+                // A retained link grants only its canonical session. Optional worktree
+                // metadata and destination configuration are not authorization evidence.
                 val session = read("/session/${encode(id)}", scoped).asObjectOrNull()
                 options.checkCancelled()
                 val verified = session.str("id") == id && session.str("projectID") == projectID &&

@@ -422,7 +422,10 @@ class OpenCodeHostServices(
 
     private val sessionSummaries = SessionSummaryService(
         apiVersion = { server.transport.apiVersion },
-        readLocal = { id -> if (server.isAttachOnly() || server.transport.apiVersion == 2) null else LocalSessionSummary(LocalUsageDatabase.defaultPath(EnvironmentUtil.getEnvironmentMap())).read(id) },
+        readLocal = { id ->
+            if (server.isAttachOnly()) null else LocalSessionSummary(LocalUsageDatabase.defaultPath(EnvironmentUtil.getEnvironmentMap()))
+                .read(id, server.transport.apiVersion, server.version()?.let { varro.server.OpenCodeCli.compareVersions(it, "2.2.6") >= 0 } == true)
+        },
         request = { path, directory ->
             server.transport.request("GET", path, options = RequestOptions(directory = directory)).data
         },

@@ -48,7 +48,7 @@ class PinnedProviderLimitsTest {
             assertEquals("Codex: 5h 80% · Anthropic: 5h 80%", tick("all").text)
             assertEquals("Anthropic: 5h 80%", tick("all", setOf("openai")).text)
             assertEquals("", tick("all", setOf("openai", "anthropic")).text)
-            assertTrue(tick().tooltip.contains("Percentages show remaining quota"))
+            assertFalse(tick().tooltip.contains("Percentages show remaining quota"))
             now = 120_000
             await { tick(); calls.get() == 4 }
         }
@@ -105,5 +105,32 @@ class PinnedProviderLimitsTest {
     private fun await(condition: () -> Boolean) {
         val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3)
         while (!condition()) { assertTrue("Pinned quotas did not settle", System.nanoTime() < deadline); Thread.sleep(5) }
+    }
+
+    @Test fun `tooltips show rounded reset countdowns absolute times and stale snapshot attribution`() {
+        val now = 1_800_000_000_000L
+        val value = status("openai").apply {
+            addProperty("checkedAt", now - 120_000)
+            addProperty("note", "Private raw poll error")
+            add("windows", Json.array(listOf(
+                window("five_hour", "Five hour", 20.0).apply { addProperty("resetAt", now + 3_600_001) },
+                window("weekly", "Weekly", 20.0).apply { addProperty("resetAt", now + 25 * 3_600_000) },
+                window("daily", "Expired", 20.0).apply { addProperty("resetAt", now - 1) },
+                window("invalid", "Invalid", 20.0).apply { addProperty("resetAt", Double.NaN) },
+            )))
+        }
+        val tooltip = PinnedProviderLimits.tooltip("OpenAI", value, now)
+        assertTrue(tooltip.contains("Five hour reset in 1h 1m (at "))
+        assertTrue(tooltip.contains("Weekly reset in 1d 1h (at "))
+        assertTrue(tooltip.contains("Expired reset in 0m"))
+        assertFalse(tooltip.contains("Invalid reset"))
+        assertFalse(tooltip.contains("Private raw"))
+        assertFalse(tooltip.contains("latest quota refresh failed"))
+        assertTrue(PinnedProviderLimits.tooltip("OpenAI", value, now + 1).contains("Five hour reset in 1h (at "))
+        value.addProperty("stale", true)
+        assertTrue(PinnedProviderLimits.tooltip("OpenAI", value, now).contains("The latest quota refresh failed. Showing data from "))
+        value.remove("stale")
+        value.addProperty("note", "Showing the last successful quota snapshot because the latest provider poll failed")
+        assertTrue(PinnedProviderLimits.tooltip("OpenAI", value, now).contains("The latest quota refresh failed."))
     }
 }

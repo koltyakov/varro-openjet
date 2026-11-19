@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { storePath } from '@solidjs/signals';
 import type { DroppedFile, EditorContext } from '../vendor/shared/protocol';
 import { subtractContextLineRanges } from '../vendor/shared/context-files';
 import {
@@ -38,9 +39,9 @@ function composer(context: EditorContext) {
 }
 
 afterEach(() => {
-  appStore.setState('autoAttachProblems', true);
-  appStore.setState('autoAttachActiveFile', true);
-  appStore.setState('activeSessionId', null);
+  appStore.setState(storePath('autoAttachProblems', true));
+  appStore.setState(storePath('autoAttachActiveFile', true));
+  appStore.setState(storePath('activeSessionId', null));
 });
 
 describe('context attachment settings', () => {
@@ -113,9 +114,9 @@ describe('context attachment settings', () => {
   it.each([false, true])(
     'honors the current opt-out for restored queued files, legacy=%s',
     async (legacy) => {
-      appStore.setState('activeSessionId', 'ses-test');
-      appStore.setState('autoAttachActiveFile', false);
-      appStore.setState('autoAttachProblems', false);
+      appStore.setState(storePath('activeSessionId', 'ses-test'));
+      appStore.setState(storePath('autoAttachActiveFile', false));
+      appStore.setState(storePath('autoAttachProblems', false));
       const [queued] = readStoredQueuedMessages([
         {
           id: 'q1',

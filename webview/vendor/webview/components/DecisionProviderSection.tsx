@@ -1,3 +1,4 @@
+import { ariaBoolean } from '../lib/aria';
 import { Show, createSignal } from 'solid-js';
 import type { DecisionProviderRequest, DecisionProviderStatus } from '../../shared/protocol';
 import { client } from '../lib/client';
@@ -15,6 +16,9 @@ export function DecisionProviderSection(props: {
   const [expanded, setExpanded] = createSignal(true);
   const [busy, setBusy] = createSignal(false);
   const [error, setError] = createSignal('');
+  // Show the user's choice while the server applies it; the returned status replaces it, and a
+  // failed update falls back to the last confirmed value.
+  const [pendingAutoApprove, setPendingAutoApprove] = createSignal<boolean | null>(null);
 
   async function run(request: DecisionProviderRequest) {
     if (busy()) return;
@@ -35,7 +39,7 @@ export function DecisionProviderSection(props: {
         <button
           type="button"
           class="decision-provider-toggle"
-          aria-expanded={expanded()}
+          aria-expanded={ariaBoolean(expanded())}
           onClick={() => setExpanded((open) => !open)}
         >
           <UiIcon
@@ -71,11 +75,15 @@ export function DecisionProviderSection(props: {
             <input
               type="checkbox"
               class="models-checkbox decision-provider-checkbox"
-              checked={status().autoApprove}
+              checked={pendingAutoApprove() ?? status().autoApprove}
               disabled={busy()}
-              onChange={(event) =>
-                void run({ action: 'update', autoApprove: event.currentTarget.checked })
-              }
+              onChange={(event) => {
+                const autoApprove = event.currentTarget.checked;
+                setPendingAutoApprove(autoApprove);
+                void run({ action: 'update', autoApprove }).finally(() =>
+                  setPendingAutoApprove(null)
+                );
+              }}
             />
             <span class="decision-provider-option-text">
               <span class="decision-provider-option-name">Auto-approve decisions</span>

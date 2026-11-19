@@ -1,4 +1,14 @@
-import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
+import { ariaBoolean } from '../../lib/aria';
+import {
+  createEffect,
+  For,
+  Show,
+  createMemo,
+  createSignal,
+  onCleanup,
+  onSettled,
+  untrack,
+} from 'solid-js';
 import { recheckSessionStatus } from '../../hooks/useOpenCode';
 import { useSecondClock } from '../../lib/clock';
 import { openBackgroundProcessView } from '../../lib/background-process-view';
@@ -61,12 +71,11 @@ const LOADING_VERBS = [
   'Calculating',
 ];
 
-function bindStickyTextOverflowFade(
-  text: HTMLElement,
-  trackText: () => string,
-  onGeometryChange?: () => void
-) {
+function bindStickyTextOverflowFade(trackText: () => string, onGeometryChange?: () => void) {
+  let text: HTMLElement | undefined;
+  let stopObservingResize: (() => void) | undefined;
   const update = () => {
+    if (!text) return;
     const hasMoreBelow = text.scrollTop + text.clientHeight < text.scrollHeight - 1;
     text.parentElement?.classList.toggle('has-more-below', hasMoreBelow);
   };
@@ -75,16 +84,18 @@ function bindStickyTextOverflowFade(
     onGeometryChange?.();
   };
 
-  text.addEventListener('scroll', update, { passive: true });
-  const stopObservingResize = observeSettledResize(text, updateAfterResize);
-  createEffect(() => {
-    trackText();
+  createEffect(trackText, () => {
     queueMicrotask(update);
   });
   onCleanup(() => {
-    text.removeEventListener('scroll', update);
-    stopObservingResize();
+    text?.removeEventListener('scroll', update);
+    stopObservingResize?.();
   });
+  return (target: HTMLElement) => {
+    text = target;
+    text.addEventListener('scroll', update, { passive: true });
+    stopObservingResize = observeSettledResize(text, updateAfterResize);
+  };
 }
 
 export function StickyUserMessagePreviewCard(props: {
@@ -144,8 +155,10 @@ export function StickyUserMessagePreviewCard(props: {
           <Show when={props.promptNumber}>
             {(promptNumber) => (
               <span
-                class="prompt-number-badge"
-                classList={{ 'prompt-number-badge-continuation': props.promptContinuation }}
+                class={[
+                  'prompt-number-badge',
+                  { 'prompt-number-badge-continuation': props.promptContinuation },
+                ]}
                 aria-hidden="true"
               >
                 {promptNumber()}
@@ -157,22 +170,26 @@ export function StickyUserMessagePreviewCard(props: {
             title={props.loading ? 'Loading message' : undefined}
             onMouseEnter={() => notifyUserMessageHoverChange(true)}
             onMouseLeave={() => notifyUserMessageHoverChange(false)}
-            on:click={{
-              capture: true,
-              handleEvent: (event) => {
-                // The preview owns navigation, including clicks on nested links and attachments.
-                event.preventDefault();
-                event.stopPropagation();
-                if (!props.loading) props.onClick?.(props.preview);
-              },
-            }}
+            ref={(element) =>
+              element.addEventListener(
+                'click',
+                (event) => {
+                  // The preview owns navigation, including clicks on nested links and attachments.
+                  event.preventDefault();
+                  event.stopPropagation();
+                  if (!props.loading) props.onClick?.(props.preview);
+                },
+                { capture: true }
+              )
+            }
           >
             <div class="latest-user-message-sticky-text-clip">
               <div
                 class={`latest-user-message-sticky-text${props.parts ? ' rendered-markdown' : ''}`}
-                ref={(text) =>
-                  bindStickyTextOverflowFade(text, () => props.preview.text, props.onGeometryChange)
-                }
+                ref={bindStickyTextOverflowFade(
+                  () => props.preview.text,
+                  () => props.onGeometryChange?.()
+                )}
               >
                 <Show
                   when={props.parts}
@@ -235,7 +252,7 @@ export function StickyUserMessagePreviewCard(props: {
             {(timestamp) => (
               <time
                 class={`message-sent-time latest-user-message-sticky-time${timestampVisible() ? ' is-visible' : ''}${props.suppressTimestampAnimation ? ' is-animation-suppressed' : ''}`}
-                dateTime={new Date(props.sentAt!).toISOString()}
+                datetime={new Date(props.sentAt!).toISOString()}
               >
                 {timestamp()}
               </time>
@@ -267,8 +284,13 @@ export function TurnNavigationRail(props: {
     props.turns.slice(windowStart(), windowStart() + capacity())
   );
   const turnsById = createMemo(() => new Map(props.turns.map((turn) => [turn.id, turn])));
-  onMount(() => {
-    if (!rail) return;
+  onSettled(() => {
+    const cleanups: Array<() => void> = [];
+
+    if (!rail)
+      return () => {
+        for (const cleanup of cleanups.toReversed()) cleanup();
+      };
     const update = () => {
       if (rail!.clientHeight > 0)
         setCapacity(Math.max(1, Math.floor((rail!.clientHeight - 40) / 11)));
@@ -293,10 +315,14 @@ export function TurnNavigationRail(props: {
         wheelRemainder = 0;
     };
     element.addEventListener('wheel', handleWheel, { passive: false });
-    onCleanup(() => {
+    cleanups.push(() => {
       stop();
       element.removeEventListener('wheel', handleWheel);
     });
+
+    return () => {
+      for (const cleanup of cleanups.toReversed()) cleanup();
+    };
   });
   // Preview refreshes and equivalent visibility sets must not undo manual paging.
   const viewportTurns = createMemo(
@@ -312,7 +338,6 @@ export function TurnNavigationRail(props: {
         lastVisible: visibleIndexes.at(-1) ?? activeIndex,
       };
     },
-    { count: 0, size: 0, firstVisible: -1, lastVisible: -1 },
     {
       equals: (previous, next) =>
         previous.count === next.count &&
@@ -321,8 +346,7 @@ export function TurnNavigationRail(props: {
         previous.lastVisible === next.lastVisible,
     }
   );
-  createEffect(() => {
-    const { count, size, firstVisible, lastVisible } = viewportTurns();
+  createEffect(viewportTurns, ({ count, size, firstVisible, lastVisible }) => {
     setStart((previous) => {
       const bounded = Math.min(previous, Math.max(0, count - size));
       if (firstVisible < 0 || (firstVisible >= bounded && lastVisible < bounded + size))
@@ -358,7 +382,8 @@ export function TurnNavigationRail(props: {
       </Show>
       <For each={windowTurns().map((turn) => turn.id)}>
         {(id, index) => {
-          const initialTurn = turnsById().get(id)!;
+          // Fallback only while a removed turn's row is still leaving the window.
+          const initialTurn = untrack(() => turnsById().get(id)!);
           const turn = () => turnsById().get(id) ?? initialTurn;
           const sentTimestamp = createMemo(() => {
             const sentAt = turn().sentAt;
@@ -446,8 +471,7 @@ export function TurnNavigationRail(props: {
 export function ChatContentBottomFade(props: { belowContent?: boolean } = {}) {
   return (
     <div
-      class="interactive-list-bottom-fade-wrap"
-      classList={{ 'is-below-content': props.belowContent }}
+      class={['interactive-list-bottom-fade-wrap', { 'is-below-content': props.belowContent }]}
       aria-hidden="true"
     >
       <div class="interactive-list-bottom-fade-overlay">
@@ -497,23 +521,20 @@ export function LoadingRow(props: {
   waitingCommand?: string;
   turnStartedAt?: number;
   elapsedStartedAt?: number;
+  /** Active content owns the transcript's last line, so the hidden slot takes no space. */
+  collapsed?: boolean;
 }) {
   // A reserved, hidden row shows no elapsed time or stale state.
   const now = useSecondClock(() => props.visible);
   // oxlint-disable-next-line no-unassigned-vars
   let row: HTMLDivElement | undefined;
   const [hasPrecedingToolDuration, setHasPrecedingToolDuration] = createSignal(false);
-  onMount(() => {
-    createEffect(() => {
-      if (
-        !props.visible ||
-        !props.toolsRunning ||
-        props.waiting ||
-        props.compacting ||
-        !row?.parentElement
-      ) {
+  createEffect(
+    () => props.visible && props.toolsRunning && !props.waiting && !props.compacting,
+    (enabled) => {
+      if (!enabled || !row?.parentElement) {
         setHasPrecedingToolDuration(false);
-        return;
+        return undefined;
       }
       const observer = new MutationObserver(() => update());
       const update = () => {
@@ -551,15 +572,15 @@ export function LoadingRow(props: {
       };
       // Read the painted tool label, including preview rotation and task activity overrides.
       update();
-      onCleanup(() => observer.disconnect());
-    });
-  });
+      return () => observer.disconnect();
+    }
+  );
   const waiting = () => props.waiting && !props.compacting && !props.keepThinking;
   const waitingClock = createMemo<{
     sessionId: string | null;
     startedAt: number;
     command?: string;
-  } | null>((previous) => {
+  } | null>((previous = null) => {
     if (!waiting()) return null;
     const sessionId = state.activeSessionId;
     return {
@@ -570,7 +591,7 @@ export function LoadingRow(props: {
       command:
         props.waitingCommand ?? (previous?.sessionId === sessionId ? previous.command : undefined),
     };
-  }, null);
+  });
 
   const isStale = () => {
     if (props.waiting || props.keepThinking) return false;
@@ -614,9 +635,9 @@ export function LoadingRow(props: {
     <div
       ref={row}
       class={`interactive-item-container interactive-response interactive-loading-row${
-        props.visible ? '' : ' is-reserved'
+        props.visible ? '' : ` is-reserved${props.collapsed ? ' is-collapsed' : ''}`
       }${waiting() ? ' is-background-waiting' : ''}`}
-      aria-hidden={props.visible ? undefined : true}
+      aria-hidden={ariaBoolean(props.visible ? undefined : true)}
     >
       <Show
         when={waiting()}

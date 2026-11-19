@@ -1,4 +1,5 @@
-import { For, Show, createEffect, createSignal, onCleanup } from 'solid-js';
+import { ariaBoolean } from '../../lib/aria';
+import { createEffect, For, Show, createSignal, onCleanup } from 'solid-js';
 import { getChatAnnotationLabel, readChatAnnotation } from '../../../shared/chat-annotation';
 import { setHostDragImage } from '../../host/extensions';
 import type { QueuedMessage } from '../../lib/app-state-types';
@@ -46,23 +47,28 @@ export type QueuedMessageItem = Pick<
   annotationLabels?: Record<string, string>;
 };
 
-function bindQueueOverflowFade(element: HTMLElement, trackItemCount: () => number) {
+function bindQueueOverflowFade(trackItemCount: () => number) {
+  let element: HTMLElement | undefined;
+  let stopObservingResize: (() => void) | undefined;
   const update = () => {
+    if (!element) return;
     const maxScrollTop = element.scrollHeight - element.clientHeight;
     element.classList.toggle('has-more-above', element.scrollTop > 1);
     element.classList.toggle('has-more-below', element.scrollTop < maxScrollTop - 1);
   };
 
-  element.addEventListener('scroll', update, { passive: true });
-  const stopObservingResize = observeSettledResize(element, update);
-  createEffect(() => {
-    trackItemCount();
+  createEffect(trackItemCount, () => {
     queueMicrotask(update);
   });
   onCleanup(() => {
-    element.removeEventListener('scroll', update);
-    stopObservingResize();
+    element?.removeEventListener('scroll', update);
+    stopObservingResize?.();
   });
+  return (target: HTMLElement) => {
+    element = target;
+    element.addEventListener('scroll', update, { passive: true });
+    stopObservingResize = observeSettledResize(element, update);
+  };
 }
 
 export function QueuedMessages(props: {
@@ -125,21 +131,19 @@ export function QueuedMessages(props: {
             class="chat-queue-list"
             role="list"
             aria-label="Steered messages"
-            ref={(element) =>
-              bindQueueOverflowFade(element, () => props.pendingSteers?.length ?? 0)
-            }
+            ref={bindQueueOverflowFade(() => props.pendingSteers?.length ?? 0)}
           >
             <For each={props.pendingSteers}>
               {(item) => {
-                const label = getAnnotationPreviewText(item) || 'Attached context';
+                const label = () => getAnnotationPreviewText(item) || 'Attached context';
                 return (
                   <div class="chat-queue-item" role="listitem" data-steered-message-id={item.id}>
                     <div class="chat-queue-body">
                       <span class="chat-steer-icon" aria-hidden="true">
                         <UiIcon source={hourglassIcon} width={12} height={12} />
                       </span>
-                      <span class="chat-queue-label" title={label}>
-                        {label}
+                      <span class="chat-queue-label" title={label()}>
+                        {label()}
                       </span>
                     </div>
                     <QueueAttachmentIcons
@@ -166,7 +170,7 @@ export function QueuedMessages(props: {
             class="chat-queue-list"
             role="list"
             aria-label="Queued messages"
-            ref={(element) => bindQueueOverflowFade(element, () => props.items.length)}
+            ref={bindQueueOverflowFade(() => props.items.length)}
           >
             <For each={props.items}>
               {(item, index) => {
@@ -179,8 +183,8 @@ export function QueuedMessages(props: {
                 const didSteerFail = () => props.failedSteerItemIds?.has(item.id) ?? false;
                 const [labelTruncated, setLabelTruncated] = createSignal(false);
                 let labelRef: HTMLSpanElement | undefined;
-                const imageCount = item.clipboardImages?.length || 0;
-                const attachmentCount =
+                const imageCount = () => item.clipboardImages?.length || 0;
+                const attachmentCount = () =>
                   (item.queuedContext?.currentDocumentEnabled
                     ? (item.queuedContext.editorContext.extensionContexts?.length ?? 0)
                     : 0) +
@@ -189,7 +193,7 @@ export function QueuedMessages(props: {
                   (item.terminalSelection ? 1 : 0) +
                   (item.inlineProblems?.length ?? 0) +
                   (item.attachedDiagnostics ? 1 : 0);
-                const label =
+                const label = () =>
                   (item.inlineProblems ?? []).reduce(
                     (text, reference) =>
                       text.replaceAll(
@@ -199,9 +203,11 @@ export function QueuedMessages(props: {
                     getAnnotationPreviewText(item)
                   ) ||
                   [
-                    imageCount > 0 ? `${imageCount} ${imageCount === 1 ? 'image' : 'images'}` : '',
-                    attachmentCount > 0
-                      ? `${attachmentCount} ${attachmentCount === 1 ? 'attachment' : 'attachments'}`
+                    imageCount() > 0
+                      ? `${imageCount()} ${imageCount() === 1 ? 'image' : 'images'}`
+                      : '',
+                    attachmentCount() > 0
+                      ? `${attachmentCount()} ${attachmentCount() === 1 ? 'attachment' : 'attachments'}`
                       : '',
                   ]
                     .filter(Boolean)
@@ -267,7 +273,7 @@ export function QueuedMessages(props: {
                       <button
                         type="button"
                         class="chat-queue-control chat-queue-drag-handle"
-                        draggable={!isLocked()}
+                        draggable={ariaBoolean(!isLocked())}
                         disabled={isLocked()}
                         onDragStart={startDragging}
                         onDragEnd={() => {
@@ -276,7 +282,7 @@ export function QueuedMessages(props: {
                         }}
                         onKeyDown={reorderWithKeyboard}
                         title="Drag to reorder queued message"
-                        aria-label={`Reorder queued message: ${label}`}
+                        aria-label={`Reorder queued message: ${label()}`}
                       >
                         <Show
                           when={draggedItemId() || isAltPressed()}
@@ -298,7 +304,7 @@ export function QueuedMessages(props: {
                       </button>
                       <span
                         class="chat-queue-label"
-                        title={labelTruncated() ? label : undefined}
+                        title={labelTruncated() ? label() : undefined}
                         ref={(element) => {
                           labelRef = element;
                         }}
@@ -308,15 +314,15 @@ export function QueuedMessages(props: {
                           );
                         }}
                       >
-                        {label}
+                        {label()}
                       </span>
                       <Show when={item.paused}>
                         <span class="chat-queue-paused-label">Paused</span>
                       </Show>
                     </div>
                     <QueueAttachmentIcons
-                      imageCount={imageCount}
-                      attachmentCount={attachmentCount}
+                      imageCount={imageCount()}
+                      attachmentCount={attachmentCount()}
                     />
                     <div class="chat-queue-actions">
                       <Show when={isEditing()}>
@@ -329,7 +335,7 @@ export function QueuedMessages(props: {
                         hidden={isLocked()}
                         title={`${item.paused ? 'Play' : 'Pause'} queued message (Option/Alt-click for all)`}
                         aria-label={`${item.paused ? 'Play' : 'Pause'} queued message`}
-                        aria-pressed={item.paused === true}
+                        aria-pressed={ariaBoolean(item.paused === true)}
                       >
                         <Show
                           when={item.paused}
@@ -375,7 +381,7 @@ export function QueuedMessages(props: {
                               ? 'Retry send as Steer'
                               : 'Send as Steer'
                         }
-                        aria-busy={isInFlight()}
+                        aria-busy={ariaBoolean(isInFlight())}
                       >
                         <Show
                           when={didDispatchFail() || didSteerFail()}

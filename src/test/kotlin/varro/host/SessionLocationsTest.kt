@@ -83,10 +83,10 @@ class SessionLocationsTest {
         }
     }
 
-    @Test fun `known moved worktree is writable after canonical verification without loading its config`() {
+    @Test fun `known moved session is writable after canonical verification without loading its config`() {
         val f = Fixture()
         assertTrue(f.locations.authorizeTransferred(f.session))
-        assertEquals(listOf("/project/current", "/project", "/experimental/worktree?projectID=project", "/session/ses_one"), f.calls)
+        assertEquals(listOf("/session/ses_one"), f.calls)
         val transfers = SessionTransfers(JsonArray(), {}, { "fixture" }, { f.roots }, { f.session }, {},
             authorizeWorktree = f.locations::authorizeTransferred, knownWorktree = f.locations::knownTransferred)
         transfers.observe(f.session.deepCopy().apply { addProperty("directory", "/origin") })
@@ -101,8 +101,13 @@ class SessionLocationsTest {
             transfers.authorizeRequest("POST", "/session/ses_one/prompt_async?directory=/unrelated")
         }
         f.inventory = JsonArray()
+        assertEquals(true, transfers.get("ses_one").obj("transfer").bool("available"))
+        f.session.addProperty("directory", "/moved-again")
         assertEquals(false, transfers.get("ses_one").obj("transfer").bool("available"))
+        f.session.addProperty("id", "ses_other")
         assertThrows(IllegalStateException::class.java) { transfers.checkWritable("ses_one") }
+        f.session.addProperty("id", "ses_one")
+        f.session.addProperty("directory", "/destination")
         assertEquals("/destination", transfers.authorizeRequest("GET", "/varro/session/ses_one/location"))
     }
 
@@ -118,7 +123,7 @@ class SessionLocationsTest {
         assertEquals(true, transfers.get("ses_one").obj("transfer").bool("available"))
     }
 
-    @Test fun `missing unrelated non-Git and malformed inventories never grant execution`() {
+    @Test fun `optional inventories and global projects cannot block a canonically verified retained session`() {
         val variations: List<(Fixture) -> Unit> = listOf(
             { it.projects = Json.obj("data" to it.projects) },
             { it.projects = Json.array(listOf(Json.obj("id" to "other", "vcs" to "git"))) },
@@ -130,19 +135,25 @@ class SessionLocationsTest {
             { it.inventory = Json.array(listOf(Json.obj("directory" to "/destination", "strategy" to 123))) },
             { it.inventory = Json.array(listOf(Json.obj("directory" to "/destination", "strategy" to null))) },
             { it.project.addProperty("id", "other") },
-            { it.session.addProperty("projectID", "other") },
-            { it.session.addProperty("directory", "/moved-again") },
-            { it.session.addProperty("id", "ses_other") },
+            { it.session.addProperty("projectID", "global") },
         )
         variations.forEach { change ->
             val f = Fixture()
-            val retained = f.session.deepCopy()
             change(f)
+            assertTrue(f.locations.authorizeTransferred(f.session.deepCopy()))
+            assertEquals(listOf("/session/ses_one"), f.calls)
+        }
+    }
+
+    @Test fun `canonical identity and ownership mismatches never grant execution`() {
+        for (field in listOf("projectID", "directory", "id")) {
+            val f = Fixture()
+            val retained = f.session.deepCopy()
+            f.session.addProperty(field, "other")
             assertFalse(f.calls.toString(), f.locations.authorizeTransferred(retained))
         }
         val f = Fixture()
         assertFalse(f.locations.authorizeTransferred(f.session.deepCopy().apply { addProperty("id", "../escape") }))
-        assertFalse(f.locations.authorizeTransferred(f.session.deepCopy().apply { addProperty("projectID", "global") }))
         assertTrue(f.calls.isEmpty())
     }
 
@@ -165,12 +176,12 @@ class SessionLocationsTest {
         f.locations.annotate(rows) { false }
         assertEquals(1, f.calls.size)
         f.inventory = JsonArray()
-        assertFalse(f.locations.authorizeTransferred(f.session))
+        assertTrue(f.locations.authorizeTransferred(f.session))
         f.clock = 6_000_000_000
         assertTrue(f.locations.annotate(rows) { false }.all { it.asJsonObject.bool("isGitWorktree") == false })
         f.connection++
         f.locations.annotate(rows) { false }
-        assertEquals(4, f.calls.count { it.startsWith("/experimental/worktree") })
+        assertEquals(3, f.calls.count { it.startsWith("/experimental/worktree") })
         assertFalse(rows.first().asJsonObject.has("isGitWorktree"))
     }
 

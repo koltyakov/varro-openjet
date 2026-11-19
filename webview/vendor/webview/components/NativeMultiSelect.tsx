@@ -1,4 +1,5 @@
 import { For, Show, createUniqueId } from 'solid-js';
+import { ariaBoolean } from '../lib/aria';
 import type { NativeFormField, NativeFormValue } from '../../shared/protocol';
 import type { NativeMultiSelectDraftRow } from '../lib/native-form-drafts';
 import { checkIcon } from '../lib/ui-icons';
@@ -78,11 +79,13 @@ export function NativeMultiSelect(props: {
       >
         <For each={props.field.options}>
           {(option, index) => {
-            const descriptionID = `${props.id}-option-${index()}-description`;
+            const descriptionID = () => `${props.id}-option-${index()}-description`;
             return (
               <label
-                class="question-option native-question-choice native-multiselect-choice"
-                classList={{ selected: selected().includes(option.value) }}
+                class={[
+                  'question-option native-question-choice native-multiselect-choice',
+                  { selected: selected().includes(option.value) },
+                ]}
               >
                 <span class="native-multiselect-indicator">
                   <input
@@ -90,10 +93,10 @@ export function NativeMultiSelect(props: {
                     type="checkbox"
                     value={option.value}
                     aria-label={option.label}
-                    aria-invalid={props.invalid}
+                    aria-invalid={ariaBoolean(props.invalid)}
                     disabled={props.disabled}
                     aria-describedby={
-                      [props.describedBy, option.description ? descriptionID : undefined]
+                      [props.describedBy, option.description ? descriptionID() : undefined]
                         .filter(Boolean)
                         .join(' ') || undefined
                     }
@@ -113,7 +116,7 @@ export function NativeMultiSelect(props: {
                 <span class="question-option-text">
                   <span class="question-option-label">{option.label}</span>
                   <Show when={option.description}>
-                    <span class="question-option-desc" id={descriptionID}>
+                    <span class="question-option-desc" id={descriptionID()}>
                       {' '}
                       {option.description}
                     </span>
@@ -130,8 +133,10 @@ export function NativeMultiSelect(props: {
               <Show when={row()}>
                 {(current) => (
                   <div
-                    class="question-option native-question-choice native-multiselect-custom-row"
-                    classList={{ selected: current().selected && !!current().value }}
+                    class={[
+                      'question-option native-question-choice native-multiselect-custom-row',
+                      { selected: current().selected && !!current().value },
+                    ]}
                     data-custom-row={id}
                   >
                     <span class="native-multiselect-indicator">
@@ -139,7 +144,7 @@ export function NativeMultiSelect(props: {
                         type="checkbox"
                         class="native-multiselect-checkbox"
                         aria-label={`${label()}: select custom value ${index() + 1}`}
-                        aria-invalid={props.invalid}
+                        aria-invalid={ariaBoolean(props.invalid)}
                         aria-describedby={props.describedBy}
                         disabled={props.disabled || !current().value}
                         checked={current().selected && !!current().value}
@@ -163,7 +168,7 @@ export function NativeMultiSelect(props: {
                       data-custom-input
                       class="question-custom-input native-form-text-input"
                       aria-label={`${label()}: custom option${index() ? ` ${index() + 1}` : ''}`}
-                      aria-invalid={props.invalid}
+                      aria-invalid={ariaBoolean(props.invalid)}
                       aria-describedby={props.describedBy}
                       placeholder="Type your own answer"
                       disabled={props.disabled || !props.field.custom}
@@ -182,7 +187,7 @@ export function NativeMultiSelect(props: {
           type="button"
           class="question-btn question-btn-secondary native-multiselect-empty"
           aria-label={label()}
-          aria-invalid={props.invalid}
+          aria-invalid={ariaBoolean(props.invalid)}
           aria-describedby={props.describedBy}
           disabled={props.disabled}
           onClick={() => props.onChange([])}

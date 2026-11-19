@@ -1,4 +1,5 @@
-import { For, Show, createEffect, createSignal, on, onCleanup, onMount } from 'solid-js';
+import { For, Show, createEffect, createSignal, onCleanup, onSettled, untrack } from 'solid-js';
+import { ariaBoolean } from '../lib/aria';
 import { defaultAppState } from '../lib/state';
 import { prepareForTodoCollapse } from '../lib/message-list-layout';
 import { STORAGE_KEYS, readStored, writeStored } from '../lib/state-storage';
@@ -42,14 +43,12 @@ export function TodoList() {
       radius: diameter / 2,
     }));
   };
+  // Initial state only: the effect below applies automatic collapse changes after mount.
   const [collapsed, setCollapsed] = createSignal(
-    allDone() || readStored<boolean>(STORAGE_KEYS.todoListCollapsed) === true
+    untrack(() => allDone() || readStored<boolean>(STORAGE_KEYS.todoListCollapsed) === true)
   );
   const [listMaxHeight, setListMaxHeight] = createSignal(DEFAULT_TODO_LIST_HEIGHT);
   const [listScrollable, setListScrollable] = createSignal(false);
-  let previousTodoIds = new Set(todos().map((todo) => todo.id));
-  let previousUserMessageCount = userMessageCount();
-  let previousAllDone = allDone();
   let blockRef: HTMLDivElement | undefined;
   let listRef: HTMLUListElement | undefined;
   let activeTodoTextRef: HTMLSpanElement | undefined;
@@ -63,7 +62,9 @@ export function TodoList() {
   };
 
   const setAutomaticCollapsed = (nextCollapsed: boolean) => {
-    if (nextCollapsed && !collapsed() && listRef?.isConnected) prepareForTodoCollapse(listRef);
+    if (nextCollapsed && !untrack(collapsed) && listRef?.isConnected) {
+      prepareForTodoCollapse(listRef);
+    }
     manuallyExpanded = false;
     setCollapsed(nextCollapsed);
   };
@@ -72,73 +73,93 @@ export function TodoList() {
     if (blockRef?.isConnected) prepareForTodoCollapse(blockRef);
   });
 
-  createEffect(() => {
-    const runningCount = inProgressTodos().length;
-    if (!collapsed() || runningCount <= 1) {
-      setActiveTodoIndex(0);
-      return;
-    }
-
-    setActiveTodoIndex(0);
-    const interval = window.setInterval(() => {
-      setActiveTodoIndex((index) => (index + 1) % runningCount);
-    }, 5_000);
-    onCleanup(() => window.clearInterval(interval));
-  });
-
   createEffect(
-    on(
-      () => activeTodo()?.id,
-      () => setActiveTodoTruncated(false)
-    )
+    () => ({ runningCount: inProgressTodos().length, collapsed: collapsed() }),
+    ({ runningCount, collapsed: isCollapsed }) => {
+      const cleanups: Array<() => void> = [];
+
+      if (!isCollapsed || runningCount <= 1) {
+        setActiveTodoIndex(0);
+        return () => {
+          for (const cleanup of cleanups.toReversed()) cleanup();
+        };
+      }
+
+      setActiveTodoIndex(0);
+      const interval = window.setInterval(() => {
+        setActiveTodoIndex((index) => (index + 1) % runningCount);
+      }, 5_000);
+      cleanups.push(() => window.clearInterval(interval));
+
+      return () => {
+        for (const cleanup of cleanups.toReversed()) cleanup();
+      };
+    }
   );
 
-  createEffect(() => {
-    const nextTodoIds = new Set(todos().map((todo) => todo.id));
-    const hasNewTodo = todos().some((todo) => !previousTodoIds.has(todo.id));
-    const nextUserMessageCount = userMessageCount();
-    const nextAllDone = allDone();
-
-    if (nextAllDone && !previousAllDone) {
-      setAutomaticCollapsed(true);
-    } else if (hasNewTodo) {
-      setAutomaticCollapsed(readStored<boolean>(STORAGE_KEYS.todoListCollapsed) === true);
-    } else if (nextUserMessageCount > previousUserMessageCount && nextAllDone) {
-      setAutomaticCollapsed(true);
+  createEffect(
+    () => activeTodo()?.id,
+    () => {
+      setActiveTodoTruncated(false);
     }
+  );
 
-    previousTodoIds = nextTodoIds;
-    previousUserMessageCount = nextUserMessageCount;
-    previousAllDone = nextAllDone;
-  });
+  createEffect(
+    () => ({
+      ids: todos().map((todo) => todo.id),
+      nextUserMessageCount: userMessageCount(),
+      nextAllDone: allDone(),
+    }),
+    ({ ids, nextUserMessageCount, nextAllDone }, previous) => {
+      // The first run is the mounted state, which the initial collapsed value already reflects.
+      if (!previous) return;
+      const previousTodoIds = new Set(previous.ids);
+      const hasNewTodo = ids.some((id) => !previousTodoIds.has(id));
 
-  createEffect(() => {
-    const activeTodoId = activeTodo()?.id;
-    if (!activeTodoId || collapsed()) return;
+      if (nextAllDone && !previous.nextAllDone) {
+        setAutomaticCollapsed(true);
+      } else if (hasNewTodo) {
+        setAutomaticCollapsed(readStored<boolean>(STORAGE_KEYS.todoListCollapsed) === true);
+      } else if (nextUserMessageCount > previous.nextUserMessageCount && nextAllDone) {
+        setAutomaticCollapsed(true);
+      }
+    }
+  );
 
-    queueMicrotask(() => {
-      if (collapsed() || activeTodo()?.id !== activeTodoId) return;
-      const activeItem = Array.from(listRef?.children || []).find(
-        // SAFETY: The surrounding shape or discriminator check establishes the HTMLElement contract used below.
-        (item) => (item as HTMLElement).dataset.todoId === activeTodoId
-      );
-      activeItem?.scrollIntoView?.({ block: 'nearest' });
-    });
-  });
+  createEffect(
+    () => ({ activeTodoId: activeTodo()?.id, collapsed: collapsed() }),
+    ({ activeTodoId, collapsed: isCollapsed }) => {
+      if (!activeTodoId || isCollapsed) return;
 
-  createEffect(() => {
-    todos();
-    listMaxHeight();
-    collapsed();
-    queueMicrotask(() => {
-      setListScrollable(!!listRef && listRef.scrollHeight > listRef.clientHeight + 1);
-    });
-  });
+      queueMicrotask(() => {
+        if (collapsed() || activeTodo()?.id !== activeTodoId) return;
+        const activeItem = Array.from(listRef?.children || []).find(
+          // SAFETY: The surrounding shape or discriminator check establishes the HTMLElement contract used below.
+          (item) => (item as HTMLElement).dataset.todoId === activeTodoId
+        );
+        activeItem?.scrollIntoView?.({ block: 'nearest' });
+      });
+    }
+  );
 
-  onMount(() => {
+  createEffect(
+    () => [todos(), listMaxHeight(), collapsed()],
+    () => {
+      queueMicrotask(() => {
+        setListScrollable(!!listRef && listRef.scrollHeight > listRef.clientHeight + 1);
+      });
+    }
+  );
+
+  onSettled(() => {
+    const cleanups: Array<() => void> = [];
+
     const chatShell = blockRef?.closest<HTMLElement>('.chat-main-column-shell');
     const chatView = chatShell?.querySelector<HTMLElement>('.interactive-list');
-    if (!chatShell) return;
+    if (!chatShell)
+      return () => {
+        for (const cleanup of cleanups.toReversed()) cleanup();
+      };
 
     let previousChatShellHeight = chatShell.clientHeight;
     let previousChatViewHeight = chatView?.clientHeight ?? 0;
@@ -164,7 +185,10 @@ export function TodoList() {
     };
 
     updateAvailableSpace();
-    if (globalThis.ResizeObserver === undefined) return;
+    if (globalThis.ResizeObserver === undefined)
+      return () => {
+        for (const cleanup of cleanups.toReversed()) cleanup();
+      };
 
     const observer = new ResizeObserver((entries) => {
       const shellEntry = entries.find((entry) => entry.target === chatShell);
@@ -188,7 +212,11 @@ export function TodoList() {
     });
     observer.observe(chatShell);
     if (chatView) observer.observe(chatView);
-    onCleanup(() => observer.disconnect());
+    cleanups.push(() => observer.disconnect());
+
+    return () => {
+      for (const cleanup of cleanups.toReversed()) cleanup();
+    };
   });
 
   const toggleCollapsed = () => {
@@ -213,7 +241,7 @@ export function TodoList() {
         type="button"
         class="todo-block-header"
         onClick={toggleCollapsed}
-        aria-expanded={!collapsed()}
+        aria-expanded={ariaBoolean(!collapsed())}
       >
         <UiIcon
           source={navArrowDownIcon}
@@ -277,7 +305,7 @@ export function TodoList() {
       {!collapsed() && (
         <ul
           class="todo-block-list"
-          tabIndex={listScrollable() ? 0 : undefined}
+          tabindex={listScrollable() ? 0 : undefined}
           ref={(element) => {
             listRef = element;
           }}

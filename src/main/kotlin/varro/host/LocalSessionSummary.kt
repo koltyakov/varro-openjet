@@ -12,7 +12,7 @@ import java.util.concurrent.TimeUnit
 
 /** Reads the session tree through indexed session_id queries, like Varro's local summary worker. */
 internal class LocalSessionSummary(private val path: Path) {
-    fun read(sessionId: String): SessionSummary.History? {
+    fun read(sessionId: String, apiVersion: Int = 1, mixedV2Content: Boolean = true): SessionSummary.History? {
         if (!Files.exists(path)) return null
         return runCatching {
             val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2)
@@ -23,10 +23,12 @@ internal class LocalSessionSummary(private val path: Path) {
                 ProgressHandler.setHandler(database, 1_000, object : ProgressHandler() {
                     override fun progress(): Int = if (System.nanoTime() < deadline) 0 else 1
                 })
-                // V2 history, including separately stored 2.2.2 parts and inherited forks,
-                // is hydrated by the API. Never substitute a dormant V1 namesake.
+                database.autoCommit = false
+                // Never substitute a dormant V1 namesake for native V2 history.
                 val tables = HistoryDatabase.tables(database)
-                if ("session_v2" in tables && HistoryDatabase.scalar(database, "SELECT count(*) FROM session_v2 WHERE id=?", sessionId) != 0L) return null
+                if (apiVersion == 2) return LocalV2SessionSummary.read(database, sessionId, ::checkDeadline, mixedV2Content)
+                if ("session_v2" in tables && HistoryDatabase.scalar(database, "SELECT count(*) FROM session_v2 WHERE id=?", sessionId) != 0L)
+                    return null
                 val sessions = linkedMapOf<String, JsonObject>()
                 database.prepareStatement(
                     "WITH RECURSIVE tree(id) AS (SELECT id FROM session WHERE id = ? " +

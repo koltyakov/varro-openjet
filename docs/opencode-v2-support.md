@@ -1,6 +1,6 @@
 # OpenCode V2 support
 
-OpenJet supports V1 from 1.16.0 and V2 from 2.0.5. The webview and shared sources were synced from Varro's `main` branch at `1ce62d2b6afb`, version 0.34.16. Tested baselines are V1 1.19.6 and V2 2.3.2. The Kotlin adapter handles released-server contracts, including generated skill, shell and synthetic transcript records. Synthetic text appears as automatic-action notices; canonical subagent completion metadata produces linked subagent activities. Pending and running V2 patch calls render as active edits. Assistant history preserves automatic retry metadata for recovery notices. History attachments use deferred references with Kotlin-generated thumbnails and on-demand original reads. Chat annotations retain bounded display context before deferral. [Session cleanup and usage export](session-cleanup.md) preserve statistics and optional parent transcripts before confirmed deletions.
+OpenJet supports V1 from 1.16.0 and V2 from 2.0.5. The webview and shared sources were synced from Varro's `main` branch at `28263880823f`, version 0.35.0. Tested baselines are V1 1.19.6 and V2 2.3.2. The Kotlin adapter handles released-server contracts, including generated skill, shell and synthetic transcript records. Synthetic text appears as automatic-action notices; canonical subagent completion metadata produces linked subagent activities. Pending and running V2 patch calls render as active edits. Assistant history preserves automatic retry metadata for recovery notices. History attachments use deferred references with Kotlin-generated thumbnails and on-demand original reads. Chat annotations retain bounded display context before deferral. [Session cleanup and usage export](session-cleanup.md) preserve statistics and optional parent transcripts before confirmed deletions.
 
 V2 sessions support `/pause` and a Resume action in the transcript. Pausing parks queued messages and interrupts with `resume=false`. Pause markers persist in the shared Varro session annotations, and session summaries and usage reports exclude paused time. Commit-message generation uses the stateless endpoint when the server advertises it, falling back to a helper session when the endpoint or selected model is unavailable before generation starts.
 
@@ -3017,6 +3017,90 @@ the reviewed delta. The existing differences and verification limits above remai
 this is not a claim of full backend/UI parity. VS Code window-opening APIs are
 replaced by native IDE project frames, and its persistent PowerShell helper is
 not needed for direct JNA listener reads. No commit, push or tag was made.
+
+## Upstream sync review, 2026-11-19
+
+Reviewed Varro `1ce62d2b6afba397b1d8fcc788e00839c6519eef` through
+`28263880823fee8733d06e9ed611bad704c39392`, version 0.35.0. The comparison
+covers every changed extension source and test, shared protocol, contributed
+configuration, dependency declarations and browser sources. A final remote-ref
+check still resolved `main` to that commit. Vendored sources remain unmodified.
+The user's OpenJet 0.11.0 version is preserved.
+
+The browser moves to Solid 2.0.3, with explicit `@solidjs/signals`,
+`@solidjs/web` and `@solidjs/vite-plugin` dependencies. OpenJet uses the new
+compiler and JSX import source, and its host-test store writes use `storePath`
+with browser-condition resolution. Vitest advances to 5.1.1. Node stays at
+24.22.3; npm advances to 12.2.3 in both the manifest and Dockerfile. The lockfile
+was regenerated without bypassing peer validation. npm reports no unreviewed
+install scripts.
+
+| Upstream change | OpenJet alignment and regression coverage |
+| --- | --- |
+| `local-images.ts`, `rest-proxy.ts`, `util/webview-message.ts`, `shared/local-images.ts`; `POST /varro/local-image` | `ApiRoutes.kt`, `RestProxy.kt` and `LocalImages.kt` validate paths and owning directories before bounded canonical workspace reads. Network/device paths, traversal, external symlinks, non-regular/empty/oversized files and non-raster content are rejected. Relative lookup permits sibling open roots, not closed transferred folders. Preview requests reuse the JVM codecs; original raster reads are explicit. Kotlin fixtures cover parsing, containment, sibling roots, missing roots, size, MIME, conversion, cancellation and disposal. Browser contract tests cover local targets and the route's shared wire types. |
+| `rest-proxy.ts`, `sidebar-provider.ts`; retained transferred-session authorization | `SessionLocations.kt` verifies only the canonical session ID, project and exact destination through an open origin. Git/worktree inventories are presentation-only and cannot block a known non-Git or global-project conversation. `SessionTransfers.kt` retains per-session grants without widening catalogs or file access, and reports failed verification with refresh guidance. Regressions cover optional metadata, identity/project/directory mismatches, roots, deadlines, connection drift, stale moves and unrelated-directory rejection. |
+| `local-session-summary.ts`; native V2 `session_part` hydration | `LocalSessionSummary.kt`, `LocalV2SessionSummary.kt` and `SessionSummary.kt` read native inline, stored and mixed parts in a read-only SQLite snapshot. Split parts precede inline content; only file-change inputs, context character counts and summary metadata survive. Per-session input-token counts produce the nested context estimate without retaining tool output or file diffs. Schema, ownership, ordinal, row/data/part/message/session bounds and orphan checks fail back to the API. Forks and staged reverts remain API-owned. Older or unidentified servers use API hydration for mixed storage because pre-2.2.6 semantics differ. Kotlin fixtures cover ordering, tokens, context estimates, cost/model/duration inputs, unchanged database bytes and malformed/oversized fallback. |
+| `pinned-session-manager.ts`, `sidebar-provider.ts`, `shared/extension-message.ts`; `pinned-sessions/sync` | `VarroStore.kt` serializes pin mutations and notifies after native state changes. `VarroProjectService.kt` broadcasts detached snapshots to every view independently of the original RPC response. `RestProxy.kt` uses the serialized update operation. Store tests cover concurrent mutations, reordered/empty snapshots and listener removal; browser tests validate the new envelope. |
+| `streaming-tool-content.ts`; already-deferred bounded events | `StreamingToolContent.kt` retains boolean/string deferral and reconstructs content routes from the current envelope. Kotlin regressions cover input completion, called/progress/success/failure events, foreign embedded paths and missing message IDs. |
+| `provider-limit-status-bar.ts`, `provider-limit-service.ts`, `shared/provider-limit-summary.ts`; reset estimates and stale attribution | `PinnedProviderLimits.kt` adds rounded-up countdowns, local absolute reset times and explicit last-successful-snapshot attribution without exposing raw poll notes. The existing `ProviderLimitsWidget.kt` one-second tick refreshes tooltips without new quota polling. Tests cover minute boundaries, days, expired/invalid resets and both stale markers. `ProviderQuotaBackend.kt` already emits the unchanged note prefix. |
+
+Other browser fixes cover same-tick state reads, transfer refreshes without
+discarding the active transcript, user interruptions versus provider failures,
+superseded usage notices, local image loading, annotation layout, scroll ownership
+and reactive callback dependencies. They are reused unchanged. Contributed
+settings and OpenCode SDK/client baselines do not change. V1 remains 1.19.6 and
+V2 remains 2.3.2, with support floors 1.16.0 and 2.0.5. There is no new released
+OpenCode range to review in this delta.
+
+Upstream's VS Code status-item timers are replaced by OpenJet's existing native
+widget tick. VS Code workspace and window APIs remain native JetBrains content
+roots and project frames. No VS Code placement, command-registration or
+PowerShell-inspector change requires a port in this delta.
+
+The final `scripts/check-opencode-compatibility.py --version 2.3.2 --full-check`
+run used the exact published 2.3.2 executable and also enabled the published V1
+1.19.6 fixture. `./gradlew check buildPlugin --rerun-tasks` passed with 913 enabled
+Kotlin tests; only the opt-in existing-database usage benchmark was skipped.
+The V1 adapter, V2 adapter and all three managed-service cases passed without
+skips in isolated HOME/XDG/database/service-state roots. V2 evidence is
+`build/opencode-compatibility/2.3.2/verification.json`; the full log is
+`build/upstream-sync-28263880-release-check.log`.
+
+All 114 OpenJet browser host tests, TypeScript checking, vendor integrity and
+browser bundling passed. Six compatibility-helper tests, seven build-script
+regressions and the vendor-integrity script test passed. The selected upstream
+run passed 7,958 unit cases across 307 files, covering all webview/shared tests
+and the changed local-image, summary, pin, deferred-tool, quota-widget and proxy
+paths. Its Chromium run passed 86 cases for local images, session locations,
+annotation layout, commands, composer behavior, scrollbar ownership and activity
+handoff. Logs are `build/upstream-sync-28263880-upstream-unit.log` and
+`build/upstream-sync-28263880-upstream-e2e.log`.
+
+The final build produced `build/distributions/varro-openjet-0.11.0.zip`,
+SHA-256 `2794f802cadcda7fff9026a9426db21b48384a59f46fc0e7dd2aa3e4824c849b`.
+All 762 recorded source/build inputs remained unchanged through that build.
+Plugin Verifier 1.411 checked that exact ZIP against IU-252.28539.97,
+IU-253.33813.55, IU-261.27258.48, IU-262.10968.63 and IU-263.6800.24.
+All five were compatible, with deprecated/experimental API warnings only.
+Its log is `build/upstream-sync-28263880-release-verifier.log`. An earlier
+combined check/verifier invocation reached the shell's two-minute deadline;
+the final standalone verifier completed successfully.
+No commit, push or tag was made.
+
+Remaining differences and verification limits:
+
+| Status | Upstream files/endpoints and OpenJet code | User-visible impact |
+| --- | --- | --- |
+| Accepted image-codec difference | Varro `src/extension/local-images.ts`, `image-thumbnails.ts` and its WASM worker; OpenJet `LocalImages.kt` and `ImageThumbnails.kt` | Local previews use PNG rather than WebP. The previously accepted JVM-codec choice also applies here: AVIF preview conversion is unsupported, though explicit raster-original reads work. No decoder or licensing change was added. |
+| Local-file boundary on attached connections | Varro `src/extension/rest-proxy.ts` and `context-provider.ts`; OpenJet `RestProxy.kt` and `LocalImages.kt` | OpenJet refuses local images for attach-only servers rather than interpreting a remote server's paths as local IDE files. Closed transferred folders do not gain filesystem access from a conversation grant. |
+| Retained metadata read and older mixed-history fallback | Varro `src/extension/local-session-summary.ts`; OpenJet `SessionSummaryService.kt`, `LocalSessionSummary.kt`, `LocalV2SessionSummary.kt` and `OpenCodeHostServices.kt` | Successful local V2 summaries still read one session record through the API to preserve shared pause annotations. Mixed histories on older/unidentified servers remain correct through API hydration rather than the local fast path. |
+| Existing context-estimate limitation outside the new native fast path | Varro `src/extension/session-summary.ts`; OpenJet `SessionSummary.kt`, `SessionSummaryService.kt` and the V1 path in `LocalSessionSummary.kt` | The new native V2 reader supplies nested context estimates. The older V1-local and API-fallback paths still omit that optional summary field, so the expanded context composition can be absent there. Files, token totals and duration remain available. Those paths did not change upstream in this delta. |
+| Existing unrelated backend differences | Varro `opencode-config-service.ts`, `auto-approve-judge.ts`, `varro-state-paths.ts`, quota adapters/coordinator, `session-cleanup-service.ts` and Windows inspector; OpenJet `OpenCodeHostServices.kt`, `PermissionJudge.kt`, `NativeDecisions.kt`, `OpenCodeV2SessionState.kt`, `ProviderQuotaBackend.kt`, `quota/QuotaAdapters.kt`, `ArtifactCleanup.kt` and `ServerOwnership.kt` | The preceding review's permission provenance/review reuse, state-root selection, non-Z.ai quota coordination, cleanup limits and inspector warm-up differences remain. They were not re-audited because those implementations did not change in this delta. |
+| Native UI and external integrations not verified | Varro Solid 2 UI and local-image/scroll/transfer fixtures; OpenJet `WebviewHost.kt`, `LocalImages.kt`, `ProviderLimitsWidget.kt`, native project APIs and `Dockerfile` | Chromium and unit fixtures do not establish native JCEF rendering/performance, Windows/Linux filesystem behavior, status-tooltip display or real-IDE transfer behavior. No interactive JCEF sandbox, Docker image build, live provider, account quota/OAuth or production session was used. |
+
+No new required Kotlin host or consumed-contract implementation gap remains in
+the reviewed changes. The listed platform boundaries, accepted codec choice and
+verification limits remain; this is not a claim of full backend/UI parity.
 
 ## Verification
 

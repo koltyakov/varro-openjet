@@ -97,6 +97,17 @@ class VarroStore : PersistentStateComponent<VarroStore.StoreState> {
     enum class SessionSelection { MODEL, PERMISSION_MODE }
 
     private val selectionListeners = CopyOnWriteArrayList<(SessionSelection) -> Unit>()
+    private val pinListeners = CopyOnWriteArrayList<(List<String>) -> Unit>()
+
+    fun addPinListener(listener: (List<String>) -> Unit): () -> Unit {
+        pinListeners.add(listener)
+        return { pinListeners.remove(listener) }
+    }
+
+    @Synchronized fun updatePins(update: (List<String>) -> List<String>): List<String> {
+        pinnedSessionIds = update(pinnedSessionIds)
+        return pinnedSessionIds
+    }
 
     override fun getState(): StoreState = state
 
@@ -224,8 +235,12 @@ class VarroStore : PersistentStateComponent<VarroStore.StoreState> {
     // --- Array-valued entries -------------------------------------------------
 
     var pinnedSessionIds: List<String>
-        get() = readArray(state.pinnedSessionIds).strings()
-        set(value) { state.pinnedSessionIds = Json.stringify(Json.array(value)) }
+        @Synchronized get() = readArray(state.pinnedSessionIds).strings()
+        @Synchronized set(value) {
+            val ids = value.distinct()
+            state.pinnedSessionIds = Json.stringify(Json.array(ids))
+            pinListeners.forEach { it(ids.toList()) }
+        }
 
     var hiddenSessionIds: Set<String>
         get() = readArray(state.hiddenSessionIds).strings().toSet()

@@ -14,8 +14,10 @@ import varro.protocol.strings
 
 /** Port of Varro's session-summary.ts. Token totals exclude cache reads. */
 internal object SessionSummary {
-    data class History(val messages: List<JsonObject>, val descendants: List<Descendant> = emptyList())
-    data class Descendant(val tokens: JsonObject?, val messages: List<JsonObject>)
+    data class History(val messages: List<JsonObject>, val descendants: List<Descendant> = emptyList(),
+        val contextCharacters: JsonObject? = null, val contextInputTokens: Double? = null)
+    data class Descendant(val tokens: JsonObject?, val messages: List<JsonObject>,
+        val contextCharacters: JsonObject? = null, val contextInputTokens: Double? = null)
 
     private val fileKeys = listOf("relativePath", "file", "path", "filePath", "filepath", "filename")
     private val changeTools = setOf(
@@ -55,7 +57,30 @@ internal object SessionSummary {
             edits.addProperty("historyStatsUnavailable", true)
             edits.remove("tokenBreakdown")
         }
+        val contexts = listOf(history.contextCharacters to history.contextInputTokens) +
+            history.descendants.map { it.contextCharacters to it.contextInputTokens }
+        val breakdown = contextBreakdown(contexts)
+        if (breakdown.isNotEmpty()) edits.add("nestedContextBreakdown", Json.array(breakdown))
         return edits
+    }
+
+    /** Counts come from bounded native rows before transcript text and tool output are dropped. */
+    private fun contextBreakdown(contexts: List<Pair<JsonObject?, Double?>>): List<JsonObject> {
+        val keys = listOf("system", "user", "assistant", "tool")
+        val totals = (keys + "other").associateWithTo(linkedMapOf()) { 0.0 }
+        for ((characters, input) in contexts) {
+            if (characters == null || input == null || !input.isFinite() || input <= 0) continue
+            val estimated = keys.associateWith { kotlin.math.ceil((characters.num(it) ?: 0.0) / 4) }
+            val sum = estimated.values.sum()
+            val scale = if (sum > input) input / sum else 1.0
+            val tokens = estimated.mapValues { kotlin.math.floor(it.value * scale) }
+            tokens.forEach { (key, value) -> totals[key] = totals.getValue(key) + value }
+            totals["other"] = totals.getValue("other") + (input - tokens.values.sum()).coerceAtLeast(0.0)
+        }
+        val total = totals.values.sum()
+        return if (total <= 0) emptyList() else totals.filterValues { it > 0 }.map { (key, tokens) ->
+            Json.obj("key" to key, "tokens" to tokens.toLong(), "percent" to kotlin.math.floor(tokens / total * 1000 + 0.5) / 10)
+        }
     }
 
     private fun diffRecords(value: JsonElement?): List<JsonObject> = when {

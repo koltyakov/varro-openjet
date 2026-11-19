@@ -211,6 +211,10 @@ class VarroProjectService(private val project: Project) : Disposable {
             }
         }
         Disposer.register(this, Disposable { removeSelectionListener() })
+        val removePinListener = store.addPinListener { ids ->
+            broadcast("pinned-sessions/sync", Json.obj("sessionIds" to ids))
+        }
+        Disposer.register(this, Disposable { removePinListener() })
         ApplicationManager.getApplication().messageBus.connect(this)
             .subscribe(VarroModelStore.TOPIC, VarroModelStore.Listener {
                 broadcast("model-preferences/sync", modelStore.modelPreferences)

@@ -30,6 +30,8 @@ internal class StreamingToolContent {
         for (field in listOf("name", "tool")) if (source.has(field)) properties.addProperty(field, tool.name)
         val identity = Json.obj("id" to callID, "sessionID" to sessionID, "messageID" to tool.messageID)
         val reference = MessageContent.path(identity, directory)?.let(Json::toElement) ?: Json.toElement(true)
+        if (source.bool("deferred") == true || source.get("deferred")?.let { it.isJsonPrimitive && it.asJsonPrimitive.isString } == true)
+            properties.add("deferred", reference)
         fun summarize(state: JsonObject): JsonObject {
             val part = MessageContent.project(identity.deepCopy().apply {
                 addProperty("type", "tool"); addProperty("tool", tool.name); add("state", state)

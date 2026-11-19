@@ -22,6 +22,7 @@ object ApiRoutes {
 
     object Endpoints {
         const val REMOTE_IMAGE = "$NAMESPACE/remote-image"
+        const val LOCAL_IMAGE = "$NAMESPACE/local-image"
         const val PROMPT_COMPLETION = "$NAMESPACE/prompt-completion"
         const val PROMPT_COMPLETION_MODELS = "$NAMESPACE/prompt-completion/models"
         const val PROMPT_COMPLETION_TEST = "$NAMESPACE/prompt-completion/test"
@@ -212,6 +213,7 @@ object ApiRoutes {
 
     private val ROUTES: List<Route> = listOf(
         route(Endpoints.REMOTE_IMAGE, methodsNoQuery("POST")),
+        route(Endpoints.LOCAL_IMAGE, methodsNoQuery("POST")),
         route("/global/health", methodsNoQuery("GET")),
         route("/global/config", methodsNoQuery("GET")),
         route("/model/default", methodsNoQuery("GET")),

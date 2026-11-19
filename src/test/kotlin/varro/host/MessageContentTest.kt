@@ -94,4 +94,21 @@ class MessageContentTest {
         assertNotNull(projected.obj("properties").str("deferred"))
         assertTrue(event.toString().contains("base64"))
     }
+
+    @Test fun `bounded deferred events retain deferral rebuilt only from their current envelope`() {
+        for (marker in listOf(Json.toElement(true), Json.toElement("/session/foreign/message/foreign/part/foreign"))) {
+            for (type in listOf("input.ended", "called", "progress", "success", "failed")) {
+                val event = Json.obj("workspaceDirectory" to "/repo", "type" to "session.next.tool.$type",
+                    "properties" to Json.obj("sessionID" to "ses_one", "assistantMessageID" to "msg_one",
+                        "callID" to "call_one", "name" to "read", "deferred" to marker, "input" to Json.obj("path" to "a"),
+                        "text" to "{}", "content" to listOf(Json.obj("type" to "text", "text" to "short"))))
+                val result = StreamingToolContent().project(event)
+                assertEquals("/session/ses_one/message/msg_one/part/call_one?directory=%2Frepo", result.obj("properties").str("deferred"))
+                assertFalse(result.toString().contains("foreign"))
+            }
+        }
+        val noMessage = Json.obj("type" to "session.next.tool.progress", "properties" to Json.obj(
+            "sessionID" to "ses_one", "callID" to "call_one", "deferred" to true))
+        assertEquals(true, StreamingToolContent().project(noMessage).obj("properties").bool("deferred"))
+    }
 }
