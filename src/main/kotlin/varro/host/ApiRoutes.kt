@@ -392,6 +392,9 @@ object ApiRoutes {
         route("/session/:id/todo") { request, _ ->
             request.method == "GET" && request.optionalDirectory()
         },
+        route("/session/:id/goal") { request, _ ->
+            request.method == "GET" && request.optionalDirectory()
+        },
         route("/session/:id/child-task-controls") { request, _ ->
             request.method == "GET" && request.optionalDirectory()
         },

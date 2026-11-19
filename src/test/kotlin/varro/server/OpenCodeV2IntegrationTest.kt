@@ -330,6 +330,12 @@ class OpenCodeV2IntegrationTest {
             val historyBeforeStop = transport.request("GET", "/session/$id/message").data
             val inboxBeforeStop = transport.request("GET", "/api/session/$id/inbox").data
             val callsBeforeStop = providerRequests.get()
+            if (OpenCodeCli.compareVersions(version, "2.3.2") >= 0) {
+                assertTrue(transport.request("GET", "/session/$id/goal", options = RequestOptions(directory = workspace.toString())).data!!.isJsonNull)
+                assertEquals(historyBeforeStop, transport.request("GET", "/session/$id/message").data)
+                assertEquals(inboxBeforeStop, transport.request("GET", "/api/session/$id/inbox").data)
+                assertEquals(callsBeforeStop, providerRequests.get())
+            }
             val shell = transport.request("POST", "/api/shell", Json.obj(
                 "command" to if (System.getProperty("os.name").startsWith("Windows")) "ping -n 30 127.0.0.1 > NUL" else "sleep 30",
                 "cwd" to workspace.toString(), "metadata" to Json.obj("sessionID" to id),

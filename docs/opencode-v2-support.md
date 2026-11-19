@@ -1,8 +1,16 @@
 # OpenCode V2 support
 
-OpenJet supports V1 from 1.16.0 and V2 from 2.0.5. The webview and shared sources were synced from Varro's `main` branch at `28263880823f`, version 0.35.0. Tested baselines are V1 1.19.6 and V2 2.3.2. The Kotlin adapter handles released-server contracts, including generated skill, shell and synthetic transcript records. Synthetic text appears as automatic-action notices; canonical subagent completion metadata produces linked subagent activities. Pending and running V2 patch calls render as active edits. Assistant history preserves automatic retry metadata for recovery notices. History attachments use deferred references with Kotlin-generated thumbnails and on-demand original reads. Chat annotations retain bounded display context before deferral. [Session cleanup and usage export](session-cleanup.md) preserve statistics and optional parent transcripts before confirmed deletions.
+OpenJet supports V1 from 1.16.0 and V2 from 2.0.5. The webview and shared sources were synced from Varro's `main` branch at `021019d09de8`, version 0.35.1. Tested baselines are V1 1.19.6 and V2 2.3.2. The Kotlin adapter handles released-server contracts, including generated skill, shell and synthetic transcript records. Synthetic text appears as automatic-action notices, except goal kickoffs, which appear as user prompts. Canonical subagent completion metadata produces linked subagent activities. Pending and running V2 patch calls render as active edits. Assistant history preserves automatic retry metadata for recovery notices. History attachments use deferred references with Kotlin-generated thumbnails and on-demand original reads. Chat annotations retain bounded display context before deferral. [Session cleanup and usage export](session-cleanup.md) preserve statistics and optional parent transcripts before confirmed deletions.
 
 V2 sessions support `/pause` and a Resume action in the transcript. Pausing parks queued messages and interrupts with `resume=false`. Pause markers persist in the shared Varro session annotations, and session summaries and usage reports exclude paused time. Commit-message generation uses the stateless endpoint when the server advertises it, falling back to a helper session when the endpoint or selected model is unavailable before generation starts.
+
+When the native goal plugin is available, the composer shows its active, paused
+or complete goal with Pause, Resume and Clear controls. Goal inspection uses a
+location-scoped read-only RPC; controls use the existing native `goal` command.
+Kickoffs retain native message/part identities and own subsequent assistant
+replies, including inbox delivery. Internal continuations stay hidden. Older
+servers and locations without the plugin keep the row hidden without raising the
+connection support floor.
 
 Optional follow-up suggestions use V2 stateless generation after a completed Build response. They are enabled by default, with an application-only opt-out and model override in Settings > Tools > Varro > Models. The host verifies the source against idle server history and persists per-turn admission before inference. History reads are cache-only, and there is no helper-session fallback. Closing the originating editor leaves an admitted, bounded generation running while its project host remains alive. Other hosts wait at most 30 seconds for the shared result. Whole-host shutdown does not recover unfinished requests, and expiry of the 35-second pending grace never releases admission or permits another billed attempt. Dismissal and accepted new prompts retire stored suggestions without permitting regeneration. Clicked-action labels survive native message history and pending inbox projection. The action menu can start a background fork without selecting it or changing the main draft. Its session link is persisted only for a matching cached action and current source, with both sessions verified in the same workspace.
 
@@ -3101,6 +3109,71 @@ Remaining differences and verification limits:
 No new required Kotlin host or consumed-contract implementation gap remains in
 the reviewed changes. The listed platform boundaries, accepted codec choice and
 verification limits remain; this is not a claim of full backend/UI parity.
+
+## Upstream sync follow-up, 2026-11-19, Varro 0.35.1
+
+Reviewed `28263880823fee8733d06e9ed611bad704c39392` through
+`021019d09de812365711d2813bc67d27f584bed6`, Varro 0.35.1. The comparison
+covers all changed extension sources/tests, shared protocol, browser sources and
+`package.json`. A remote-ref check still resolved `main` to that revision.
+Browser dependencies, Node/npm pins, contributed settings and OpenCode baselines
+are unchanged. V1 remains 1.19.6 and V2 remains 2.3.2, with unchanged support floors.
+No new released OpenCode range needs review. OpenJet remains 0.11.0.
+
+| Upstream change | Kotlin alignment and regression coverage |
+| --- | --- |
+| `opencode-v2-adapter.ts`, `shared/session-goal.ts`, `util/webview-message.ts`; `GET /session/:id/goal` | `ApiRoutes.kt`, `OpenCodeV2Adapter.kt` and `protocol/SessionGoal.kt` expose only session-scoped GET inspection, translated to `POST /api/rpc/opencode.goal/get` with a location query and `{input:{sessionID}}`. Null output means no goal; malformed output fails rather than fabricating state. Unknown public queries and direct plugin RPCs are rejected. Tests cover scoped requests, strict response parsing, cancellation and unsupported-server errors without retries or fallback mutations. |
+| `opencode-v2-events.ts`, shared event names; `rpc.opencode.goal.changed` | `OpenCodeV2Events.kt` projects `session.goal.updated`, and `ServerEvents.kt` admits it to the existing workspace-filtered bridge. Tests retain native identity/directory, active/paused/complete states, reasons and explicit null clearing. Missing or malformed goals do not clear existing state. |
+| `opencode-v2-projection.ts`, `opencode-v2-adapter.ts`; native goal kickoff/history/inbox identity | `OpenCodeV2Projection.kt` recognizes canonical goal metadata, reconstructs multiline `/goal` objectives with one-pass entity decoding and preserves native IDs and user attachments. Internal goal continuations have no visible parts. `OpenCodeV2Adapter.kt` treats kickoffs as user parents in history, preceding pagination and delivered inbox state, while internal continuations cannot replace that parent. Tests cover pending/delivered deduplication, direct reads, pagination, failed streamed replies and unchanged unrelated synthetic records. |
+| `SessionGoalRow.tsx`; Pause, Resume and Clear | The vendored row uses the existing Kotlin native command adapter, sending only `command: goal` and the action argument, with no picker model/agent override or second prompt. Adapter fixtures verify the exact command-only request sequence. The row hides itself when optional goal inspection is unavailable. |
+
+The UI also moves Markdown tooltip/image/inline-slot children into declarative
+Solid portals instead of nested `render()` calls, and initializes image capability
+memos before registering composer effects. These unchanged vendor fixes restore
+skill-link visibility and skill-only composer startup. They require no JetBrains
+window, setting, migration or process change.
+
+The exact published V2 2.3.2 binary passed the Kotlin adapter and all three
+managed-service cases without skips through the compatibility helper's
+`--full-check`. Published V1 1.19.6 was enabled in the same run. All 920 enabled
+Kotlin tests passed; only the opt-in existing-database usage benchmark was
+skipped. The expanded V2 fixture confirms that the real location-scoped goal
+RPC returns null for a fresh session, with no history/inbox change or provider
+call. Fixtures use isolated HOME/XDG/database/service-state roots, not production
+state. Evidence is `build/opencode-compatibility/2.3.2/verification.json` and
+`build/upstream-sync-021019d0-release-check.log`.
+
+All 115 browser host tests, TypeScript checking, vendor integrity, browser build
+and `./gradlew check buildPlugin --rerun-tasks` passed. Six compatibility-helper
+regressions and the vendor-integrity script test passed. The selected upstream
+run passed 1,566 cases across eight files for goal adaptation, transcript
+projection, public routes, the goal row, Markdown, message rendering, composer
+and client behavior. Eleven Chromium cases passed for goal controls at narrow
+and wide sizes, skill-prompt visibility, selected-skill sends and local images.
+These upstream fixtures do not execute Kotlin or a live goal provider. Logs are
+`build/upstream-sync-021019d0-upstream-unit.log` and
+`build/upstream-sync-021019d0-upstream-e2e.log`.
+
+The package is `build/distributions/varro-openjet-0.11.0.zip`, SHA-256
+`db1108b94690acded176e2fd7e804bd2d997b6d3615ba9de5489d799e75b7fe4`.
+Plugin Verifier 1.411 checked this exact ZIP against IU-252.28539.97,
+IU-253.33813.55, IU-261.27258.48, IU-262.10968.63 and IU-263.6800.24.
+All five were compatible, with existing deprecated/experimental API warnings.
+The verifier log is `build/upstream-sync-021019d0-verifier.log`.
+No commit, push or tag was made.
+
+Remaining differences and verification limits:
+
+| Status | Upstream files/endpoints and OpenJet code | User-visible impact |
+| --- | --- | --- |
+| Optional plugin availability | Varro `opencode-v2-adapter.ts` and `SessionGoalRow.tsx`; OpenJet `OpenCodeV2Adapter.kt` and the same vendored row | Servers or locations without `opencode.goal/get` keep the goal row hidden. No generic plugin-RPC interface, helper prompt or host-owned goal state is substituted. |
+| Existing skill-admission difference | Varro `opencode-v2-adapter.ts` native `skills` payload and skill-command fallback; OpenJet `OpenCodeV2Adapter.kt` prompt/command submission | Kotlin still passes attached-skill guidance as prompt text and sends selected skill names through the native command route rather than upstream's registry-checked skill fallback. Tool-driven skill loading can still work, but direct selected-skill admission can differ. This older adapter behavior did not change upstream in this delta; the new Markdown rendering fixes are vendored unchanged. |
+| Existing backend/platform differences | The preceding sync review's tables name the corresponding Varro and OpenJet implementations | Accepted AVIF codec limits, attach-only local-file boundaries, older summary/context fallbacks, annotation-root selection, permission/quota/cleanup and Windows inspector differences remain. They were not re-audited in this goal-focused delta. |
+| Native UI and external behavior not verified | Varro `SessionGoalRow.tsx`, `MarkdownRenderer.tsx`, `ChatInput.tsx`; OpenJet `WebviewHost.kt` and the Kotlin adapter | Fixture Chromium tests do not establish JCEF layout/focus or live-provider goal execution. No interactive IDE sandbox, production session, live account/provider, native Windows/Linux run or Docker image build was used. |
+
+No new required Kotlin host or consumed-contract implementation gap remains in
+the reviewed delta. These statements do not claim full parity for the older
+differences or native UI behavior above.
 
 ## Verification
 

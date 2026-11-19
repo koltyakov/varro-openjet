@@ -178,6 +178,7 @@ read does not fall back to a local account.
 | `file-lock.ts` | `store/NativeFileLock.kt`, shared by follow-ups and V2 annotations |
 | `handy-integration.ts` | `host/HandyIntegration.kt` |
 | `session-transfer-catalog.ts` and move handling | `host/SessionTransfers.kt` |
+| Native session goals and kickoff projection | `protocol/SessionGoal.kt`, `server/OpenCodeV2Adapter.kt`, `server/OpenCodeV2Projection.kt`, `server/OpenCodeV2Events.kt` |
 | Permission rules and review | `host/PermissionService.kt`, `host/ProjectPermissionConfig.kt`, `host/PermissionJudge.kt` |
 | Queued sends and Ralph orchestration | `host/QueuedDispatches.kt`, `host/RalphRunner.kt` |
 | `attention-notifications.ts`, `native-notifications.ts` | `host/AttentionNotifications.kt`, `host/ProjectNotifications.kt` |
@@ -367,6 +368,22 @@ Two request kinds share the channel:
 MCP defaults include only the names of effective remote servers whose OAuth is not explicitly disabled. Header values and credential material are not exposed by this metadata. The unchanged V2 adapter maps disconnect and auth removal to the selected MCP integration, and sign-in to scoped native OAuth attempts. The vendored UI disconnects before credential removal, refreshes authoritative status and starts account switching only after removal succeeds. Manual-code fallback retains attempt/workspace correlation; browser completion is observed through MCP status without a chat prompt or session mutation.
 
 `POST /varro/citation-symbols` resolves standalone calls and class-like names through JetBrains language plugins' symbol indexes. `RestProxy` authorizes the owning session directory as it does for exact file citations. `CitationSymbols` accepts at most 32 symbols of 128 characters, links only one exact existing definition inside that directory, and returns `pending` for unsettled calls. It deduplicates lookups and bounds cache size, response wait time and outstanding provider calls. `IndexedCitationSymbols` uses non-blocking read actions and leaves code inert when indexes or language support are unavailable. It never scans files for guessed definitions. The prompt also asks agents to cite verified paths and lines explicitly.
+
+## Native session goals
+
+`GET /session/:id/goal` is the only public goal-inspection route. The V2 adapter
+calls the location-scoped `POST /api/rpc/opencode.goal/get` with the session ID in
+its input, validates the returned `output`, and distinguishes explicit null from
+invalid data. Direct plugin RPCs are not exposed to the browser. Native
+`rpc.opencode.goal.changed` events become `session.goal.updated` through the
+existing workspace/session filters. The browser keeps goals optional when the
+plugin is absent and sends Pause, Resume and Clear through native `goal` commands.
+
+Goal kickoffs use native metadata and a nonempty description to establish a user
+prompt. The adapter extracts the full objective, decodes escaped text once and
+keeps the message/part identities and attachments. Pending inbox kickoffs retain
+those identities after delivery and own following assistant replies. Internal
+goal continuations remain invisible and cannot replace that parent.
 
 ## Deferred message content and thumbnails
 

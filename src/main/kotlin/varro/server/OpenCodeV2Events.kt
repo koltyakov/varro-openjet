@@ -23,6 +23,11 @@ internal object OpenCodeV2Events {
         }
         when (type) {
             "server.connected" -> return listOf(emit(type))
+            "rpc.opencode.goal.changed" -> {
+                val goal = SessionGoal.parse(data.get("goal"))
+                if (sessionID.isEmpty() || data.get("goal")?.isJsonNull != true && goal == null) return emptyList()
+                return listOf(emit("session.goal.updated", Json.obj("sessionID" to sessionID, "goal" to goal)))
+            }
             "session.created" -> return listOf(emit(type, Json.obj("info" to data.deepCopy().apply {
                 addProperty("id", sessionID); addProperty("title", data.str("title").orEmpty()); add("directory", base.get("workspaceDirectory"))
                 add("time", Json.obj("created" to event.get("created"), "updated" to event.get("created")))

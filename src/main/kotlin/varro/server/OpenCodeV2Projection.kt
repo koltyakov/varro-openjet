@@ -105,6 +105,13 @@ internal object OpenCodeV2Projection {
     fun transcript(message: JsonObject) = message.str("type") in setOf("user", "synthetic", "assistant", "compaction", "skill", "shell") ||
         (message.str("type") == "idle" && message.str("outcome") in setOf("failed", "interrupted"))
 
+    fun goalKickoff(message: JsonObject?) = message.obj("metadata").str("source") == "goal" && !message.str("description").isNullOrEmpty()
+
+    fun userPrompt(message: JsonObject) = message.str("type") == "user" || message.str("type") == "synthetic" && goalKickoff(message)
+
+    private fun goalPrompt(text: String): String? = Regex("<untrusted_objective>\\n([\\s\\S]*?)\\n</untrusted_objective>")
+        .find(text)?.groupValues?.get(1)?.let { "/goal " + it.replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&") }
+
     fun toolOutput(value: JsonElement?) = value.asArrayOrNull().orEmpty().mapNotNull { it.asObjectOrNull() }
         .filter { it.str("type") == "text" }.joinToString("\n") { it.str("text").orEmpty() }
 
@@ -204,7 +211,8 @@ internal object OpenCodeV2Projection {
                 value.obj("metadata").str("varroDelivery")?.takeIf { it == "steer" || it == "queue" }?.let {
                     info.addProperty("delivery", it)
                 }
-                parts.add(part(0, "text", Json.obj("text" to value.str("text").orEmpty())))
+                val text = value.str("text").orEmpty()
+                parts.add(part(0, "text", Json.obj("text" to if (value.obj("metadata").str("source") == "goal") goalPrompt(text) ?: text else text)))
                 value.arr("files").orEmpty().forEach { entry ->
                     val file = entry.asObjectOrNull()
                     parts.add(part(parts.size, "file", Json.obj("mime" to file.str("mime"), "filename" to file.str("name"),
@@ -218,6 +226,10 @@ internal object OpenCodeV2Projection {
                 }
             } else if (type == "synthetic") {
                 val metadata = value.obj("metadata")
+                if (metadata.str("source") == "goal") {
+                    val text = if (goalKickoff(value)) goalPrompt(value.str("text").orEmpty()) ?: value.str("description") else null
+                    return Json.obj("info" to info, "parts" to if (text == null) emptyList() else listOf(part(0, "text", Json.obj("text" to text))))
+                }
                 val childID = metadata.str("childID")
                 val state = metadata.str("state")
                 parts.add(part(0, "text", Json.obj("text" to value.str("text").orEmpty(), "synthetic" to true).apply {

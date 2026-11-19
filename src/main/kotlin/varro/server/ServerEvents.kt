@@ -46,7 +46,7 @@ object ServerEvents {
         "file.edited", "file.watcher.updated", "reference.updated", "plugin.added",
         "project.directories.updated", "project.updated",
         "session.created", "session.updated", "session.archived", "session.unarchived", "session.deleted", "session.status", "session.error",
-        "session.idle", "session.compacted", "session.diff",
+        "session.idle", "session.compacted", "session.diff", "session.goal.updated",
         "message.updated", "message.part.updated", "message.part.delta", "message.part.removed",
         "message.removed",
         "permission.updated", "permission.asked", "permission.replied",

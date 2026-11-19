@@ -62,7 +62,11 @@ internal class OpenCodeV2Adapter(
             (event.obj("location") ?: data.obj("location")).str("directory")?.let { addProperty("directory", it) }
             if (type == "session.agent.selected") add("agent", data.get("agent"))
             if (type == "session.model.selected") add("model", data.get("model"))
-            if (type == "session.inbox.enqueued") data.str("inboxID")?.let { inputTypes[it] = data.obj("item").str("type").orEmpty() }
+            if (type == "session.inbox.enqueued") data.str("inboxID")?.let {
+                val item = data.obj("item")
+                inputTypes[it] = if (item.str("type") == "synthetic" && OpenCodeV2Projection.goalKickoff(item.obj("payload")))
+                    "user" else item.str("type").orEmpty()
+            }
             if (type == "session.inbox.delivered") data.str("inboxID")?.let {
                 if (inputTypes.remove(it) == "user") { addProperty("parentID", it); addProperty("hasAssistant", false) }
             }
@@ -267,6 +271,12 @@ internal class OpenCodeV2Adapter(
         }
         Regex("^/session/([^/]+)(?:/(.*))?$").matchEntire(route)?.let { match ->
             val id = decode(match.groupValues[1]); val endpoint = "/api/session/${encode(id)}"; val action = match.groupValues[2]
+            if (action == "goal" && method == "GET") {
+                val response = raw("POST", scoped("/api/rpc/opencode.goal/get"), Json.obj("input" to Json.obj("sessionID" to id))).asObjectOrNull()
+                options.checkCancelled()
+                if (response?.get("output")?.isJsonNull == true) return result(null)
+                return result(SessionGoal.parse(response?.get("output")) ?: error("Invalid OpenCode goal response"))
+            }
             if ((action == "child-task-controls" && method == "GET") ||
                 (action in setOf("interrupt-child", "background-parent") && method == "POST")) {
                 require(body == null) { "Child task controls do not accept a body" }
@@ -525,7 +535,7 @@ internal class OpenCodeV2Adapter(
         } while (cursor != null && count < limit)
         val ordered = records.asReversed()
         val firstAssistant = ordered.indexOfFirst { it.str("type") in setOf("assistant", "skill", "shell") || (it.str("type") == "idle" && it.str("outcome") in setOf("failed", "interrupted")) }
-        val firstUser = ordered.indexOfFirst { it.str("type") == "user" }
+        val firstUser = ordered.indexOfFirst(OpenCodeV2Projection::userPrompt)
         var parent = ordered.getOrNull(firstAssistant)?.str("id")?.let { parents[it] }.orEmpty()
         var assistantFailed = false
         if (parent.isEmpty() && firstAssistant >= 0 && (firstUser < 0 || firstAssistant < firstUser)) {
@@ -535,9 +545,9 @@ internal class OpenCodeV2Adapter(
                 require(contextSeen.add(contextCursor)) { "OpenCode repeated a context pagination cursor" }
                 val page = raw("$endpoint/message?limit=200&cursor=${encode(contextCursor)}").asObjectOrNull() ?: error("Invalid context page")
                 val entries = objects(page.get("data"))
-                val preceding = entries.takeWhile { it.str("type") != "user" }
+                val preceding = entries.takeWhile { !OpenCodeV2Projection.userPrompt(it) }
                 assistantFailed = assistantFailed || preceding.any { it.str("type") == "assistant" && it.hasNonNull("error") }
-                val user = entries.firstOrNull { it.str("type") == "user" }
+                val user = entries.firstOrNull(OpenCodeV2Projection::userPrompt)
                 if (user != null) { parent = user.str("id").orEmpty(); break }
                 if (entries.isEmpty()) break
                 contextCursor = page.obj("cursor").str("next")
@@ -551,7 +561,7 @@ internal class OpenCodeV2Adapter(
             if (!OpenCodeV2Projection.transcript(message) || (message.str("type") == "idle" && message.str("outcome") == "failed" && assistantFailed)) return@forEach
             val details = context.deepCopy().apply { failures[message.str("id")]?.entrySet()?.forEach { add(it.key, it.value) } }
             val projected = OpenCodeV2Projection.message(message, id, directory.orEmpty(), parent, details)
-            if (message.str("type") == "user") { parent = message.str("id").orEmpty(); assistantFailed = false }
+            if (OpenCodeV2Projection.userPrompt(message)) { parent = message.str("id").orEmpty(); assistantFailed = false }
             if (message.str("type") == "assistant" && message.hasNonNull("error")) assistantFailed = true
             if (projected.obj("info").str("role") == "assistant" && parent.isNotEmpty()) parents[message.str("id")!!] = parent
             messages.add(projected)
@@ -559,8 +569,9 @@ internal class OpenCodeV2Adapter(
         while (parents.size > 4096) parents.keys.firstOrNull()?.let(parents::remove)
         val ids = messages.map { it.obj("info").str("id") }.toMutableSet()
         inbox.sortedBy { it.obj("time").long("created") ?: 0 }.forEach { item ->
-            if (item.str("type") == "synthetic" && item.obj("payload").obj("metadata").str("source") == "shell" &&
-                item.obj("payload").obj("metadata").str("state") == "cancelled" && ids.add(item.str("id"))) {
+            if (item.str("type") == "synthetic" &&
+                (item.obj("payload").obj("metadata").str("source") == "shell" && item.obj("payload").obj("metadata").str("state") == "cancelled" ||
+                    OpenCodeV2Projection.goalKickoff(item.obj("payload"))) && ids.add(item.str("id"))) {
                 messages.add(OpenCodeV2Projection.message(item.obj("payload")!!.deepCopy().apply {
                     add("id", item.get("id")); addProperty("type", "synthetic"); add("time", item.get("time"))
                 }, id, directory.orEmpty(), context = context))
