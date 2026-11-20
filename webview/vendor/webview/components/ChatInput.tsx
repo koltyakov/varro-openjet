@@ -19,6 +19,7 @@ import {
 } from '../../shared/pasted-text';
 import { captureExtensionContexts } from '../host/extensions';
 import { getFollowupActionTitle } from '../../shared/followups';
+import { createRecordSnapshots } from '../lib/record-snapshots';
 import type { ExtensionContext } from '../../shared/extension-context';
 import { cloneExtensionContexts } from '../../shared/extension-context';
 import {
@@ -202,7 +203,7 @@ import {
 import { getLeafPathName, isSamePath } from '../lib/path-display';
 import { splitExternalLinkText } from '../lib/external-link';
 import { editPencilIcon } from '../lib/ui-icons';
-import type { Session } from '../types';
+import type { MessageEntry, Session } from '../types';
 import {
   formatContextLineRanges,
   getSelectionRangesFromEditorContext,
@@ -3449,7 +3450,8 @@ export function ChatInput(props: { newSession?: boolean; onBeforeSend?: () => vo
             (command) => command.source === 'skill' && command.name.toLowerCase() === name
           )
         : undefined;
-    if (builtInCommand === null && !fallbackCommand && !skillCommand) return false;
+    const serverCommandName = fallbackCommand?.serverCommand ?? skillCommand?.name;
+    if (builtInCommand === null && !fallbackCommand && !serverCommandName) return false;
     setHistoryIndex(null);
     setHistoryDraft('');
     invalidatePendingPdfAttachments();
@@ -3461,13 +3463,13 @@ export function ChatInput(props: { newSession?: boolean; onBeforeSend?: () => vo
       await builtInCommand;
       return true;
     }
-    if (skillCommand) {
+    if (serverCommandName) {
       setWorkspaceSendPending(true);
       let sent = false;
       try {
         sent = options
-          ? await runSlashCommandByName(skillCommand.name, args, options)
-          : await runSlashCommandByName(skillCommand.name, args);
+          ? await runSlashCommandByName(serverCommandName, args, options)
+          : await runSlashCommandByName(serverCommandName, args);
       } catch (error) {
         setError(error instanceof Error ? error.message : String(error));
       } finally {
@@ -6018,7 +6020,16 @@ export function ChatInput(props: { newSession?: boolean; onBeforeSend?: () => vo
 
   const clipboardImagesNeedVision = () =>
     composerClipboardImages().length > 0 && !currentPromptCanHandleImages();
-  const messagesBySession = createMemo(() => getMessageLookup().bySessionId);
+  const composerMessageSnapshots = createRecordSnapshots(() => state.messages);
+  const messagesBySession = createMemo(() => {
+    const bySessionId = new Map<string, MessageEntry[]>();
+    for (const entry of composerMessageSnapshots()) {
+      const entries = bySessionId.get(entry.info.sessionID);
+      if (entries) entries.push(entry);
+      else bySessionId.set(entry.info.sessionID, [entry]);
+    }
+    return bySessionId;
+  });
   const sessionsById = createMemo(
     () => new Map(state.sessions.map((session) => [session.id, session]))
   );
@@ -6409,7 +6420,7 @@ export function ChatInput(props: { newSession?: boolean; onBeforeSend?: () => vo
     if (!sessionId) return undefined;
     const sessionIds = getSessionTreeIdsForSession(sessionId);
     const rootSessionId = getSessionTreeRootId(sessionId) || sessionId;
-    const latestPromptCreatedAt = (getMessageLookup().bySessionId.get(rootSessionId) ?? []).reduce(
+    const latestPromptCreatedAt = (messagesBySession().get(rootSessionId) ?? []).reduce(
       (latest, entry) =>
         entry.info.role === 'user' && entry.info.sessionID === rootSessionId
           ? Math.max(latest, entry.info.time.created)
@@ -6586,7 +6597,7 @@ export function ChatInput(props: { newSession?: boolean; onBeforeSend?: () => vo
       steering.length === 0
         ? new Set<string>()
         : new Set(
-            state.messages
+            composerMessageSnapshots()
               .filter((entry) => entry.info.role === 'user' && !entry.info.pendingDelivery)
               .map((entry) => entry.info.id)
           );
@@ -6595,7 +6606,7 @@ export function ChatInput(props: { newSession?: boolean; onBeforeSend?: () => vo
     const sessionId = composerSessionId();
     return [
       ...queued,
-      ...((sessionId && getMessageLookup().bySessionId.get(sessionId)) || [])
+      ...((sessionId && messagesBySession().get(sessionId)) || [])
         .filter(
           (entry) =>
             entry.info.sessionID === composerSessionId() &&

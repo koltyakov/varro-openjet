@@ -2,13 +2,24 @@ import { createEffect, createSignal, onCleanup, Show } from 'solid-js';
 import { parseSessionGoal } from '../../../shared/session-goal';
 import type { SessionGoal } from '../../../shared/session-goal';
 import { client, serverEvents } from '../../lib/client';
-import { pauseIcon, playIcon, trashIcon } from '../../lib/ui-icons';
+import {
+  clipboardCheckIcon,
+  pasteClipboardIcon,
+  pauseIcon,
+  playIcon,
+  trashIcon,
+  xmarkIcon,
+} from '../../lib/ui-icons';
+import { Tooltip } from '../Tooltip';
 import { UiIcon } from '../UiIcon';
 
 export function SessionGoalRow(props: { sessionID: string | null; directory?: string }) {
   const [goal, setGoal] = createSignal<SessionGoal | null>(null);
   const [pending, setPending] = createSignal(false);
   const [error, setError] = createSignal<string | null>(null);
+  const [objectiveClipped, setObjectiveClipped] = createSignal(false);
+  // oxlint-disable-next-line no-unassigned-vars
+  let goalRow: HTMLDivElement | undefined;
 
   createEffect(
     () => ({ sessionID: props.sessionID, directory: props.directory }),
@@ -16,6 +27,7 @@ export function SessionGoalRow(props: { sessionID: string | null; directory?: st
       setGoal(null);
       setPending(false);
       setError(null);
+      setObjectiveClipped(false);
       if (!sessionID) return;
       const controller = new AbortController();
       let turn = 0;
@@ -78,57 +90,98 @@ export function SessionGoalRow(props: { sessionID: string | null; directory?: st
     }
   };
 
+  const measureObjective = (element: HTMLElement) => {
+    const label = element.querySelector<HTMLElement>('.chat-queue-label');
+    setObjectiveClipped(
+      !!label && (label.scrollWidth > label.clientWidth || label.scrollHeight > label.clientHeight)
+    );
+  };
+
   return (
     <Show when={goal()}>
       {(current) => (
-        <div class="chat-queue-container chat-session-goal" role="group" aria-label="Session goal">
+        <div
+          ref={goalRow}
+          class="chat-queue-container chat-session-goal"
+          role="group"
+          aria-label="Session goal"
+        >
           <div class="chat-queue-item">
-            <span class="chat-queue-body">
-              <span class="chat-queue-label" title={current().objective}>
-                Goal: {current().objective}
+            <Tooltip
+              variant="panel"
+              anchor={() => goalRow}
+              disabled={!current().reason && !objectiveClipped()}
+              content={
+                <>
+                  <Show when={objectiveClipped()}>
+                    <div class="chat-goal-tooltip-objective">{current().objective}</div>
+                  </Show>
+                  <Show when={current().reason}>
+                    <div class="chat-goal-tooltip-reason">{current().reason}</div>
+                  </Show>
+                </>
+              }
+            >
+              <span
+                class="chat-queue-body"
+                tabindex={0}
+                onMouseEnter={(event) => measureObjective(event.currentTarget)}
+                onFocus={(event) => measureObjective(event.currentTarget)}
+              >
+                <UiIcon
+                  class="chat-goal-icon"
+                  source={current().status === 'complete' ? clipboardCheckIcon : pasteClipboardIcon}
+                  width={14}
+                  height={14}
+                  role="img"
+                  aria-label={current().status === 'complete' ? 'Goal complete' : 'Goal'}
+                />
+                <span class="chat-queue-label">{current().objective}</span>
               </span>
-            </span>
-            <span class="chat-background-service-status" title={current().reason}>
-              {current().status === 'active'
-                ? 'Active'
-                : current().status === 'paused'
-                  ? 'Paused'
-                  : 'Complete'}
-            </span>
+            </Tooltip>
+            <Show when={current().status === 'paused'}>
+              <Tooltip content={current().reason || 'Paused'}>
+                <span class="chat-queue-paused-label">Paused</span>
+              </Tooltip>
+            </Show>
             <div class="chat-goal-controls">
               <Show when={current().status !== 'complete'}>
+                <Tooltip content={current().status === 'paused' ? 'Resume goal' : 'Pause goal'}>
+                  <button
+                    type="button"
+                    class="chat-queue-control"
+                    aria-label={current().status === 'paused' ? 'Resume goal' : 'Pause goal'}
+                    disabled={pending()}
+                    onClick={() => void control(current().status === 'paused' ? 'resume' : 'pause')}
+                  >
+                    <UiIcon
+                      source={current().status === 'paused' ? playIcon : pauseIcon}
+                      width={14}
+                      height={14}
+                    />
+                  </button>
+                </Tooltip>
+              </Show>
+              <Tooltip content={current().status === 'complete' ? 'Close goal' : 'Clear goal'}>
                 <button
                   type="button"
-                  class="chat-queue-control"
-                  aria-label={current().status === 'paused' ? 'Resume goal' : 'Pause goal'}
-                  title={current().status === 'paused' ? 'Resume goal' : 'Pause goal'}
+                  class={[
+                    'chat-queue-control',
+                    current().status === 'complete' ? 'chat-goal-close' : 'chat-queue-remove',
+                  ]}
+                  aria-label={current().status === 'complete' ? 'Close goal' : 'Clear goal'}
                   disabled={pending()}
-                  onClick={() => void control(current().status === 'paused' ? 'resume' : 'pause')}
+                  onClick={() => void control('clear')}
                 >
                   <UiIcon
-                    source={current().status === 'paused' ? playIcon : pauseIcon}
+                    source={current().status === 'complete' ? xmarkIcon : trashIcon}
                     width={14}
                     height={14}
                   />
                 </button>
-              </Show>
-              <button
-                type="button"
-                class="chat-queue-control chat-queue-remove"
-                aria-label="Clear goal"
-                title="Clear goal"
-                disabled={pending()}
-                onClick={() => void control('clear')}
-              >
-                <UiIcon source={trashIcon} width={14} height={14} />
-              </button>
+              </Tooltip>
             </div>
           </div>
-          <Show when={current().status !== 'active' && current().reason}>
-            <div class="chat-goal-reason" aria-label="Goal reason">
-              {current().reason}
-            </div>
-          </Show>
           <Show when={error()}>
             <div class="chat-goal-error" role="alert">
               {error()}

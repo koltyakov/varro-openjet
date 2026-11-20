@@ -1,11 +1,12 @@
 # OpenCode V2 support
 
-OpenJet supports V1 from 1.16.0 and V2 from 2.0.5. The webview and shared sources were synced from Varro's `main` branch at `021019d09de8`, version 0.35.1. Tested baselines are V1 1.19.6 and V2 2.3.2. The Kotlin adapter handles released-server contracts, including generated skill, shell and synthetic transcript records. Synthetic text appears as automatic-action notices, except goal kickoffs, which appear as user prompts. Canonical subagent completion metadata produces linked subagent activities. Pending and running V2 patch calls render as active edits. Assistant history preserves automatic retry metadata for recovery notices. History attachments use deferred references with Kotlin-generated thumbnails and on-demand original reads. Chat annotations retain bounded display context before deferral. [Session cleanup and usage export](session-cleanup.md) preserve statistics and optional parent transcripts before confirmed deletions.
+OpenJet supports V1 from 1.16.0 and V2 from 2.0.5. The webview and shared sources were synced from Varro's `main` branch at `ee753860a0b4`, version 0.35.1. Tested baselines are V1 1.19.6 and V2 2.3.2. The Kotlin adapter handles released-server contracts, including generated skill, shell and synthetic transcript records. Synthetic text appears as automatic-action notices, except goal kickoffs, which appear as user prompts. Canonical subagent completion metadata produces linked subagent activities. Pending and running V2 patch calls render as active edits. Assistant history preserves automatic retry metadata for recovery notices. History attachments use deferred references with Kotlin-generated thumbnails and on-demand original reads. Chat annotations retain bounded display context before deferral. [Session cleanup and usage export](session-cleanup.md) preserve statistics and optional parent transcripts before confirmed deletions.
 
 V2 sessions support `/pause` and a Resume action in the transcript. Pausing parks queued messages and interrupts with `resume=false`. Pause markers persist in the shared Varro session annotations, and session summaries and usage reports exclude paused time. Commit-message generation uses the stateless endpoint when the server advertises it, falling back to a helper session when the endpoint or selected model is unavailable before generation starts.
 
 When the native goal plugin is available, the composer shows its active, paused
-or complete goal with Pause, Resume and Clear controls. Goal inspection uses a
+or complete goal with Pause, Resume and Clear controls. Completed goals show a
+Close action that uses the same native clear command. Goal inspection uses a
 location-scoped read-only RPC; controls use the existing native `goal` command.
 Kickoffs retain native message/part identities and own subsequent assistant
 replies, including inbox delivery. Internal continuations stay hidden. Older
@@ -3174,6 +3175,74 @@ Remaining differences and verification limits:
 No new required Kotlin host or consumed-contract implementation gap remains in
 the reviewed delta. These statements do not claim full parity for the older
 differences or native UI behavior above.
+
+## Upstream sync follow-up, 2026-11-19, ee753860
+
+Reviewed `021019d09de812365711d2813bc67d27f584bed6` through
+`ee753860a0b425faf23eef356ec8f2744afd1ba5`, which is still Varro 0.35.1.
+The checkout was clean before syncing, and a remote-ref check resolved `main`
+to that revision. The complete comparison has no changes under `src/extension`
+or `src/shared`, or in `package.json`. Host endpoints, messages, settings,
+persistence formats, server adapters, SDK/client baselines and dependencies
+are unchanged.
+V1 remains 1.19.6 and V2 remains 2.3.2; support floors remain 1.16.0 and 2.0.5.
+No new released OpenCode range needs review. OpenJet remains 0.11.0.
+
+| Upstream change | OpenJet integration and review |
+| --- | --- |
+| `ChatInput.tsx`, `chat-input/slash-commands.ts`, `CompletionMenu.tsx`; session-list server commands | The vendor refresh keeps a command's `serverCommand` identity and uses the new-session command flow for native commands such as `/goal`, not only skills. The captured workspace and acceptance/rejection handling use existing `POST /session` and `POST /session/:id/command` contracts. `OpenCodeV2Adapter.kt` already supports those requests; no Kotlin change is required. Browser regressions cover Enter/button submission and rejected draft restoration. |
+| `SessionGoalRow.tsx`, `Tooltip.tsx`, `UserMessageContent.tsx` and styles | Goal icons, row-width description panels, paused labels, completed-goal Close controls and `/goal` chips are vendored unchanged. Close still sends the existing `goal clear` command. Native goal RPC/events and kickoff identities remain the Kotlin implementation from the preceding sync. No new host tooltip, clipboard or window API is involved. |
+| `record-snapshots.ts`, `MessageList.tsx`, `ChatInput.tsx`, `ChangedFilesList.tsx`, `SessionListView.tsx`, `state-messages.ts` | Per-record immutable scan snapshots and 128-record chunks bound reactive aggregation. Canonical records still own rows, editing, mutations and anchors; unfinished steps retain live fields. Stream probes subscribe to their lookup/range before untracked scans. Three new OpenJet host regressions check nested updates, unchanged/canonical identity, keyed reorder/removal/reinsertion, and five tail updates over 3,000 records without `HUGE_FAN_IN` diagnostics. |
+| `MessageList.tsx`; Thinking-to-text reserve transfer | The UI moves the hidden Thinking row's measured height into the consumable append reserve before releasing the activity-summary anchor, rather than retaining two blank spaces. Session replacement, removal and visible Thinking clear the transfer. This is browser geometry, not Kotlin message truncation or protocol buffering. |
+
+The new snapshot regressions exposed an older test-runner limitation:
+`resolve.conditions` alone left Node using Solid's inert server entry for
+external imports. `webview/vitest.host.config.mts` now explicitly resolves the
+browser development runtime. Existing queued-context and theme fixtures flush
+reactive writes before assertions. All 118 host cases pass against real browser
+reactivity; no diagnostic is suppressed in the new 3,000-record fixture.
+The vendored sources remain unmodified.
+
+The final compatibility-helper `--full-check` passed
+`./gradlew check buildPlugin --rerun-tasks` with the exact published V2 2.3.2
+binary and the published V1 1.19.6 fixture enabled. All 920 enabled Kotlin tests
+passed; only the opt-in existing-database usage benchmark was skipped. The V1
+adapter, V2 adapter and all three managed-service cases passed without skips.
+Fixtures use isolated HOME/XDG/database/service-state roots. Evidence is
+`build/opencode-compatibility/2.3.2/verification.json` and
+`build/upstream-sync-ee753860-release-check.log`.
+
+All 118 browser host tests, TypeScript checking, vendor integrity and browser
+bundling passed. Six compatibility-helper regressions and the vendor-integrity
+script test passed. The upstream run passed 7,481 cases across 303 files,
+including all webview/shared tests and the scoped diagnostic-filter tests.
+All 49 Chromium cases passed for session goals, session-list commands, inline
+chip alignment, activity-collapse handoff, short streaming transcripts, tool
+grouping and native-thumb ownership in the browser harness. Logs are
+`build/upstream-sync-ee753860-upstream-unit.log` and
+`build/upstream-sync-ee753860-upstream-e2e.log`. These are fixture correctness
+and work-count results, not native JCEF timing measurements.
+
+The package is `build/distributions/varro-openjet-0.11.0.zip`, SHA-256
+`5c2b3319b3c7cd1b4f0da0c7d472147f1403fdb99ac52ca2e54beca568e6b0bf`.
+All 769 recorded source/build inputs remained unchanged through final checks.
+Plugin Verifier 1.411 checked this exact archive against IU-252.28539.97,
+IU-253.33813.55, IU-261.27258.48, IU-262.10968.63 and IU-263.6800.24.
+All five were compatible, with existing deprecated/experimental API warnings.
+The verifier log is `build/upstream-sync-ee753860-verifier.log`.
+No commit, push or tag was made.
+
+Remaining differences and verification limits:
+
+| Status | Upstream files/endpoints and OpenJet code | User-visible impact |
+| --- | --- | --- |
+| Existing skill-admission difference | Varro `opencode-v2-adapter.ts`; OpenJet `OpenCodeV2Adapter.kt` prompt/command submission, described in the preceding review | Kotlin still uses text guidance for attached skills and lacks upstream's registry-checked skill-command fallback. Selected-skill admission can differ. This delta changes browser routing for native commands, not that older adapter behavior. |
+| Existing backend/platform differences | Earlier review tables identify the Varro/OpenJet permission, annotation-root, quota, cleanup, local-file, thumbnail and Windows inspector implementations | Previously documented behavior differences remain, including AVIF previews, older summary/context fallbacks and cross-host state/polling differences. None of those upstream host implementations changed in this delta. |
+| Native UI and performance not verified | Varro `MessageList.tsx`, `record-snapshots.ts`, goal/tooltip/chip UI; OpenJet `WebviewHost.kt` and the same vendored sources | Automated browser work-count and geometry tests do not establish JCEF scrolling or editor performance. No same-input native IDE performance comparison, interactive JCEF sandbox, live provider/goal execution, native Windows/Linux run or Docker image build was performed. No production session was used. |
+
+No new required Kotlin backend or consumed-contract implementation gap remains
+in the reviewed changes. No VS Code-only host change requires a JetBrains port.
+The earlier differences and verification limits above remain.
 
 ## Verification
 

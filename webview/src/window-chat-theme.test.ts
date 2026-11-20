@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import { flush as flushSolid } from 'solid-js';
 import { parseExtensionMessage } from '../vendor/shared/extension-message';
 import type { WindowChatTheme } from '../vendor/shared/protocol';
 
@@ -38,6 +39,7 @@ beforeEach(() => {
 
 afterEach(() => {
   syncWindowChatTheme({ theme: 'dark' });
+  flushSolid();
   styles.clear();
   classes.clear();
   vi.clearAllMocks();
@@ -54,12 +56,15 @@ it('preserves the native theme payload and rejects malformed saved preferences',
 
 it('restores the reverse preference and follows the opposite of a new IDE theme', () => {
   expect(syncWindowChatTheme({ theme: 'dark', windowChatTheme: pair })).toBe('light');
+  flushSolid();
   expect([...styles][0]?.textContent).toContain('--vscode-editor-background: #ffffff !important');
   expect(syncWindowChatTheme({ theme: 'light', windowChatTheme: {
     ...pair, counterpart: { name: 'Varro dark', kind: 'dark', colors: {} },
   } })).toBe('dark');
+  flushSolid();
   expect(styles.size).toBe(1);
   toggleWindowChatTheme();
+  flushSolid();
   expect(windowChatThemeReversed()).toBe(false);
   expect(styles.size).toBe(0);
   expect(setTheme).toHaveBeenLastCalledWith('light');
@@ -69,8 +74,11 @@ it('restores the reverse preference and follows the opposite of a new IDE theme'
 
 it('removes the override for sidebar payloads and ignores toggles there', () => {
   syncWindowChatTheme({ theme: 'dark', windowChatTheme: pair });
+  flushSolid();
   expect(syncWindowChatTheme({ theme: 'dark' })).toBe('dark');
+  flushSolid();
   toggleWindowChatTheme();
+  flushSolid();
   expect(windowChatThemeReversed()).toBe(false);
   expect(styles.size).toBe(0);
   expect(postMessage).not.toHaveBeenCalled();

@@ -378,6 +378,9 @@ invalid data. Direct plugin RPCs are not exposed to the browser. Native
 `rpc.opencode.goal.changed` events become `session.goal.updated` through the
 existing workspace/session filters. The browser keeps goals optional when the
 plugin is absent and sends Pause, Resume and Clear through native `goal` commands.
+Completed goals show Close, which still sends `goal clear`. The row-width
+objective/reason panel and inline `/goal` chip are browser presentation, with no
+additional host request.
 
 Goal kickoffs use native metadata and a nonempty description to establish a user
 prompt. The adapter extracts the full objective, decodes escaped text once and
