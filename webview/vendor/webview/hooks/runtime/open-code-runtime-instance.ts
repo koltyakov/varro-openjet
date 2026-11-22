@@ -755,12 +755,11 @@ function setSessionMessagesIncremental(
         mergeSessionMessages(current, sessionId, messages),
         options
       );
-      // Size the cache from the plain server copy: a snapshot of the store entries walks every
-      // field through store proxies on each sync.
+      // Size the rows actually cached: reconciliation can materialize queued streaming text or keep
+      // optimistic rows and extra parts that the incoming copy lacks.
       setCachedSessionMessages(
         sessionId,
-        draft.messages.filter((entry) => entry.info.sessionID === sessionId),
-        messages.filter((entry) => entry.info.sessionID === sessionId)
+        draft.messages.filter((entry) => entry.info.sessionID === sessionId)
       );
       if (
         preserveStreamingState &&
@@ -1322,12 +1321,18 @@ export function createOpenCodeRuntime(): OpenCodeRuntime {
   );
 
   const todoSyncOperations = createTodoSyncOperations({
-    loadSessionTodos: (sessionId, signal) =>
-      client.session.todos(sessionId, { directory: getSessionDirectory(sessionId), signal }),
+    loadSessionTodos: (sessionId, signal, directory = getSessionDirectory(sessionId)) =>
+      client.session.todos(sessionId, { directory, signal }),
+    resolveSessionDirectory: getSessionDirectory,
   });
 
-  const { resetTodoSync, syncTodosForSession, syncTodosFromMessages, handoffTodosToMessages } =
-    todoSyncOperations;
+  const {
+    resetTodoSync,
+    prefetchTodosForSession,
+    syncTodosForSession,
+    syncTodosFromMessages,
+    handoffTodosToMessages,
+  } = todoSyncOperations;
 
   const sessionStatusOperations = new SessionStatusOperations({
     pendingAbortRetryAttempts,
@@ -2804,6 +2809,7 @@ export function createOpenCodeRuntime(): OpenCodeRuntime {
         await syncSessionMcps(sessionId);
       },
       resetTodoSync,
+      prefetchTodosForSession,
       clearMessages: sessionStore.clearMessages,
       setMessagesLoading: (loading) => appStore.setState(storePath('messagesLoading', loading)),
       loadSession: (sessionId, isCurrentSelection = () => true, directory) => {

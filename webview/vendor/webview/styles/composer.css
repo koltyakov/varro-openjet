@@ -497,10 +497,12 @@
 }
 
 .composer-completion-icon {
+  --file-icon-size: 14px;
+
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 14px;
+  width: 18px;
   height: 15px;
   flex-shrink: 0;
   color: var(--color-vscode-muted);
@@ -510,7 +512,7 @@
   display: block;
 }
 
-.composer-completion-icon img {
+.composer-completion-icon img:not(.file-type-icon) {
   display: block;
   width: 14px;
   height: 14px;
@@ -2076,6 +2078,11 @@
     background-color 0.2s ease;
 }
 
+/* Native todo hydration can replace message-derived progress before the session is shown. */
+.todo-block.is-hydrating :is(.todo-block-progress-fill, .todo-block-chevron) {
+  transition: none;
+}
+
 .todo-block-progress-fill.is-complete {
   background: var(--color-vscode-success);
 }
@@ -2237,8 +2244,8 @@
 }
 
 .changed-files-file-icon {
-  width: 16px;
-  height: 16px;
+  --file-icon-size: 16px;
+
   flex-shrink: 0;
 }
 
@@ -3100,7 +3107,7 @@
   border-radius: calc(var(--chat-radius-popover) - 4px);
 }
 
-.chat-attachment-chip .chip-icon {
+.chat-attachment-chip .chip-icon:not(.file-type-icon) {
   width: 12px;
   height: 12px;
   font-size: 12px;
@@ -3119,6 +3126,7 @@
 
 .problems-icon,
 .chat-attachment-chip .problems-icon,
+.chat-attachment-chip .problems-icon[data-severity='warning'],
 .inline-chip .problems-icon[data-severity='warning'] {
   color: var(
     --vscode-problemsWarningIcon-foreground,
@@ -3127,11 +3135,13 @@
 }
 
 .problems-icon[data-severity='error'],
+.chat-attachment-chip .problems-icon[data-severity='error'],
 .inline-chip .problems-icon[data-severity='error'] {
   color: var(--vscode-problemsErrorIcon-foreground, var(--vscode-editorError-foreground, #f14c4c));
 }
 
 .problems-icon[data-severity='info'],
+.chat-attachment-chip .problems-icon[data-severity='info'],
 .inline-chip .problems-icon[data-severity='info'] {
   color: var(--vscode-problemsInfoIcon-foreground, var(--vscode-editorInfo-foreground, #3794ff));
 }

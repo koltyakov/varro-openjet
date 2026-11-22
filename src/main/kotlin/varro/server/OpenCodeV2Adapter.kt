@@ -271,6 +271,17 @@ internal class OpenCodeV2Adapter(
         }
         Regex("^/session/([^/]+)(?:/(.*))?$").matchEntire(route)?.let { match ->
             val id = decode(match.groupValues[1]); val endpoint = "/api/session/${encode(id)}"; val action = match.groupValues[2]
+            if (action == "followup-usage" && method == "GET") {
+                require(body == null) { "Follow-up usage does not accept a body" }
+                val usage = OpenCodeV2FollowupUsage.read(
+                    readInbox = { data("GET", "$endpoint/inbox").asArrayOrNull() ?: error("Invalid OpenCode v2 session inbox") },
+                    readPage = { cursor -> raw("GET", if (cursor == null) "$endpoint/message?limit=200&order=desc"
+                        else "$endpoint/message?limit=200&cursor=${encode(cursor)}").asObjectOrNull() ?: error("Invalid OpenCode v2 message page") },
+                    maxBytes = options.maxResponseBytes,
+                )
+                options.checkCancelled()
+                return result(usage)
+            }
             if (action == "goal" && method == "GET") {
                 val response = raw("POST", scoped("/api/rpc/opencode.goal/get"), Json.obj("input" to Json.obj("sessionID" to id))).asObjectOrNull()
                 options.checkCancelled()
@@ -389,7 +400,8 @@ internal class OpenCodeV2Adapter(
                     objects(data("GET", "$endpoint/message?limit=100&order=desc")).forEach { message ->
                         if (message.str("type") == "assistant") message.arr("content").orEmpty().reversed().forEach { content ->
                             val tool = content.asObjectOrNull()
-                            if (tool.str("name") == "todowrite") tool.obj("state").obj("input").arr("todos")?.let { return result(it) }
+                            if (tool.str("type") == "tool" && tool.str("name") == "todowrite" && tool.obj("state").str("status") != "streaming")
+                                tool.obj("state").obj("input").arr("todos")?.let { return result(it) }
                         }
                     }
                     return result(JsonArray())
@@ -434,8 +446,14 @@ internal class OpenCodeV2Adapter(
                 if (model != null) raw("POST", "$endpoint/model", Json.obj("model" to model))
                 if (data("GET", endpoint).asObjectOrNull().hasNonNull("revert")) raw("POST", "$endpoint/revert/commit", Json.obj())
                 input.str("system")?.let { raw("PUT", "/api/experimental/session/${encode(id)}/instructions/entries/varro.system", Json.obj("value" to it)) }
-                val payload = Json.obj("id" to input.get("messageID"), "text" to if (action == "command") input.str("arguments") ?: text else text,
-                    "files" to parts.filter { it.str("type") == "file" }.map { Json.obj("uri" to it.get("url"), "name" to it.get("filename")) },
+                val textAttachments = if (action == "command") emptyMap() else parts.mapIndexedNotNull { index, part ->
+                    val name = part.str("filename")
+                    if (part.str("type") != "file" || part.str("mime") != "text/plain" || name == null || !PromptTextAttachments.isName(name)) null
+                    else part.str("url")?.let(varro.host.TextAttachments::decode)?.let { index to PromptTextAttachments.Attachment(name, it) }
+                }.toMap()
+                val payload = Json.obj("id" to input.get("messageID"), "text" to if (action == "command") input.str("arguments") ?: text
+                    else PromptTextAttachments.append(text, textAttachments.values.toList()),
+                    "files" to parts.filterIndexed { index, part -> part.str("type") == "file" && index !in textAttachments }.map { Json.obj("uri" to it.get("url"), "name" to it.get("filename")) },
                     "agents" to parts.filter { it.str("type") == "agent" }.map { Json.obj("name" to it.get("name")) },
                     "delivery" to if (input.str("delivery") == "queue") "queue" else "steer")
                 val metadata = Json.obj()
@@ -813,6 +831,7 @@ internal class OpenCodeV2Adapter(
             patch.entrySet().forEach { (key, value) ->
                 if (key in setOf("__proto__", "constructor", "prototype")) return@forEach
                 if (value.isJsonObject) { val nested = target.obj(key) ?: Json.obj(); merge(nested, value.asJsonObject); target.add(key, nested) }
+                else if (key == "permissions" && value.isJsonArray) target.add(key, Json.array(target.arr(key).orEmpty().toList() + value.asJsonArray.toList()))
                 else target.add(key, value)
             }
         }

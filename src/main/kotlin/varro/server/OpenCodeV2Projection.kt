@@ -211,12 +211,17 @@ internal object OpenCodeV2Projection {
                 value.obj("metadata").str("varroDelivery")?.takeIf { it == "steer" || it == "queue" }?.let {
                     info.addProperty("delivery", it)
                 }
-                val text = value.str("text").orEmpty()
+                val prompt = PromptTextAttachments.split(value.str("text").orEmpty())
+                val text = prompt.text
                 parts.add(part(0, "text", Json.obj("text" to if (value.obj("metadata").str("source") == "goal") goalPrompt(text) ?: text else text)))
                 value.arr("files").orEmpty().forEach { entry ->
                     val file = entry.asObjectOrNull()
                     parts.add(part(parts.size, "file", Json.obj("mime" to file.str("mime"), "filename" to file.str("name"),
                         "url" to if (file.obj("source").str("type") == "uri") file.obj("source").str("uri") else "data:${file.str("mime")};base64,${file.str("data")}")))
+                }
+                prompt.attachments.forEach { file ->
+                    parts.add(part(parts.size, "file", Json.obj("mime" to "text/plain", "filename" to file.name,
+                        "url" to "data:text/plain;base64,${java.util.Base64.getEncoder().encodeToString(file.text.toByteArray(Charsets.UTF_8))}")))
                 }
                 value.arr("agents").orEmpty().forEach { parts.add(part(parts.size, "agent", Json.obj("name" to it.asObjectOrNull().str("name")))) }
                 value.arr("skills").orEmpty().forEach {

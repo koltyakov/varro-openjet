@@ -5,6 +5,21 @@ import org.junit.Test
 import varro.protocol.Json
 
 class PermissionAutomationLeaseTest {
+    @Test fun `retained hidden editors hand off automation without making the document unready`() {
+        var showing = true
+        val ready = true
+        val payload = Json.obj("method" to "POST", "path" to ApiRoutes.Endpoints.PERMISSION_JUDGE, "permissionAutomationLease" to 7)
+        fun eligible() = PermissionAutomationLease.eligible(ready, editor = true, showing)
+        PermissionAutomationLease.assertCurrent(payload) { eligible() }
+        showing = false
+        assertTrue(ready)
+        assertThrows(IllegalStateException::class.java) { PermissionAutomationLease.assertCurrent(payload) { eligible() } }
+        assertTrue(PermissionAutomationLease.eligible(ready, editor = false, showing = false))
+        assertFalse(PermissionAutomationLease.eligible(false, editor = false, showing = true))
+        showing = true
+        PermissionAutomationLease.assertCurrent(payload) { eligible() }
+    }
+
     private fun request(path: String = "/permission/child-request/reply") = Json.obj("method" to "POST", "path" to path)
 
     @Test fun `manual replies remain actionable without an automation lease`() {

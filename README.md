@@ -29,7 +29,7 @@ Automatic CLI updates are enabled by default for Varro-managed servers. You can 
 
 ## Using Varro
 
-Chat in the tool window, an editor tab or a detached window. **Open in Window** requires IDE 2026.1+; on older IDEs, drag an editor tab into a separate window. Drafts are saved per view.
+Chat in the tool window, an editor tab or a detached window. **Open in Window** requires IDE 2026.1+; on older IDEs, drag an editor tab into a separate window. Unsent text follows session navigation within each view and workspace. Other views and workspaces keep separate drafts.
 
 - Add context by dropping files into the composer or choosing **Add to Varro Context** in the editor or Project view.
 - Queue follow-ups while a task runs. On v2, use `/btw` for a side question without interrupting it.
@@ -65,6 +65,8 @@ Quota badges show remaining allowances and reset times when available. Supported
 Pin providers in the chat provider list to show remaining quotas in the IDE status bar, including while chats are closed. Custom display names are optional. **Settings > Tools > Varro > Models > Pinned provider quotas** chooses 15-second rotation or all providers at once. Providers selected in visible chats are excluded; the tooltip lists the remaining pinned providers. Quotas refresh every two minutes without running model inference.
 
 Open usage reports from the tool-window menu for prompt counts, tokens, cache usage and assistant duration by provider and model. V2 auxiliary generation, titles and compaction appear as unattributed usage. Native totals with no retained dated record appear separately as undated usage, not as additional user prompts.
+
+V2 subagent task cards show recorded usage for each delivered follow-up. Prompts delivered together share an interval. Missing usage and truncated history are marked unavailable or incomplete, not counted as zero; compaction stays in session totals.
 
 Tools > Varro also provides all-time usage CSV export, confirmed cleanup of old sessions with usage preservation and optional parent transcripts, and separate offline database compaction. See [session cleanup and usage export](docs/session-cleanup.md) for archive locations, safeguards and limits.
 

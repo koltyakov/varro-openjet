@@ -7,6 +7,27 @@ import varro.server.OpenCodeV2Projection
 import java.util.concurrent.CancellationException
 
 class MessageContentTest {
+    @Test fun `task child and prompt identity survives exhausted summaries in history success progress and failure`() {
+        val metadata = Json.obj("large" to (1..600).map { "x".repeat(512) }, "sessionID" to "child", "childPromptID" to "prompt", "status" to "running")
+        val input = metadata.deepCopy()
+        val part = Json.obj("id" to "call", "sessionID" to "parent", "messageID" to "msg", "type" to "tool", "tool" to "task",
+            "state" to Json.obj("status" to "error", "input" to input, "metadata" to metadata, "error" to "Failed"))
+        val projected = MessageContent.project(part, "/repo")
+        for (field in listOf("input", "metadata")) {
+            assertEquals("child", projected.obj("state").obj(field).str("sessionID"))
+            assertEquals("prompt", projected.obj("state").obj(field).str("childPromptID"))
+            assertEquals("running", projected.obj("state").obj(field).str("status"))
+        }
+        for (event in listOf("progress", "success", "failed")) {
+            val result = StreamingToolContent().project(Json.obj("type" to "session.next.tool.$event", "workspaceDirectory" to "/repo",
+                "properties" to Json.obj("sessionID" to "parent", "assistantMessageID" to "msg", "callID" to "call",
+                    "name" to "task", "structured" to metadata, "error" to "Failed", "content" to emptyList<Any>())))
+            assertEquals("child", result.obj("properties").obj("structured").str("sessionID"))
+            assertEquals("prompt", result.obj("properties").obj("structured").str("childPromptID"))
+            assertTrue(result.toString().length < 20 * 1024)
+        }
+    }
+
     private fun file() = Json.obj("id" to "part:1", "messageID" to "msg_one", "sessionID" to "ses_one",
         "type" to "file", "mime" to "image/png", "filename" to "shot.png", "url" to ImageThumbnailsTest.image(800, 450))
 

@@ -9,6 +9,28 @@ import varro.server.OpenCodeResponse
 import java.nio.file.Files
 
 class TranscriptArchiveTest {
+    @Test fun `native prompt text blocks become preserved archive attachments in local and API histories`() {
+        for (api in listOf(false, true)) {
+            val f = HistoryFixture(temporary.newFolder().toPath().resolve("history.db"))
+            val session = f.session("parent")
+            val attachment = PromptTextAttachments.Attachment("annotation-a781acb7.txt", "Selected text 🚀\n\nComment:\nkeep")
+            val prompt = Json.obj("id" to "prompt", "type" to "user", "time" to Json.obj("created" to 100),
+                "text" to PromptTextAttachments.append("Check this", listOf(attachment)))
+            f.message(session, "prompt", "user", prompt, 1)
+            if (api) f.execute("UPDATE session_v2 SET fork_session_id='ancestor'")
+            TranscriptArchive(f.archive).archive(listOf(session), 2, { _, _, _ ->
+                check(api)
+                OpenCodeResponse(Json.obj("data" to listOf(prompt), "cursor" to Json.obj("next" to null)))
+            }, {})
+            val saved = turns(f).single().arr("prompts")!!.single().asJsonObject
+            assertEquals("Check this", saved.str("text"))
+            val file = saved.arr("attachments")!!.single().asJsonObject
+            assertEquals(attachment.name, file.str("name"))
+            assertEquals(attachment.text, file.str("text"))
+            assertEquals(false, file.bool("omitted"))
+        }
+    }
+
     @get:Rule val temporary = TemporaryFolder()
     private fun fixture() = HistoryFixture(temporary.root.toPath().resolve("history.db"))
     private fun turns(f: HistoryFixture): List<com.google.gson.JsonObject> = HistoryDatabase.open(f.archive.transcriptPath).use { database ->

@@ -6,6 +6,7 @@ import varro.protocol.str
 
 /** Manual replies stay available; automatic work must come from the current ready owner. */
 internal object PermissionAutomationLease {
+    fun eligible(ready: Boolean, editor: Boolean, showing: Boolean) = ready && (!editor || showing)
     private val replyPath = Regex("^/permission/[^/]+/reply$")
 
     fun assertCurrent(payload: JsonObject, isCurrent: (Long) -> Boolean) {

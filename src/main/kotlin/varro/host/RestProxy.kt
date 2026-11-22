@@ -70,6 +70,9 @@ class RestProxy(
     private val settings get() = varro.settings.VarroSettings.getInstance()
     private fun workspaceRoots() = (listOfNotNull(project.basePath) +
         context.context.arr("workspaceFolders")?.mapNotNull { it.asObjectOrNull().text("path") }.orEmpty()).distinct()
+    private val followupUsage = FollowupUsage(server.transport::request, { server.transport.apiVersion },
+        { server.requestGeneration() to server.url() }, ::workspaceRoots,
+        { it in store.hiddenSessionIds || trash.isHidden(it) }, ::authorizedTransfer)
     private val locations = SessionLocations(server.transport::request, { server.transport.apiVersion },
         { Triple(server.requestGeneration(), server.url(), store.sessionHistoryScope) }, ::workspaceRoots)
     private fun authorizedTransfer(id: String, directory: String): Boolean = transfers?.get(id)?.let {
@@ -619,6 +622,7 @@ class RestProxy(
 
             "diff-summary" ->
                 services.sessionDiffSummary(sessionId, directory, request.query["revision"]?.firstOrNull())
+            "followup-usage" -> followupUsage.read(sessionId, body, directory, isCancelled) ?: JsonNull.INSTANCE
 
             "pin" -> {
                 val pinned = body.asObjectOrNull().bool("pinned") ?: true

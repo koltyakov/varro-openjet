@@ -316,6 +316,9 @@ object ApiRoutes {
         route("${Endpoints.SESSION}/:id/diff-summary") { request, _ ->
             request.method == "GET" && request.withOptionalDirectory("revision")
         },
+        route("${Endpoints.SESSION}/:id/followup-usage") { request, _ ->
+            request.method == "GET" && request.optionalDirectory()
+        },
         route("${Endpoints.SESSION}/:id/activate", methodsNoQuery("POST")),
         route("${Endpoints.SESSION}/:id/reference", methodsNoQuery("GET", "POST")),
         route("${Endpoints.SESSION}/:id/location") { request, _ ->

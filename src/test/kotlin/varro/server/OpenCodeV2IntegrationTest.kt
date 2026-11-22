@@ -376,16 +376,39 @@ class OpenCodeV2IntegrationTest {
             val messages = transport.request("GET", "/session/$id/message?limit=10", options = RequestOptions(captureNextCursor = true)).data!!.asJsonArray
             assertTrue(messages.any { it.asObjectOrNull().arr("parts")?.any { it.asObjectOrNull().str("text") == "Pending input only; no provider request" } == true })
             assertTrue(messages.any { it.asObjectOrNull().obj("info").str("pendingDelivery") == "steer" })
+            val pendingUsage = transport.request("GET", "/session/$id/followup-usage").data.asObjectOrNull()!!
+            assertEquals(true, pendingUsage.bool("supported"))
+            assertEquals(true, pendingUsage.bool("complete"))
+            assertTrue(pendingUsage.arr("intervals")!!.isEmpty)
+            assertEquals(1, pendingUsage.arr("pendingPromptIDs")!!.size())
+            assertEquals(messages, transport.request("GET", "/session/$id/message?limit=10").data)
             val eventDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
             while (events.none { it.asObjectOrNull().str("type") == "session.next.prompt.admitted" } && System.nanoTime() < eventDeadline) Thread.sleep(20)
             assertTrue(events.any { it.asObjectOrNull().str("type") == "session.next.prompt.admitted" })
             val answer = transport.request("POST", "/session/$id/message", Json.obj("model" to Json.obj("providerID" to "fixture", "modelID" to "fixture"),
                 "agent" to "build", "followupTitle" to "Verify fixture",
-                "parts" to listOf(Json.obj("type" to "text", "text" to "Reply using the fixture provider")))).data.asObjectOrNull()
+                "parts" to listOf(Json.obj("type" to "text", "text" to "Reply using the fixture provider"),
+                    Json.obj("type" to "file", "mime" to "text/plain", "filename" to "annotation-1234abcd.txt",
+                        "url" to "data:text/plain;charset=utf-8,Fixture%20annotation%20text")))).data.asObjectOrNull()
             assertTrue(answer.arr("parts")!!.any { it.asObjectOrNull().str("text") == "OpenJet stream verified." })
             val completedHistory = transport.request("GET", "/session/$id/message").data!!.asJsonArray
             val sourceUserID = completedHistory.map { it.asJsonObject }.single { it.obj("info").str("id") == answer.obj("info").str("id") }.obj("info").str("parentID")!!
             assertEquals("Verify fixture", transport.request("GET", "/session/$id/message/$sourceUserID").data.asObjectOrNull().obj("info").str("followupTitle"))
+            val nativePrompt = transport.request("GET", "/api/session/$id/message/$sourceUserID").data.asObjectOrNull().obj("data")!!
+            assertTrue(nativePrompt.str("text")!!.contains("<attached-text name=\"annotation-1234abcd.txt\""))
+            assertTrue(nativePrompt.arr("files")?.isEmpty != false)
+            val restoredAttachment = transport.request("GET", "/session/$id/message/$sourceUserID").data.asObjectOrNull().arr("parts")!!
+                .single { it.asObjectOrNull().str("filename") == "annotation-1234abcd.txt" }.asJsonObject
+            assertEquals("Fixture annotation text", varro.host.TextAttachments.decode(restoredAttachment.str("url")!!))
+            val callsBeforeUsage = providerRequests.get()
+            val usage = transport.request("GET", "/session/$id/followup-usage").data.asObjectOrNull()!!
+            assertEquals(true, usage.bool("complete"))
+            val interval = usage.arr("intervals")!!.single().asJsonObject
+            assertTrue(sourceUserID in interval.arr("promptIDs")!!.map { it.asString })
+            assertEquals(1, interval.obj("usage").int("steps"))
+            assertTrue(usage.arr("pendingPromptIDs")!!.isEmpty)
+            assertEquals(callsBeforeUsage, providerRequests.get())
+            assertEquals(completedHistory, transport.request("GET", "/session/$id/message").data)
             if (OpenCodeCli.compareVersions(version, "2.0.27") >= 0) {
                 val historyBefore = transport.request("GET", "/session/$id/message").data
                 val followupSource = Json.obj("assistantMessageId" to answer.obj("info").str("id"), "userMessageId" to sourceUserID,

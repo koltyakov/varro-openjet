@@ -12,6 +12,8 @@ class PermissionJudge(
     private val hide: (String) -> Unit,
     private val jev: JevDecisions? = null,
     private val native: NativeDecisions? = null,
+    private val apiVersion: () -> Int = { 1 },
+    private val readShellConfig: (String) -> JsonElement? = { request("GET", "/config", null, 2000) },
 ) {
     /** Display the configured reviewer even when its experimental Models section is hidden. */
     fun model(fallback: JsonObject? = null): JsonObject? =
@@ -33,6 +35,9 @@ class PermissionJudge(
         val permission = input.obj("permission") ?: return ask("Missing permission context.")
         val type = (permission.text("type") ?: permission.text("permission") ?: "").lowercase()
         if (permission.text("sessionID") == null || type.isEmpty()) return ask("Missing permission context.")
+        if (apiVersion() == 2 && type in setOf("bash", "shell")) {
+            configuredShellDecision(permission)?.let { return it }
+        }
         if (type in SAFE) return Json.obj("decision" to "allow", "reason" to "Known read-only or session-local tool.")
         if (type == "external_directory") return ask("External directory access requires approval.")
         // One budget covers native, Jev and chat fallback, below the webview's 20s timeout.
@@ -90,6 +95,38 @@ class PermissionJudge(
             ask("Permission review failed: ${failure.message}")
         } finally {
             sessionId?.let { id -> runCatching { request("DELETE", "/session/$id", null, 1000) } }
+        }
+    }
+
+    private fun configuredShellDecision(permission: JsonObject): JsonObject? {
+        val pattern = permission.get("patterns") ?: permission.get("pattern")
+        val resources = when {
+            pattern == null -> return null
+            pattern.isJsonPrimitive && pattern.asJsonPrimitive.isString -> listOf(pattern.asString)
+            pattern.isJsonArray -> pattern.asJsonArray.map {
+                if (!it.isJsonPrimitive || !it.asJsonPrimitive.isString) return null
+                it.asString
+            }
+            else -> return null
+        }
+        if (resources.isEmpty() || resources.any { it.isBlank() }) return null
+        return try {
+            val config = readShellConfig(permission.str("sessionID")!!).asObjectOrNull()
+                ?: return ask("Cannot verify configured shell permissions.")
+            val rules = config.arr("permissions") ?: return null
+            val effects = resources.map { NativePermissionRules.resolve(rules, "shell", it) }
+            when {
+                "deny" in effects -> Json.obj("decision" to "reject", "reason" to "Denied by configured shell permissions.")
+                resources.withIndex().any { (index, resource) ->
+                    effects[index] == "ask" && rules.any {
+                        NativePermissionRules.resolve(Json.array(listOf(it)), "shell", resource) == "allow"
+                    }
+                } -> ask("Configured shell permissions require confirmation.")
+                effects.all { it == "allow" } -> Json.obj("decision" to "allow", "reason" to "Allowed by configured shell permissions.")
+                else -> null
+            }
+        } catch (_: Exception) {
+            ask("Cannot verify configured shell permissions.")
         }
     }
 

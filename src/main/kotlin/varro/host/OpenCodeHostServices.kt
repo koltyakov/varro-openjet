@@ -17,6 +17,7 @@ import varro.protocol.asObjectOrNull
 import varro.protocol.bool
 import varro.protocol.obj
 import varro.protocol.str
+import varro.protocol.text
 import varro.host.quota.QuotaCredentials
 import varro.server.OpenCodeServer
 import varro.server.RequestOptions
@@ -403,6 +404,17 @@ class OpenCodeHostServices(
         },
         jev = JevDecisions(JevClient(decisionProviders::apiKey), decisionProviders::readSettings, decisionProviders::hasApiKey),
         native = nativeDecisions,
+        apiVersion = { server.transport.apiVersion },
+        readShellConfig = { id ->
+            val generation = server.requestGeneration() to server.url()
+            val options = RequestOptions(timeoutMs = 2000, maxResponseBytes = 4 * 1024 * 1024,
+                deadlineNanos = System.nanoTime() + 2_000_000_000L,
+                isCancelled = { generation != (server.requestGeneration() to server.url()) })
+            val session = server.transport.request("GET", "/session/${varro.server.OpenCodeV2Adapter.encode(id)}", options = options).data.asObjectOrNull()
+            val directory = session.text("directory") ?: error("Cannot verify permission workspace")
+            require(session.str("id") == id) { "Cannot verify permission session" }
+            server.transport.request("GET", "/config", options = options.copy(directory = directory)).data
+        },
     )
 
     override fun judgePermission(body: JsonElement?): JsonObject = judge.judge(body)

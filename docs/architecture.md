@@ -226,6 +226,11 @@ windows. Desktop alerts use JetBrains `SystemNotifications`; a log-only notifica
 an **Open chat** action. JVM audio plays the bundled CC0 recording independently of banners.
 Notification preferences use the IDE-local settings component and are excluded from shared settings.
 
+Focus return expires only that project's IDE notification, once per transition,
+without answering pending permissions or questions. Inter-project focus changes
+are observed even when the application stays active. OS banners cannot be retracted
+through `SystemNotifications`; retaining this transport is an accepted platform difference.
+
 ## Local dictation and server diagnostics
 
 `DictationIntegration` validates `dictation/request` and replies with correlated `dictation/result` messages. One application-level guard covers both Handy and Hex across projects and views. Selection prefers running Hex, then running Handy, then installed Hex. Finish/cancel stays with the app that accepted capture. Concurrent status requests share the pending result; overlapping mutations are rejected rather than queued. Host revisions order observations across providers and discard stale callbacks. Both integrations discover standard installation locations and absolute PATH entries, use fixed arguments without a shell and require the app to be running already. The retired `dictationHandyPath` field is retained in persisted IDE settings but no longer used or exposed.
@@ -247,6 +252,20 @@ Notification preferences use the IDE-local settings component and are excluded f
 | Queued dispatches, Ralph runs and recycle-bin entries | JSON journals under `<IDE config>/varro/<project location hash>/`, with project-store snapshots |
 | Attachments | `<IDE system>/varro/attachments/<project location hash>/` |
 | Follow-up admission, suggestions and dismissals | `followups/cache.json` under the shared native Varro state root, or `$VARRO_TEST_STATE_ROOT/followups/cache.json` for isolated fixtures |
+
+Composer text is shared across root, child, New Chat and session-picker navigation
+within one view and workspace. It stays in `view-state.ts`, not project-wide
+storage. Older session-scoped drafts move into empty shared input; conflicting
+text stays stored until it can be adopted without overwriting current input.
+Workspace switches and view IDs keep separate drafts. Clearing or sending input
+does not restore it when returning to another session.
+
+Session selection prefetches native todos alongside transcript loading and reuses
+the result only for the same session, directory and todo-state generation. Reset
+or directory changes cancel stale prefetches. A one-second post-transcript
+deadline bounds the final native read. Restored todos skip entrance animation
+while the transcript hydrates. The V2 adapter reads newest-first native history
+and ignores streaming, malformed or non-tool todo entries.
 
 `FollowupService` shares pending inference across project chat surfaces and checks the latest completed Build response, parent prompt and idle status against server history. Only an explicit live-turn request can start stateless inference. Cache-only history reads never generate. Opening probes with `cacheOnly: true` also never join local pending inference or wait for another host's pending admission, even when `allowGenerate` is true. Completed cached actions still require current server history. A persisted claim precedes inference, so reloads, model changes, failures and cancellation cannot bill the same turn again. Native owner-directory locks coordinate with other IDE processes and Varro's TypeScript host. Atomic replacement retries bounded Windows sharing violations without deleting committed state. Only the latest 512 presentations retain generated text; admission does not expire. Dismissal and the next accepted prompt erase old generated text while retaining admission. OpenJet has no legacy workspace follow-up cache to migrate.
 
@@ -319,9 +338,11 @@ Scoped Always Allow approvals resolve the owning session before reading pending 
 
 `GlobalPermissionConfig` edits only the last global `config.json`, `opencode.json` or `opencode.jsonc`, creating `opencode.json` when none exists. Project/global permission writers preserve comments and unrelated settings, use native arrays for new V2 configs, and retain existing legacy syntax. Native arrays allow URL-specific WebFetch patterns; legacy scalar-only fields keep their restrictions. Canonical paths coordinate local writers, owner-directory locks serialize permission writers across processes, and dirty documents, changed targets or concurrent file edits reject the save. Saving permissions never restarts or disposes a V2 instance holding a pending request.
 
-Only ready views can own automatic permission handling, with the tool window preferred over editor views. Reloading or disposing an owner transfers its lease. `RestProxy` checks the current view and lease before judging or sending automatic replies, including subsequent transport requests. Manual replies remain available without a lease. A non-owner retains actionable prompts and tells the owner to reconcile them; rejected stale leases leave requests pending without a chat-wide error.
+Only ready views can own automatic permission handling, with the tool window preferred over editor views. Hidden editor views retain their JCEF document, events and requests but cannot own automation. Hiding, reloading or disposing an owner transfers its lease. `RestProxy` checks the current view and lease before judging or sending automatic replies, including subsequent transport requests. Manual replies remain available without a lease. A non-owner retains actionable prompts and tells the owner to reconcile them; rejected stale leases leave requests pending without a chat-wide error.
 
 `PermissionJudge` handles known read-only tools locally and can review other requests through a hidden child session with tools denied except structured output. It asks on invalid responses or review failures. The model selection checks the configured judge model, OpenCode's `small_model`, then a supplied fallback.
+
+Before other Auto reviewers, V2 shell requests check fresh effective native configuration from the permission-owning session's directory within a shared two-second deadline. Every concrete resource must resolve to `allow` to bypass inference. Last-match `deny` rejects; `ask` exceptions to an allowance require confirmation. Ordinary ask-by-default and unconfigured resources continue through the existing reviewers. Save suggestions and displayed command metadata never establish a grant. Failed configuration verification asks rather than inferring an allowance. Effective configuration concatenates native permission arrays across sources. `NativePermissionRules` also skips project/global grants that are provably redundant without crossing later overlapping ask/deny exceptions; a fully redundant save leaves the file unchanged.
 
 `NativeDecisions` adds an explicit server-hosted reviewer before legacy Jev and the chat judge.
 `chatAutoApproveDecisionModel` is empty by default and may be shared across IDEs. It uses the
@@ -343,6 +364,8 @@ changing their stored transcript data.
 `SessionSummaryService` tries local SQLite history through `LocalSessionSummary` and can fall back to REST. `SessionSummary` computes session-tree token totals, duration and file changes. `UsageReport` reads retained cross-project history through `LocalUsageDatabase` without starting OpenCode, with a bounded REST fallback when local history is unavailable.
 
 Usage tables use compact token counts and compute cache rate from summed cache-read tokens divided by summed input, cache-read and cache-write tokens. Output and reasoning tokens do not enter that rate. CSV exports retain exact counts.
+
+`GET /varro/session/:id/followup-usage` verifies the canonical session and open-root or retained-transfer scope before reading native inbox/history. `OpenCodeV2FollowupUsage` reads at most ten 200-record pages and 8 MiB, returning only prompt identities and usage totals. Persisted delivery order groups prompts admitted before the same assistant step. Compaction is excluded, retried step identities count once, and absent usage stays missing or active rather than becoming recorded zero. Idle settles unfinished records; truncated oldest boundaries remain uncertain. V1 reports unsupported. Reads never generate, admit input or modify session state.
 
 V2 pause markers live in `metadata.varro.pauses`, backed by the shared per-session annotation files. `SessionPauses` caps work periods at these markers in summaries and usage reports. REST summaries read current session metadata, and local usage reads V2 annotations alongside database records.
 
@@ -393,6 +416,8 @@ goal continuations remain invisible and cannot replace that parent.
 History file parts and tool attachments carry scoped `varro-content:` references. `GET /session/:id/message/:messageId/part/:partId` retrieves the original from the V1 or V2 adapter and checks its session, message and part identities. The `view=thumbnail` query returns a bounded preview or `url: null`. Original image bytes stay out of history responses and streamed tool-content aliases. Opening previews and editing messages use the original-content endpoint.
 
 `MessageContent` also defers completed reasoning and large general-tool bodies. Question, todo and file-edit schemas retain their complete data for visible summaries. `StreamingToolContent` bounds pending input and general-tool details without changing event IDs, sequence numbers or routing. Text and live reasoning continue streaming normally.
+
+Task child-session and admitted-prompt identities survive the shared summary budget, including failed streamed tools. On V2, valid reserved pasted-text and annotation files travel as trailing length-prefixed prompt-text blocks so native compaction preserves their content. `PromptTextAttachments` uses JavaScript-compatible UTF-16 lengths. History, inbox and direct-message projection restore file parts; transcript archives preserve the same text as attachments. Malformed blocks remain ordinary prompt text, other files remain native attachments, and command attachments are not inlined.
 
 Already-deferred tool events retain their marker even when the visible payload is small. The host reconstructs its content route from the current session, message, call and directory rather than trusting an embedded route.
 

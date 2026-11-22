@@ -42,11 +42,15 @@ class ProjectPermissionConfig(
             val current = if (nativeRules) OpenCodeV2Projection.legacyRules(document.get("permissions"))
                 else PermissionService.fromConfig(document.get("permission"))
             val additions = Json.array(patterns.map { Json.obj("permission" to permission, "pattern" to it, "action" to "allow") })
-            result = if (nativeRules) Json.array(current.toList() + additions.toList())
-                else PermissionService.mergeProjectAllow(current, additions, effective)
-            if (nativeRules) JsoncEdit.nativePermissions(original, Json.array(
-                document.getAsJsonArray("permissions")?.toList().orEmpty() + OpenCodeV2Projection.rules(additions).asJsonArray.toList()))
-            else JsoncEdit.set(original, listOf("permission"), PermissionService.toConfig(result))
+            if (nativeRules) {
+                val existing = document.getAsJsonArray("permissions") ?: JsonArray()
+                val updated = NativePermissionRules.appendAllows(existing, OpenCodeV2Projection.nativeAction(permission)!!, patterns)
+                result = OpenCodeV2Projection.legacyRules(updated)
+                if (updated == existing) original else JsoncEdit.nativePermissions(original, updated)
+            } else {
+                result = PermissionService.mergeProjectAllow(current, additions, effective)
+                JsoncEdit.set(original, listOf("permission"), PermissionService.toConfig(result))
+            }
         }
         return result
     }

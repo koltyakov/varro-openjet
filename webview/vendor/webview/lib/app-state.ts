@@ -57,7 +57,7 @@ import { parseRemoteImageMode } from '../../shared/remote-images';
 import type { RemoteImageMode } from '../../shared/remote-images';
 import { isInlineProblem } from './editor-problems';
 import { mergeContextFile } from '../../shared/context-files';
-import { isSameWorkspacePath } from '../../shared/workspace-path';
+import { isSameWorkspacePath, normalizeWorkspaceIdentity } from '../../shared/workspace-path';
 import type {
   ProviderAuthMethodsByProvider,
   WorkspaceStatusEntry,
@@ -69,7 +69,14 @@ import {
   seedContextFileAttachmentSequences,
 } from './attachment-order';
 import { createMessageIndex } from './message-index';
-import { readInputDraft, writeInputDraft } from './input-draft-persistence';
+import {
+  adoptSessionInputDraft,
+  inputDraftKey,
+  parkDraftMarkers,
+  readInputDraft,
+  restoreDraftText,
+  writeInputDraft,
+} from './input-draft-persistence';
 import { asRecord, isFunction, isString } from './runtime-values';
 
 import {
@@ -260,8 +267,14 @@ export interface AppStateInstance {
   desktopSessionPaneSide: Accessor<DesktopSessionPaneSide>;
   setDesktopSessionPaneSide: Setter<DesktopSessionPaneSide>;
   inputText: Accessor<string>;
-  setInputText: Setter<string>;
+  readLatestDraftText: () => string;
+  setInputText: (value: string | ((current: string) => string)) => string;
   inputTextMutationVersion: Accessor<number>;
+  currentDraftKey: () => string;
+  draftSessionId: Accessor<string | null>;
+  writeOwnedDraft: (key: string, value: string) => void;
+  onBeforeDraftSwitch: (listener: () => void) => () => void;
+  finishNewChatDraft: (sourceKey: string, craftedText: string) => void;
   nextPastedImageIndex: Accessor<number>;
   setNextPastedImageIndex: Setter<number>;
   isLoading: Accessor<boolean>;
@@ -325,10 +338,23 @@ export interface AppStateInstance {
 
 export function createAppState(): AppStateInstance {
   const initialWebviewState = readInitialWebviewState();
+  let workspace = initialWebviewState.editorContext?.workspacePath ?? null;
+  const context = initialWebviewState.webviewContext;
+  const persistedRoute = asRecord(
+    readStored<unknown>(
+      context?.surface === 'sidebar' && workspace
+        ? `${STORAGE_KEYS.lastOpenedView}:${normalizeWorkspaceIdentity(workspace)}`
+        : STORAGE_KEYS.lastOpenedView
+    )
+  );
+  // The sidebar's default New Chat route is not a restored user selection.
+  const route = context?.surface === 'editor' ? context.initialRoute : persistedRoute;
   const initialQueuedMessages = readStoredQueuedMessages(initialWebviewState.queuedMessages);
   const storedQueuedMessageEdit = readStoredQueuedMessageEdit();
   const initialQueuedMessageEdit =
     storedQueuedMessageEdit &&
+    (!route ||
+      (route.type === 'session' && route.sessionId === storedQueuedMessageEdit.sessionId)) &&
     initialQueuedMessages.some((message) => message.id === storedQueuedMessageEdit.id)
       ? storedQueuedMessageEdit
       : null;
@@ -395,7 +421,7 @@ export function createAppState(): AppStateInstance {
     sessionMarkerWorkspaceScope
   );
 
-  const [state, setState] = createStore<AppState>({
+  const [state, updateState] = createStore<AppState>({
     serverStatus: initialWebviewState.serverStatus ?? { state: 'stopped' },
     serverReconnecting: false,
     restartBlocked: null,
@@ -407,7 +433,10 @@ export function createAppState(): AppStateInstance {
     pendingWorkspaceSelectionPath: null,
     workspaceSelectionRequestId: null,
     providerRefreshPending: false,
-    editorContext: initialWebviewState.editorContext ?? defaultEditorContext,
+    editorContext: initialWebviewState.editorContext ?? {
+      ...defaultEditorContext,
+      diagnostics: [],
+    },
     terminalSelection: discardQueuedEditDraft
       ? null
       : (initialWebviewState.terminalSelection ?? null),
@@ -570,7 +599,47 @@ export function createAppState(): AppStateInstance {
   const [desktopSessionPaneSide, setDesktopSessionPaneSide] = createSignal<DesktopSessionPaneSide>(
     readDesktopSessionPaneSide(initialWebviewState)
   );
-  const [inputText, setInputTextValue] = createSignal(readInputDraft() ?? '');
+  let activeId: string | null = null;
+  let picker = false;
+  let pendingFolder: string | null = null;
+  let typedForFolder: string | null = null;
+  let bootstrapId =
+    route?.type === 'session' && isString(route.sessionId)
+      ? route.sessionId
+      : route
+        ? null
+        : (initialQueuedMessageEdit?.sessionId ?? null);
+  const [readDraftSession, publishDraftSession] = createSignal<string | null>(bootstrapId);
+  let sessionId = bootstrapId;
+  let key = inputDraftKey(workspace, null);
+  const legacy = readInputDraft();
+  if (legacy) {
+    const legacyKey = key;
+    if (!readInputDraft(legacyKey)) {
+      writeInputDraft(legacy, legacyKey);
+    } else if (readInputDraft(legacyKey) !== legacy) {
+      // Both survive an interrupted migration; don't try the legacy value
+      // against another conversation the next time this view opens.
+      writeStored(`${legacyKey}:legacy`, legacy);
+    }
+    writeInputDraft('');
+  }
+  if (discardQueuedEditDraft && storedQueuedMessageEdit) {
+    writeInputDraft('', key);
+    writeInputDraft('', inputDraftKey(workspace, storedQueuedMessageEdit.sessionId));
+  }
+  let text = adoptSessionInputDraft(workspace, sessionId, key, restoreDraftText(key, state), state);
+  const [publishedText, setPublishedText] = createSignal(text);
+  let selection = 0;
+  let restoredText = text;
+  const [publishedSelection, setPublishedSelection] = createSignal(selection);
+  // Never show the previous owner's signal while a route change awaits flush.
+  // Within one selection, edits use Solid's normal publication boundary.
+  const inputText = () => (publishedSelection() === selection ? publishedText() : restoredText);
+  const draftSessionId = () => {
+    readDraftSession();
+    return sessionId;
+  };
   // Rollback/paste ownership captures this token at the setter boundary, before
   // Solid publishes the draft. Retain reactive invalidation for pending paste UI.
   let currentInputTextMutationVersion = 0;
@@ -579,12 +648,74 @@ export function createAppState(): AppStateInstance {
     readInputTextMutationVersion();
     return currentInputTextMutationVersion;
   };
-  const setInputText: Setter<string> = (value) => {
+  function publishText(next: string) {
     setInputTextMutationVersion(++currentInputTextMutationVersion);
-    const nextValue = setInputTextValue(value);
-    writeInputDraft(nextValue);
-    return nextValue;
+    if (text !== next) {
+      text = next;
+      setPublishedText(next);
+    }
+    return next;
+  }
+  function writeOwnedDraft(owner: string, next: string) {
+    if (owner === key) publishText(next);
+    writeInputDraft(next, owner);
+  }
+  const setInputText: AppStateInstance['setInputText'] = (value) => {
+    const next = isFunction(value) ? value(text) : value;
+    typedForFolder = sessionId === null && next ? pendingFolder : null;
+    writeOwnedDraft(key, next);
+    return next;
   };
+  const draftSwitchListeners = new Set<() => void>();
+  function selectDraft(nextId: string | null, nextWorkspace: string | null, tray: AppState) {
+    if (nextId !== activeId || nextWorkspace !== workspace || picker) bootstrapId = null;
+    activeId = nextId;
+    workspace = nextWorkspace;
+    const nextSession = picker ? null : (activeId ?? bootstrapId);
+    const nextKey = inputDraftKey(workspace, null);
+    const workspaceChanged = key !== nextKey;
+    if (!workspaceChanged && sessionId === nextSession) return;
+    for (const listener of draftSwitchListeners) untrack(listener);
+    if (workspaceChanged) parkDraftMarkers(key, text, tray);
+    key = nextKey;
+    sessionId = nextSession;
+    publishDraftSession(nextSession);
+    restoredText = adoptSessionInputDraft(
+      workspace,
+      nextSession,
+      key,
+      workspaceChanged ? restoreDraftText(key, tray) : text,
+      tray
+    );
+    setPublishedSelection(++selection);
+    if (text !== restoredText) publishText(restoredText);
+  }
+  // Solid publishes store reads on flush. Switch the draft in the route-writing
+  // transaction so input or Enter in this tick sees the destination composer.
+  const setState: StoreSetter<AppState> = (change) =>
+    updateState((draft) => {
+      const replacement = change(draft);
+      const next = replacement ?? draft;
+      pendingFolder = next.pendingWorkspaceSelectionPath;
+      const targetWorkspace = next.editorContext.workspacePath;
+      if (next.activeSessionId !== activeId || targetWorkspace !== workspace) {
+        const from = key;
+        const transfer =
+          next.activeSessionId === null &&
+          sessionId === null &&
+          isSameWorkspacePath(typedForFolder, targetWorkspace)
+            ? text
+            : '';
+        typedForFolder = null;
+        selectDraft(next.activeSessionId, targetWorkspace, next);
+        if (transfer && from !== key && !text) {
+          writeOwnedDraft(from, '');
+          writeOwnedDraft(key, transfer);
+        }
+      }
+      if (!pendingFolder) typedForFolder = null;
+      return replacement;
+    });
   const [nextPastedImageIndex, setNextPastedImageIndex] = createSignal(1);
   const [isLoading, setIsLoading] = createSignal(false);
   const [loadingStartedAt, setLoadingStartedAt] = createSignal<number | null>(null);
@@ -601,7 +732,12 @@ export function createAppState(): AppStateInstance {
   const [connectionInitialized, setConnectionInitialized] = createSignal(false);
   const [startupWaitingForPlugins, setStartupWaitingForPlugins] = createSignal(false);
   const [startupAddonWarning, setStartupAddonWarning] = createSignal<string | null>(null);
-  const [showSessionPicker, setShowSessionPicker] = createSignal(false);
+  const [showSessionPicker, publishSessionPicker] = createSignal(false);
+  const setShowSessionPicker: Setter<boolean> = (value) => {
+    picker = isFunction(value) ? value(picker) : value;
+    selectDraft(activeId, workspace, state);
+    return publishSessionPicker(picker);
+  };
   const storedWorkspacePath = readStored<unknown>(STORAGE_KEYS.workspacePath);
   const initialManualWorkspaceSelection =
     readStored<unknown>(STORAGE_KEYS.manualWorkspaceSelection) === true &&
@@ -682,8 +818,24 @@ export function createAppState(): AppStateInstance {
     desktopSessionPaneSide,
     setDesktopSessionPaneSide,
     inputText,
+    readLatestDraftText: () => text,
     setInputText,
     inputTextMutationVersion,
+    currentDraftKey: () => key,
+    finishNewChatDraft: (sourceKey: string, craftedText: string) => {
+      bootstrapId = null;
+      selectDraft(activeId, workspace, state);
+      if (craftedText && sourceKey !== key) {
+        writeOwnedDraft(sourceKey, '');
+        setInputText(craftedText);
+      }
+    },
+    draftSessionId,
+    writeOwnedDraft,
+    onBeforeDraftSwitch: (listener: () => void) => {
+      draftSwitchListeners.add(listener);
+      return () => draftSwitchListeners.delete(listener);
+    },
     nextPastedImageIndex,
     setNextPastedImageIndex,
     isLoading,
@@ -807,8 +959,14 @@ export const setShowEmptyStateHistogram = defaultAppState.setShowEmptyStateHisto
 export const desktopSessionPaneSide = defaultAppState.desktopSessionPaneSide;
 export const setDesktopSessionPaneSide = defaultAppState.setDesktopSessionPaneSide;
 export const inputText = defaultAppState.inputText;
+export const readLatestDraftText = defaultAppState.readLatestDraftText;
 export const setInputText = defaultAppState.setInputText;
 export const inputTextMutationVersion = defaultAppState.inputTextMutationVersion;
+export const currentDraftKey = defaultAppState.currentDraftKey;
+export const finishNewChatDraft = defaultAppState.finishNewChatDraft;
+export const draftSessionId = defaultAppState.draftSessionId;
+export const writeOwnedDraft = defaultAppState.writeOwnedDraft;
+export const onBeforeDraftSwitch = defaultAppState.onBeforeDraftSwitch;
 export const nextPastedImageIndex = defaultAppState.nextPastedImageIndex;
 export const setNextPastedImageIndex = defaultAppState.setNextPastedImageIndex;
 export const isLoading = defaultAppState.isLoading;
@@ -883,7 +1041,6 @@ export function resetDefaultAppState() {
   setShowTurnTimer(next.showTurnTimer());
   setShowEmptyStateHistogram(next.showEmptyStateHistogram());
   setDesktopSessionPaneSide(next.desktopSessionPaneSide());
-  setInputText(next.inputText());
   setNextPastedImageIndex(next.nextPastedImageIndex());
   setIsLoading(next.isLoading());
   setLoadingStartedAt(next.loadingStartedAt());
@@ -893,6 +1050,7 @@ export function resetDefaultAppState() {
   setStartupWaitingForPlugins(next.startupWaitingForPlugins());
   setStartupAddonWarning(next.startupAddonWarning());
   setShowSessionPicker(next.showSessionPicker());
+  if (next.currentDraftKey() === currentDraftKey()) setInputText(next.inputText());
   setManualWorkspaceSelection(next.manualWorkspaceSelection());
   setShowModelPicker(next.showModelPicker());
   setShowModels(next.showModels());

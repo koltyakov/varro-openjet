@@ -67,6 +67,11 @@ internal class StreamingToolContent {
                 metadata.add("progress", source.get("progress"))
                 val state = summarize(Json.obj("status" to "running", "input" to Json.obj(), "metadata" to metadata, "time" to time))
                 for (name in listOf("structured", "content", "progress")) state.obj("metadata")?.get(name)?.let { properties.add(name, it) }
+                val structured = properties.obj("structured") ?: Json.obj()
+                for (name in listOf("sessionID", "sessionId", "task_id", "childPromptID", "status")) {
+                    source.obj("structured").str(name)?.takeIf { it.length <= 256 }?.let { structured.addProperty(name, it) }
+                }
+                if (structured.size() > 0) properties.add("structured", structured)
             }
             "session.next.tool.success" -> {
                 val content = textContent(source.get("content"))
@@ -83,11 +88,15 @@ internal class StreamingToolContent {
                 properties.add("structured", summary)
             }
             "session.next.tool.failed" -> {
+                val metadata = source.obj("structured")?.deepCopy() ?: Json.obj()
+                metadata.add("provider", source.get("provider")); metadata.add("result", source.get("result"))
                 val state = summarize(Json.obj("status" to "error", "input" to Json.obj(), "time" to time,
                     "error" to (source.str("error") ?: source.obj("error").str("message") ?: "Tool execution failed"),
-                    "metadata" to Json.obj("provider" to source.get("provider"), "result" to source.get("result"))))
+                    "metadata" to metadata))
                 field(state, "error")
-                for (name in listOf("provider", "result")) state.obj("metadata")?.get(name)?.let { properties.add(name, it) }
+                val summary = state.obj("metadata")?.deepCopy() ?: Json.obj()
+                properties.add("provider", summary.remove("provider")); properties.add("result", summary.remove("result"))
+                if (summary.size() > 0) properties.add("structured", summary)
             }
             else -> return event
         }

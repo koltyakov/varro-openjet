@@ -67,6 +67,7 @@ import type {
   Part,
   TextPart,
   ToolPart,
+  UserMessage,
 } from '../../types';
 import {
   formatContextLineRanges,
@@ -527,14 +528,45 @@ export function getAutomaticActionInfo(info: MessageEntry['info']): AssistantMes
 export function projectAutomaticActionMessage(message: MessageEntry): MessageEntry {
   if (message.info.role !== 'user') return message;
   const parsed = parseUserMessageContent(message.parts);
-  if (
+  return keepsUserMessage(message.info, message.parts, parsed)
+    ? message
+    : toAutomaticActionMessage(message.info, parsed);
+}
+
+type AutomaticActionProjection = {
+  message: MessageEntry;
+  content: ParsedUserMessageContent | null;
+};
+
+/**
+ * Projects like `projectAutomaticActionMessage` and also returns the parse that kept a user
+ * message unchanged, so one pass can reuse it instead of parsing the same parts again.
+ * `content` is null for assistant messages and for projected automatic actions.
+ */
+export function projectAutomaticActionMessageWithContent(
+  message: MessageEntry
+): AutomaticActionProjection {
+  if (message.info.role !== 'user') return { message, content: null };
+  const parsed = parseUserMessageContent(message.parts);
+  return keepsUserMessage(message.info, message.parts, parsed)
+    ? { message, content: parsed }
+    : { message: toAutomaticActionMessage(message.info, parsed), content: null };
+}
+
+function keepsUserMessage(info: UserMessage, parts: Part[], parsed: ParsedUserMessageContent) {
+  return (
     !parsed.automaticParts.length ||
     hasUserMessageContent(parsed) ||
-    message.info.summary?.diffsOmitted ||
-    message.parts.some((part) => part.type === 'compaction')
-  )
-    return message;
-  return { info: getAutomaticActionInfo(message.info), parts: parsed.automaticParts };
+    !!info.summary?.diffsOmitted ||
+    parts.some((part) => part.type === 'compaction')
+  );
+}
+
+function toAutomaticActionMessage(
+  info: UserMessage,
+  parsed: ParsedUserMessageContent
+): MessageEntry {
+  return { info: getAutomaticActionInfo(info), parts: parsed.automaticParts };
 }
 
 function getAutomaticAction(part: TextPart): string | null {
@@ -1039,7 +1071,11 @@ function getDisplayMessageTexts(parsed: ParsedUserMessageContent): string[] {
 }
 
 export function getUserMessagePreviewText(parts: Part[]): string {
-  const parsed = parseUserMessageContent(parts);
+  return getUserMessagePreviewTextFromContent(parseUserMessageContent(parts));
+}
+
+/** Preview text for content the caller already parsed from the same parts. */
+export function getUserMessagePreviewTextFromContent(parsed: ParsedUserMessageContent): string {
   const firstText = getDisplayMessageTexts(parsed)
     .map((text) =>
       parsed.attachments.reduce(
@@ -2639,8 +2675,11 @@ function MessageAttachmentRail(props: {
   let menu: HTMLDivElement | undefined;
 
   const remainingAttachments = createMemo(() => props.attachments.slice(visibleCount()));
+  // Leading rails can extend beyond the text bubble; standalone rails use the parent's capacity.
+  const capacityElement = () => (props.leading ? root : root?.parentElement);
   const updateVisibleCount = () => {
-    if (!root || !measurement || root.clientWidth <= 0) return;
+    const capacityWidth = capacityElement()?.clientWidth ?? 0;
+    if (!measurement || capacityWidth <= 0) return;
     const attachmentCount = untrack(() => props.attachments.length);
 
     const itemWidths = Array.from(
@@ -2655,14 +2694,14 @@ function MessageAttachmentRail(props: {
       (total, width, index) => total + width + (index > 0 ? gap : 0),
       0
     );
-    if (totalWidth <= root.clientWidth) {
+    if (totalWidth <= capacityWidth) {
       setVisibleCount(attachmentCount);
       return;
     }
 
     const overflowControlWidth = 26;
     const overflowGap = 8;
-    const availableWidth = Math.max(0, root.clientWidth - overflowControlWidth - overflowGap);
+    const availableWidth = Math.max(0, capacityWidth - overflowControlWidth - overflowGap);
     let usedWidth = 0;
     let count = 0;
     for (const width of itemWidths) {
@@ -2675,8 +2714,8 @@ function MessageAttachmentRail(props: {
   };
 
   createEffect(
-    () => props.attachments.length,
-    (count) => {
+    () => [props.attachments.length, props.leading] as const,
+    ([count]) => {
       const cleanups: Array<() => void> = [];
 
       if (count === 0)
@@ -2684,11 +2723,12 @@ function MessageAttachmentRail(props: {
           for (const cleanup of cleanups.toReversed()) cleanup();
         };
       updateVisibleCount();
-      if (!root)
+      const element = capacityElement();
+      if (!element)
         return () => {
           for (const cleanup of cleanups.toReversed()) cleanup();
         };
-      const stopObservingResize = observeSettledResize(root, updateVisibleCount);
+      const stopObservingResize = observeSettledResize(element, updateVisibleCount);
       cleanups.push(stopObservingResize);
 
       return () => {

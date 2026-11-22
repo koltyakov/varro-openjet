@@ -1376,9 +1376,9 @@ class VarroProjectService(private val project: Project) : Disposable {
     @Synchronized
     private fun reconcilePermissionOwner() {
         val current = permissionOwner
-        val next = panels.firstOrNull { it.isReady && it.surface == WebviewHost.Surface.SIDEBAR }
-            ?: current?.takeIf { it.isReady && it in panels }
-            ?: panels.firstOrNull { it.isReady }
+        val next = panels.firstOrNull { it.isAutomationReady && it.surface == WebviewHost.Surface.SIDEBAR }
+            ?: current?.takeIf { it.isAutomationReady && it in panels }
+            ?: panels.firstOrNull { it.isAutomationReady }
         if (next === current) return
         permissionOwner = next
         if (next != null) permissionLease++
@@ -1390,7 +1390,7 @@ class VarroProjectService(private val project: Project) : Disposable {
 
     @Synchronized
     private fun isPermissionAutomationLeaseCurrent(host: WebviewHost, lease: Long): Boolean =
-        !project.isDisposed && host.isReady && host in panels && host === permissionOwner && lease == permissionLease
+        !project.isDisposed && host.isAutomationReady && host in panels && host === permissionOwner && lease == permissionLease
 
     private fun broadcastEditorTabs() = broadcast("editor-tabs/state", Json.obj(
         "open" to panels.any { it.surface == WebviewHost.Surface.EDITOR },

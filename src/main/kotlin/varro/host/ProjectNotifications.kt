@@ -45,12 +45,21 @@ internal class ProjectNotifications(
     private var lastNotification: Notification? = null
     private val soundLock = Any()
     private var clip: Clip? = null
-    private val state = AttentionNotifications(::preferences, ::isFocused, ::inScope)
+    private val state = AttentionNotifications(::preferences, ::isFocused, ::inScope, dismiss = {
+        runCatching { lastNotification?.expire() }.onFailure { log.warn("Could not dismiss Varro IDE notification", it) }
+        lastNotification = null
+    })
 
     init {
         app.messageBus.connect(this).subscribe(ApplicationActivationListener.TOPIC, object : ApplicationActivationListener {
             override fun applicationActivated(ideFrame: IdeFrame) = onEdt { state.update() }
+            override fun applicationDeactivated(ideFrame: IdeFrame) = onEdt { state.update() }
         })
+        // Switching between project windows need not deactivate the application.
+        val focus = java.awt.KeyboardFocusManager.getCurrentKeyboardFocusManager()
+        val listener = java.beans.PropertyChangeListener { onEdt { state.update() } }
+        focus.addPropertyChangeListener("activeWindow", listener)
+        com.intellij.openapi.util.Disposer.register(this, Disposable { focus.removePropertyChangeListener("activeWindow", listener) })
     }
 
     private fun preferences() = AttentionNotifications.Settings(settings.notificationsNative, buildSet {

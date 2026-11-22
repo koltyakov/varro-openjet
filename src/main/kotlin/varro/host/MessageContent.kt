@@ -65,6 +65,13 @@ internal object MessageContent {
         if (output != null) next.addProperty("output", output.take(512))
         val metadata = part.get("metadata")?.let(summary::project)
         if (!summary.omitted && (output?.length ?: 0) <= 512) return projected
+        for (field in listOf("input", "metadata")) {
+            val identity = next.obj(field) ?: Json.obj()
+            for (key in listOf("sessionID", "sessionId", "task_id", "childPromptID", "status")) {
+                state.obj(field).str(key)?.takeIf { it.length <= 256 }?.let { identity.addProperty(key, it) }
+            }
+            next.add(field, identity)
+        }
         searchCount(name, state)?.let { count ->
             next.add("metadata", (next.obj("metadata") ?: Json.obj()).apply {
                 count.entrySet().forEach { add(it.key, it.value) }

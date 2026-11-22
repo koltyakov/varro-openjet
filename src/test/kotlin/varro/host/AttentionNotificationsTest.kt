@@ -12,6 +12,26 @@ import java.security.MessageDigest
 import javax.sound.sampled.AudioSystem
 
 class AttentionNotificationsTest {
+    @Test fun `focus return dismisses only its window once without resolving pending attention or replaying sound`() {
+        var focus = false
+        var dismissals = 0
+        val state = AttentionNotifications({ AttentionNotifications.Settings(native = true) }, { focus }, { true },
+            now = { 1000 }, dismiss = { dismissals++ })
+        var otherDismissals = 0
+        val other = AttentionNotifications({ AttentionNotifications.Settings(native = true) }, { false }, { true },
+            dismiss = { otherDismissals++ })
+        state.handle(requireNotNull(ServerEvents.parse(Json.obj("type" to "question.asked",
+            "properties" to Json.obj("id" to "question", "sessionID" to "root")))))
+        focus = true
+        state.update(); state.update(); other.update()
+        assertEquals(1, dismissals); assertEquals(0, otherDismissals)
+        focus = false; state.update(); focus = true; state.update()
+        assertEquals(2, dismissals)
+        assertNull(state.deliver())
+        state.resolve(Kind.QUESTION, "question")
+        assertEquals(2, dismissals)
+    }
+
     @Test fun `status-only resumes do not repeat a completion but a distinct assistant can complete without a new prompt`() {
         val f = Fixture()
         f.session()

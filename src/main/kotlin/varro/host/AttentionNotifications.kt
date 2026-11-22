@@ -11,6 +11,7 @@ internal class AttentionNotifications(
     private val isFocused: () -> Boolean,
     private val inScope: (String) -> Boolean?,
     private val now: () -> Long = System::currentTimeMillis,
+    private val dismiss: () -> Unit = {},
 ) {
     enum class Kind(val label: String) {
         PERMISSION("Permission approval needed"), QUESTION("Your answer is needed"),
@@ -42,6 +43,7 @@ internal class AttentionNotifications(
     private var mutationFloor = 0L
     private var batchAt: Long? = null
     private var nextDeliveryAt = 0L
+    private var focused = isFocused()
 
     fun knowsSession(id: String) = sessions[id]?.ancestryKnown == true
 
@@ -300,6 +302,9 @@ internal class AttentionNotifications(
     }
 
     fun update() {
+        val currentFocus = isFocused()
+        if (currentFocus && !focused) dismiss()
+        focused = currentFocus
         queued.entries.removeIf {
             !shouldNotify(it.value.sessionId, it.value.kind) ||
                 it.key.startsWith("completion:") && !canComplete(it.value.sessionId)

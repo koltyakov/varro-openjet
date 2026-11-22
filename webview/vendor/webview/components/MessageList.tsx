@@ -444,8 +444,11 @@ export function MessageList() {
   type HistoryLoadingOwner = { windowVersion: number };
   type PendingOlderHistoryAnchor = {
     anchor: VisibleScrollAnchor | null;
+    firstMessageId: string | undefined;
+    anchorIndex: number | undefined;
     generation: number;
     invalidated: boolean;
+    batchNativePrependMounts?: true;
     owner: 'history' | 'edit';
     previousScrollHeight: number;
     previousScrollTop: number;
@@ -818,6 +821,7 @@ export function MessageList() {
   let bottomFollowObservedStreaming = false;
   let bottomFollowPreservesNearBottomOffset = false;
   let bottomFollowResumePending = false;
+  let restoreLayoutObserver: MutationObserver | null = null;
   let lastBottomScrollFrameAt: number | null = null;
   const activeOlderHistoryLoads = new Map<
     string,
@@ -1873,6 +1877,19 @@ export function MessageList() {
       : null;
     // Account for pending rounding reductions before they shrink the physical scroll range.
     reconcileAppendBottomReserve();
+    if (!trackRef?.querySelector('.append-scroll-bottom-reserve')) {
+      for (const [element, correction] of pendingRowHeightCorrections) {
+        if (!element.isConnected || correction >= (appliedRowHeightCorrections.get(element) ?? 0))
+          continue;
+        // A consumed reserve has no mounted spacer to grow imperatively. Commit its
+        // replacement before a smaller correction can clamp the viewport backward.
+        flush();
+        // Effects committed above can enqueue more rounding. The mounted spacer can
+        // now absorb that additional reduction before any correction writes.
+        reconcileAppendBottomReserve();
+        break;
+      }
+    }
     let changed = false;
     for (const [element, correction] of pendingRowHeightCorrections) {
       if (!element.isConnected) continue;
@@ -2118,6 +2135,7 @@ export function MessageList() {
     null
   );
   let changedLayoutAnchorInputEpoch = -1;
+  let hydratedInputDestination: VisibleScrollAnchor | null = null;
   let nativeKeyScrollEpoch = -1;
   let resumeChangedLayoutAnchor: (() => void) | null = null;
   let deferredLayoutInputAnchor: {
@@ -2152,6 +2170,7 @@ export function MessageList() {
           : null;
     if (!anchor && !resumeChangedLayoutAnchor) return;
     changedLayoutAnchorInputEpoch = -1;
+    hydratedInputDestination = null;
     resumeChangedLayoutAnchor = null;
     setChangedLayoutAnchor(null);
   }
@@ -2191,9 +2210,10 @@ export function MessageList() {
         !diffFocusPauseActive &&
         !pendingExpansionScrollAnchor &&
         !pendingStructuralScrollAnchor &&
-        // A sibling preview can still be pending in this row. Its partial growth
-        // belongs to the existing anchor/input handoff until the row's last load.
-        !inlineDiffHeightHolds.get(mount.messageId)?.loads.size &&
+        // Partial growth before a gesture belongs to its native handoff. Once the
+        // gesture has established a destination, align it on every sibling commit.
+        (anchor === hydratedInputDestination ||
+          !inlineDiffHeightHolds.get(mount.messageId)?.loads.size) &&
         mountedMessageRows.get(mount.messageId)?.contains(mount.element)
       )
         restoreVisibleScrollAnchor(anchor, {
@@ -2225,6 +2245,9 @@ export function MessageList() {
           inlineDiffHeightHolds.delete(messageId);
           const mountedRow = mountedMessageRows.get(messageId);
           if (mountedRow) {
+            reserveInlineDiffHeightRelease(mountedRow);
+            // Publishing reserve may admit another deferred load on this row.
+            if (inlineDiffHeightHolds.has(messageId)) return;
             mountedRow.style.removeProperty('min-height');
             // Publish loaded geometry before range reconciliation can unmount this row.
             // Waiting for ResizeObserver lets a remount overwrite it with the short summary.
@@ -2236,6 +2259,53 @@ export function MessageList() {
       };
     }, onInlineDiffMount)
   );
+  function reserveInlineDiffHeightRelease(row: HTMLElement) {
+    if (
+      !containerRef ||
+      (inlinePreviewBottomFollow?.sessionId === state.activeSessionId &&
+        inlinePreviewBottomFollow.inputEpoch === directScrollInputEpoch)
+    )
+      return;
+    const bounds = row.getBoundingClientRect();
+    if (bounds.bottom <= containerRef.getBoundingClientRect().top) return;
+    const styles = getComputedStyle(row);
+    let bottom =
+      bounds.top +
+      (Number.parseFloat(styles.borderTopWidth) || 0) +
+      (Number.parseFloat(styles.paddingTop) || 0);
+    for (const child of row.children) {
+      const childStyles = getComputedStyle(child);
+      if (
+        childStyles.display === 'none' ||
+        (childStyles.position !== 'static' && childStyles.position !== 'relative')
+      )
+        continue;
+      bottom = Math.max(
+        bottom,
+        child.getBoundingClientRect().bottom + (Number.parseFloat(childStyles.marginBottom) || 0)
+      );
+    }
+    const naturalHeight =
+      bottom -
+      bounds.top +
+      (Number.parseFloat(styles.paddingBottom) || 0) +
+      (Number.parseFloat(styles.borderBottomWidth) || 0) +
+      (appliedRowHeightCorrections.get(row) ?? 0);
+    const lost = bounds.height - naturalHeight;
+    if (lost <= 0.5) return;
+    if (pointerScrollOwnershipActive) {
+      reserveHeldScrollbarRange(lost);
+    } else {
+      const shortfall =
+        containerRef.scrollTop - (containerRef.scrollHeight - containerRef.clientHeight - lost);
+      if (shortfall <= 0.5) return;
+      appendBottomReserveTarget = containerRef.scrollTop;
+      setAppendBottomReserve((reserve) => reserve + Math.ceil(shortfall));
+    }
+    // Completion can remove the status card while this hold still supplies its height.
+    // Publish the replacement space before releasing the hold, not after a browser clamp.
+    flush();
+  }
   // Unmounted rows remain provisional. Measure the mounted range exactly before paint rather
   // than mounting the entire initial page just to establish its offscreen heights.
   const shouldMeasureRows = createMemo(() => messages().length >= VIRTUALIZE_THRESHOLD);
@@ -2299,14 +2369,17 @@ export function MessageList() {
     anchor: VisibleScrollAnchor,
     sessionId: string | null,
     ownershipEpoch: number,
-    inputEpoch: number
+    inputEpoch: number,
+    fromDirectMovement = false
   ) {
+    hydratedInputDestination = fromDirectMovement ? anchor : null;
     changedLayoutAnchorInputEpoch = inputEpoch;
     setChangedLayoutAnchor(anchor);
     let frameId = 0;
     let attempts = 0;
     let queued = false;
     const finish = () => {
+      if (hydratedInputDestination === anchor) hydratedInputDestination = null;
       if (resumeChangedLayoutAnchor === resume) resumeChangedLayoutAnchor = null;
       if (untrack(changedLayoutAnchor) === anchor) setChangedLayoutAnchor(null);
     };
@@ -3133,6 +3206,23 @@ export function MessageList() {
     () => {
       const msgs = messages();
       loadingOlderHistoryOwners();
+      const sessionId = state.activeSessionId;
+      const pendingAnchor = sessionId ? getCurrentPendingHistoryAnchor(sessionId) : undefined;
+      if (
+        nativeScrollbarActive &&
+        pendingAnchor?.owner === 'history' &&
+        !pendingAnchor.invalidated &&
+        (pendingAnchor.firstMessageId !== msgs[0]?.info.id ||
+          (pendingAnchor.anchor &&
+            pendingAnchor.anchorIndex !== messageIndexById().get(pendingAnchor.anchor.messageId)))
+      ) {
+        // A prepend must not restore an old content coordinate against Chromium's held thumb.
+        // Yield before pinning/mounting that obsolete viewport, and permanently invalidate this
+        // owner so a release in the same update cannot replay its correction afterward.
+        pendingAnchor.invalidated = true;
+        pendingAnchor.batchNativePrependMounts = true;
+        pendingAnchor.releaseAlignment?.();
+      }
       if (!shouldVirtualize() || msgs.length === 0) {
         return {
           start: 0,
@@ -3144,7 +3234,6 @@ export function MessageList() {
         };
       }
       const metrics = virtualMetrics();
-      const sessionId = state.activeSessionId;
       // Initial follow opens at the tail. Keep its range there as provisional heights become
       // exact; selecting against scrollTop=0 would mount the head before immediately discarding it.
       const positioningAtBottom =
@@ -3156,7 +3245,6 @@ export function MessageList() {
           : getVirtualScrollTop(scrollTop()),
         viewportHeight: viewportHeight(),
       });
-      const pendingAnchor = sessionId ? getCurrentPendingHistoryAnchor(sessionId) : undefined;
       const structuralAnchor =
         pendingStructuralScrollAnchor?.sessionId === sessionId &&
         pendingStructuralScrollAnchor.ownershipEpoch === userScrollOwnershipEpoch
@@ -4474,6 +4562,8 @@ export function MessageList() {
       : captureVisibleScrollAnchor();
     if (!anchor && preferredMessageId) return false;
     pendingAnchor.anchor = anchor;
+    pendingAnchor.firstMessageId = messageIds()[0];
+    pendingAnchor.anchorIndex = anchor ? messageIndexById().get(anchor.messageId) : undefined;
     pendingAnchor.previousScrollHeight = containerRef.scrollHeight;
     pendingAnchor.previousScrollTop = containerRef.scrollTop;
     pendingAnchor.ownershipEpoch = userScrollOwnershipEpoch;
@@ -4509,7 +4599,7 @@ export function MessageList() {
   }
 
   function restorePendingHistoryAnchorIfMounted() {
-    if (restoringPendingHistoryAnchor) return false;
+    if (restoringPendingHistoryAnchor || nativeScrollbarActive) return false;
     const sessionId = state.activeSessionId;
     if (!sessionId) return false;
     const pendingAnchor = getCurrentPendingHistoryAnchor(sessionId);
@@ -4548,6 +4638,16 @@ export function MessageList() {
     options?: { useMessageOffsetFallback?: boolean; reserveBottomOverflow?: boolean }
   ) {
     if (!containerRef) return false;
+    // Native key animation can advance before its scroll notification reaches us.
+    // Let onScroll translate that destination before treating its movement as reflow.
+    if (
+      anchor &&
+      anchor === hydratedInputDestination &&
+      nativeKeyScrollEpoch === directScrollInputEpoch &&
+      Math.abs(containerRef.scrollTop - lastObservedScrollTop) > 0.5
+    ) {
+      return false;
+    }
     let delta: number | null = null;
     if (anchor) {
       const element = getMountedScrollAnchorElement(anchor);
@@ -4687,6 +4787,8 @@ export function MessageList() {
   }
 
   function flushPendingMountedRowMeasurements() {
+    const checkStickyPreview = mountedStickyPreviewCheckPending;
+    mountedStickyPreviewCheckPending = false;
     if (disposed || !shouldMeasureRows()) {
       pendingMountedRowMeasurements.clear();
       return;
@@ -4700,6 +4802,14 @@ export function MessageList() {
     );
     pendingMountedRowMeasurements.clear();
     if (rows.length === 0) return;
+    if (
+      checkStickyPreview &&
+      rows.some(({ element }) => element.classList.contains('interactive-request'))
+    ) {
+      // Match the scroll-handler batch: read sticky geometry before row-height corrections,
+      // rather than forcing another layout immediately after those writes.
+      reconcileMountedStickyPreview();
+    }
     measureMountedRows(rows);
     restorePendingHistoryAnchorIfMounted();
   }
@@ -4718,8 +4828,19 @@ export function MessageList() {
     const inlineDiffHeight = inlineDiffHeightHolds.get(messageId)?.height ?? 0;
     if (inlineDiffHeight > 0) element.style.minHeight = `${inlineDiffHeight}px`;
     if (widthResizeActive) widthResizeNewlyMountedRows.add(element);
+    const historyOwner = state.activeSessionId
+      ? getCurrentPendingHistoryAnchor(state.activeSessionId)
+      : undefined;
+    // Only the exact prepend that retired its history anchor may batch held-thumb mounts.
+    // Other cancellations, streaming mounts, and wheel/touch compensation keep their timing.
+    const batchNativePrependMounts =
+      nativeScrollbarActive &&
+      shouldVirtualize() &&
+      historyOwner?.owner === 'history' &&
+      historyOwner.batchNativePrependMounts === true &&
+      historyOwner.invalidated;
     if (element.classList.contains('interactive-request')) {
-      if (batchingScrollMounts) mountedStickyPreviewCheckPending = true;
+      if (batchingScrollMounts || batchNativePrependMounts) mountedStickyPreviewCheckPending = true;
       else reconcileMountedStickyPreview();
     }
     if (!shouldMeasureRows() && element.classList.contains('interactive-request')) {
@@ -4727,7 +4848,12 @@ export function MessageList() {
     }
     if (!shouldMeasureRows()) return;
 
-    if (shouldVirtualize() && userScrollRecentlyActive() && !batchingScrollMounts) {
+    if (
+      shouldVirtualize() &&
+      userScrollRecentlyActive() &&
+      !batchingScrollMounts &&
+      !batchNativePrependMounts
+    ) {
       // A direct gesture's newly mounted overscan can correct height above its painted destination.
       // Apply that bounded correction before the scroll event remembers the destination anchor.
       measureMountedRows([{ element, messageId }]);
@@ -5123,6 +5249,16 @@ export function MessageList() {
 
   function setPreservedScrollTop(nextScrollTop: number) {
     if (!containerRef) return;
+    const inputDestination = hydratedInputDestination;
+    if (inputDestination && nativeKeyScrollEpoch === directScrollInputEpoch) {
+      // Measurement may compensate before the native key's scroll event arrives.
+      // Preserve that movement before this write advances lastObservedScrollTop.
+      const movement = lastObservedScrollTop - containerRef.scrollTop;
+      if (Math.abs(movement) > 0.5) {
+        inputDestination.top += movement;
+        if (inputDestination.messageTop !== undefined) inputDestination.messageTop += movement;
+      }
+    }
     suppressSyncScrollTop = true;
     containerRef.scrollTop = Math.max(0, nextScrollTop);
     suppressSyncScrollTop = false;
@@ -5892,6 +6028,7 @@ export function MessageList() {
     immediate?: boolean;
     elapsedMs?: number;
     visibilityRestore?: boolean;
+    reconcileReserve?: boolean;
   }) {
     const releasedOnReveal = releaseSuspendedBottomReserve() && options?.visibilityRestore;
     if (releasedOnReveal && trackRef) {
@@ -5963,7 +6100,7 @@ export function MessageList() {
       return;
     }
 
-    if (!releasedOnReveal) reconcileAppendBottomReserve();
+    if (!releasedOnReveal && options?.reconcileReserve !== false) reconcileAppendBottomReserve();
     const now = performance.now();
     const previousScrollTop = containerRef?.scrollTop ?? 0;
     suppressSyncScrollTop = true;
@@ -6170,7 +6307,42 @@ export function MessageList() {
     // Keep doing this through late restore measurements until the resumed follower settles.
     clearActivityExitReserve();
     releaseBottomReserveForViewportReset();
+    // A trailing row can commit after resize delivery but before the next follow tick.
+    // Keep the resumed follower at the physical bottom through that commit.
+    if (trackRef && !restoreLayoutObserver && globalThis.MutationObserver !== undefined) {
+      const sessionId = state.activeSessionId;
+      const inputEpoch = directScrollInputEpoch;
+      restoreLayoutObserver = new MutationObserver(() => {
+        if (
+          !bottomFollowResumePending ||
+          !autoScroll() ||
+          state.activeSessionId !== sessionId ||
+          directScrollInputEpoch !== inputEpoch ||
+          editingMessage() ||
+          diffFocusPauseActive ||
+          pointerScrollOwnershipActive ||
+          stickyNavigationOwnsScroll()
+        ) {
+          stopRestoreLayoutObserver();
+          return;
+        }
+        if (document.hidden || distanceFromBottom() <= 1) return;
+        performScroll({ force: true, immediate: true });
+        bottomFollowSettleFrames = 0;
+      });
+      restoreLayoutObserver.observe(trackRef, {
+        childList: true,
+        subtree: true,
+        characterData: true,
+        attributeFilter: ['class', 'style'],
+      });
+    }
     return true;
+  }
+
+  function stopRestoreLayoutObserver() {
+    restoreLayoutObserver?.disconnect();
+    restoreLayoutObserver = null;
   }
 
   function consumeBottomReserve(amount: number) {
@@ -6332,6 +6504,7 @@ export function MessageList() {
   }
 
   function cancelPendingScroll() {
+    stopRestoreLayoutObserver();
     lastBottomScrollFrameAt = null;
     if (stickyPreviewDebounceTimer) {
       clearTimeout(stickyPreviewDebounceTimer);
@@ -6600,7 +6773,12 @@ export function MessageList() {
         Math.abs(currentHeight - lastAutoScrolledTrackHeight) <= 1 &&
         Math.abs(currentBottomScrollTop - lastAutoScrolledBottomScrollTop) <= 1 &&
         (distanceFromBottom() <= 1 || preservesNearBottomOffset);
-      if (stable && (!belowBottomTarget || preservesNearBottomOffset) && !trackGrew) {
+      if (
+        stable &&
+        !releasedSuspendedReserve &&
+        (!belowBottomTarget || preservesNearBottomOffset) &&
+        !trackGrew
+      ) {
         bottomFollowSettleFrames += 1;
       } else {
         bottomFollowSettleFrames = 0;
@@ -6629,6 +6807,7 @@ export function MessageList() {
           performScroll({ force: true, immediate: true });
         }
         bottomFollowResumePending = false;
+        stopRestoreLayoutObserver();
         const shouldFillInitialViewport =
           pendingInitialHistoryFillSessionId === sessionId &&
           isSessionHistoryTruncated(sessionId) &&
@@ -7159,7 +7338,8 @@ export function MessageList() {
             anchor,
             state.activeSessionId,
             userScrollOwnershipEpoch,
-            directScrollInputEpoch
+            directScrollInputEpoch,
+            true
           );
         }
       }
@@ -7688,6 +7868,12 @@ export function MessageList() {
     // offscreen reserve now: pointerup need not produce another scroll or resize event, and a
     // subsequent drag would otherwise grab that stale range and land below every message.
     if (ownedScroll) releaseOffscreenBottomReserve();
+    // Follow writes were blocked while the thumb owned a range that cold measurements
+    // may have shortened. A later append must not reserve the obsolete follow target.
+    if (ownedScroll && containerRef && autoScroll() && pinnedToBottom) {
+      lastAutoScrolledBottomScrollTop = containerRef.scrollTop;
+      lastAutoScrolledTrackHeight = trackRef?.getBoundingClientRect().height ?? lastTrackHeight;
+    }
   }
 
   function handleFocusIn(event: FocusEvent) {
@@ -8449,10 +8635,16 @@ export function MessageList() {
         if ((trackChanged || localViewportShrinking) && shouldCorrectBottomAfterResize()) {
           // Composer growth removes viewport space, so keep the bottom aligned before paint.
           // Width reflow also bypasses easing in performScroll while measurements settle.
-          performScroll({
-            force: true,
-            immediate: localViewportShrinking,
-          });
+          // Follow after the queued reserve consumption, not to a temporary reserved bottom.
+          if (!trackChanged || untrack(appendBottomReserve) <= 0) {
+            performScroll({
+              force: true,
+              immediate: localViewportShrinking,
+              // The track observer already queued this layout mutation for the next frame.
+              // Consuming reserve here would resize the same track during observer delivery.
+              reconcileReserve: false,
+            });
+          }
           if (widthChanged && widthResizeActive) {
             pendingWidthFollowCorrection = true;
           } else {
@@ -8486,6 +8678,7 @@ export function MessageList() {
       document.removeEventListener('pointercancel', releasePointerScrollOwnership);
       window.removeEventListener('resize', handleHostViewportResize);
       observer.disconnect();
+      stopRestoreLayoutObserver();
       firstVisibleMessageObserver?.disconnect();
       firstVisibleMessageObserver = null;
       measuredRowObserver?.disconnect();
@@ -11016,6 +11209,8 @@ export function MessageList() {
     const anchor = captureVisibleScrollAnchor({ preferStableRenderItem: true });
     const pendingAnchor: PendingOlderHistoryAnchor = {
       anchor,
+      firstMessageId: messageIds()[0],
+      anchorIndex: anchor ? messageIndexById().get(anchor.messageId) : undefined,
       generation,
       invalidated: false,
       owner: 'history' as const,
@@ -11164,6 +11359,7 @@ export function MessageList() {
         isCurrentWindow() &&
         historyAnchorSettleOwner === settleOwner &&
         !!containerRef &&
+        !nativeScrollbarActive &&
         !stickyNavigationOwnsScroll() &&
         pendingOlderHistoryAnchors.get(sessionId) === pendingAnchor &&
         !pendingAnchor.invalidated &&

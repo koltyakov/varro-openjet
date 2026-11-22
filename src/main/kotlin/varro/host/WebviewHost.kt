@@ -100,8 +100,15 @@ class WebviewHost(
 
     val component: JComponent get() = browser.component
     val isReady: Boolean get() = ready.get() && !disposed.get()
+    val isAutomationReady: Boolean get() = PermissionAutomationLease.eligible(isReady, surface == Surface.EDITOR, component.isShowing)
 
     init {
+        // Retain hidden editor documents and requests, but transfer automatic work to a visible view.
+        component.addHierarchyListener { event ->
+            if (event.changeFlags and java.awt.event.HierarchyEvent.SHOWING_CHANGED.toLong() != 0L && !disposed.get()) {
+                onReadinessChanged()
+            }
+        }
         Disposer.register(this, browser)
         installMessageChannel()
         installAssetHandler()

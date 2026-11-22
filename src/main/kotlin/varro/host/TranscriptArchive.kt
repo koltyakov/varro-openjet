@@ -207,10 +207,12 @@ internal class TranscriptArchive(private val usage: UsageArchive) {
                             if (part.str("type") == "text" && part.bool("synthetic") != true && part.bool("ignored") != true) part.str("text") ?: error("Malformed transcript text") else null
                         }.joinToString("\n\n")
                     }
-                    val entry = text(info, text)
+                    val prompt = if (native && type == "user") PromptTextAttachments.split(text) else PromptTextAttachments.Prompt(text, emptyList())
+                    val entry = text(info, prompt.text)
                     if (type == "user") {
                         val files = if (native) message.arr("files")?.toList().orEmpty() else parts!!.filter { it.asObjectOrNull().str("type") == "file" }
-                        entry.add("attachments", Json.array(files.map { attachment(it.asObjectOrNull() ?: error("Malformed transcript attachment")) }))
+                        entry.add("attachments", Json.array(files.map { attachment(it.asObjectOrNull() ?: error("Malformed transcript attachment")) } +
+                            prompt.attachments.map { Json.obj("name" to it.name, "mime" to "text/plain", "text" to it.text, "omitted" to false) }))
                     }
                     Record(type!!, entry)
                 }
