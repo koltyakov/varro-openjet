@@ -57,6 +57,35 @@
     ]]></description>
 
     <change-notes><![CDATA[
+        <h3>0.12.x</h3>
+        <ul>
+            <li>Edit plans before implementing, open summarized V2 plans, or hand a plan to a new chat
+                with a linked conversation and Markdown attachment.</li>
+            <li>Follow each agent's configured model, remember per-agent model choices, and preserve
+                the original agent when editing a prompt.</li>
+            <li>Add Yesterday usage reports based on the local calendar day and recorded per-follow-up
+                usage in V2 subagent task cards.</li>
+            <li>Keep unsent text across session navigation within each view and workspace, and restore
+                todos alongside the transcript.</li>
+            <li>Preserve pasted text and annotations through native V2 compaction and transcript export.</li>
+            <li>Respect effective native shell permission rules in Auto mode, avoid redundant saved grants,
+                and retain agent restrictions when configuration omits them.</li>
+            <li>Highlight recognized slash commands and improve inline editing, attachments and streaming scroll behavior.</li>
+            <li>Harden webview navigation and file access, store attachments privately, and keep project
+                UI state in the local workspace file.</li>
+            <li>Improve server restart and process cleanup, and protect retained conversations during trash cleanup.</li>
+        </ul>
+        <h3>0.11.x</h3>
+        <ul>
+            <li>Show native V2 session goals with Pause, Resume, Clear and completed-goal Close controls
+                when supported. Start native commands such as <code>/goal</code> from a new chat.</li>
+            <li>Preview local Markdown images from open project folders and open their full-size originals.</li>
+            <li>Speed up V2 session summaries with bounded, read-only local history queries.</li>
+            <li>Keep verified moved conversations accessible even when their destination is not a Git worktree.</li>
+            <li>Sync pinned-session order across chat views and show clearer quota-reset estimates
+                and stale-data labels.</li>
+            <li>Improve large-transcript updates, streaming scroll stability, Markdown rendering and skill links.</li>
+        </ul>
         <h3>0.10.x</h3>
         <ul>
             <li>Manage MCP defaults, import JSON/JSONC, and open global or project configuration.</li>
