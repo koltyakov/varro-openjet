@@ -68,7 +68,8 @@ internal object OpenCodeV2Projection {
     fun agent(value: JsonObject) = value.deepCopy().apply {
         add("name", value.get("id")); add("prompt", value.get("system"))
         value.obj("model")?.let { add("model", it.deepCopy().apply { add("modelID", it.get("id")) }); add("variant", it.get("variant")) }
-        add("permission", legacyRules(value.get("permissions")))
+        if (value.hasNonNull("permissions")) add("permission", legacyRules(value.get("permissions")))
+        else remove("permission")
         add("options", value.obj("request").obj("body") ?: Json.obj())
     }
 

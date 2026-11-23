@@ -66,6 +66,8 @@ Pin providers in the chat provider list to show remaining quotas in the IDE stat
 
 Open usage reports from the tool-window menu for prompt counts, tokens, cache usage and assistant duration by provider and model. V2 auxiliary generation, titles and compaction appear as unattributed usage. Native totals with no retained dated record appear separately as undated usage, not as additional user prompts.
 
+The Yesterday section covers the previous local calendar day, including daylight-saving transitions.
+
 V2 subagent task cards show recorded usage for each delivered follow-up. Prompts delivered together share an interval. Missing usage and truncated history are marked unavailable or incomplete, not counted as zero; compaction stays in session totals.
 
 Tools > Varro also provides all-time usage CSV export, confirmed cleanup of old sessions with usage preservation and optional parent transcripts, and separate offline database compaction. See [session cleanup and usage export](docs/session-cleanup.md) for archive locations, safeguards and limits.

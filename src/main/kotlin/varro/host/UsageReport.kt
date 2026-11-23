@@ -20,23 +20,29 @@ class UsageReport(
     private val apiVersion: () -> Int = { 1 },
     private val request: (String, RequestOptions) -> OpenCodeResponse,
 ) {
+    private data class Window(val title: String, val start: Long, val end: Long? = null)
+
     fun build(includeAllTime: Boolean, now: Long = System.currentTimeMillis(), checkCancelled: () -> Unit = {}): String {
-        val midnight = Instant.ofEpochMilli(now).atZone(ZoneId.systemDefault()).toLocalDate()
-            .atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
-        val windows = listOf("Today" to midnight, "Last 7 rolling days" to now - 7 * DAY, "Last 30 rolling days" to now - 30 * DAY) +
-            (if (includeAllTime) listOf("All time" to 0L) else emptyList()) + listOf("Undated session usage" to Long.MIN_VALUE)
+        val zone = ZoneId.systemDefault()
+        val today = Instant.ofEpochMilli(now).atZone(zone).toLocalDate()
+        val midnight = today.atStartOfDay(zone).toInstant().toEpochMilli()
+        val yesterday = today.minusDays(1).atStartOfDay(zone).toInstant().toEpochMilli()
+        val windows = listOf(Window("Today", midnight), Window("Yesterday", yesterday, midnight),
+            Window("Last 7 rolling days", now - 7 * DAY), Window("Last 30 rolling days", now - 30 * DAY)) +
+            (if (includeAllTime) listOf(Window("All time", 0L)) else emptyList()) + listOf(Window("Undated session usage", Long.MIN_VALUE))
         val groups = windows.map { sortedMapOf<String, Total>() }
         var aggregated = 0
         fun addUsage(id: String, info: JsonObject) {
             val undated = info.str("source") == "unrecorded"
             val created = info.obj("time").long("completed") ?: info.obj("time").long("created")
-            if (!undated && (created == null || created > now || created < windows.filter { it.second != Long.MIN_VALUE }.minOf { it.second })) return
+            if (!undated && (created == null || created > now || created < windows.filter { it.start != Long.MIN_VALUE }.minOf { it.start })) return
             check(++aggregated <= 250_000) { "Usage report exceeds the 250,000-message local aggregation limit" }
             val model = "${info.str("providerID") ?: info.obj("model").str("providerID") ?: "unknown"}\u0000${info.str("modelID") ?: info.obj("model").str("id") ?: info.obj("model").str("modelID") ?: "unknown"}" + (info.str("source")?.let { "\u0000$it" } ?: "")
             val usage = Total().apply { add(id, info) }
             if (usage.total <= 0) return
-            windows.forEachIndexed { index, (_, start) ->
-                if (if (start == Long.MIN_VALUE) undated else if (undated) start == 0L else created!! >= start) {
+            windows.forEachIndexed { index, window ->
+                if (if (window.start == Long.MIN_VALUE) undated else if (undated) window.start == 0L
+                    else created!! >= window.start && (window.end == null || created < window.end)) {
                     check(model in groups[index] || groups[index].size < 4_096) { "Usage report exceeds the 4,096-route aggregation limit" }
                     groups[index].getOrPut(model) { Total() }.merge(usage)
                 }
@@ -123,14 +129,15 @@ class UsageReport(
 
     private fun render(
         now: Long,
-        windows: List<Pair<String, Long>>,
+        windows: List<Window>,
         groups: List<Map<String, Total>>,
         sessionCount: Long,
     ): String = buildString {
         appendLine("# OpenCode Usage Report")
         appendLine()
         appendLine("Generated ${Instant.ofEpochMilli(now)}. Retained history across all projects, $sessionCount sessions scanned.")
-        windows.forEachIndexed { index, (title, _) ->
+        windows.forEachIndexed { index, window ->
+            val title = window.title
             if (title == "Undated session usage" && groups[index].isEmpty()) return@forEachIndexed
             appendLine("\n## $title\n")
             if (groups[index].isEmpty()) {

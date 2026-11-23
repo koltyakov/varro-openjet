@@ -365,6 +365,17 @@ changing their stored transcript data.
 
 Usage tables use compact token counts and compute cache rate from summed cache-read tokens divided by summed input, cache-read and cache-write tokens. Output and reasoning tokens do not enter that rate. CSV exports retain exact counts.
 
+Usage-report windows include Yesterday, from the previous local midnight up to
+but not including today's midnight. Calendar dates, not a fixed 24-hour subtraction,
+handle daylight-saving transitions. Local SQLite, preserved statistics and REST
+fallback records pass through the same bounded-window aggregation. Undated native
+usage remains separate and is never assigned to Yesterday.
+
+Configured V2 agent catalogs preserve native resolved permissions when the
+configuration omits or nulls its permission list. An explicit empty native list
+still overrides the resolved rules. Missing permission data stays absent rather
+than becoming a fabricated empty list, so the composer can show only the agent role.
+
 `GET /varro/session/:id/followup-usage` verifies the canonical session and open-root or retained-transfer scope before reading native inbox/history. `OpenCodeV2FollowupUsage` reads at most ten 200-record pages and 8 MiB, returning only prompt identities and usage totals. Persisted delivery order groups prompts admitted before the same assistant step. Compaction is excluded, retried step identities count once, and absent usage stays missing or active rather than becoming recorded zero. Idle settles unfinished records; truncated oldest boundaries remain uncertain. V1 reports unsupported. Reads never generate, admit input or modify session state.
 
 V2 pause markers live in `metadata.varro.pauses`, backed by the shared per-session annotation files. `SessionPauses` caps work periods at these markers in summaries and usage reports. REST summaries read current session metadata, and local usage reads V2 annotations alongside database records.

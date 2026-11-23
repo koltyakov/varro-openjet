@@ -122,7 +122,9 @@ internal class OpenCodeV2Adapter(
                 entries.forEach { it.asObjectOrNull().obj("info")?.let { entry -> merge(config, entry) } }
                 val agents = Json.obj()
                 config.obj("agents")?.entrySet()?.forEach { (name, value) -> value.asObjectOrNull()?.let { agent -> agents.add(name, agent.deepCopy().apply {
-                    addProperty("model", legacyModel(agent.get("model"))); add("prompt", agent.get("system")); add("permission", OpenCodeV2Projection.legacyRules(agent.get("permissions")))
+                    addProperty("model", legacyModel(agent.get("model"))); add("prompt", agent.get("system"))
+                    if (agent.hasNonNull("permissions")) add("permission", OpenCodeV2Projection.legacyRules(agent.get("permissions")))
+                    else remove("permission")
                 }) } }
                 config.addProperty("model", legacyModel(config.get("model")))
                 config.add("agent", agents); config.add("small_model", agents.obj("title")?.get("model"))
