@@ -138,10 +138,14 @@ internal class OpenCodeV2Adapter(
                 val config = request("GET", "/config", null, options).data.asObjectOrNull()
                 config.obj("agent")?.entrySet()?.forEach { (name, value) -> value.asObjectOrNull()?.let { agent ->
                     val existing = agents.firstOrNull { it.str("name") == name }
+                    val resolvedModel = existing?.get("model")
                     agents.remove(existing)
                     if (agent.bool("disabled") != true) agents.add((existing ?: Json.obj("mode" to "primary", "hidden" to false)).apply {
                         agent.entrySet().forEach { add(it.key, it.value) }; addProperty("name", name)
-                        OpenCodeV2Projection.modelRef(agent.get("model"))?.let { ref -> add("model", ref.apply { add("modelID", get("id")) }) }
+                        val model = OpenCodeV2Projection.modelRef(agent.get("model"))
+                        if (model != null) add("model", model.apply { add("modelID", get("id")) })
+                        else if (resolvedModel != null) add("model", resolvedModel)
+                        else remove("model")
                     })
                 } }
                 return result(agents)

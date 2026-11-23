@@ -279,6 +279,16 @@ Legacy browser session selections migrate into the project store before boot sna
 
 `SessionSelections` persists access mode, agent, model and reasoning under OpenCode's `metadata.varro` object. Writes set `schemaVersion: 1` and merge `permissionMode`, `agent` and `model`, preserving workspace scope and unrelated metadata at both levels. The stored model uses `provider`, `model` and an optional reasoning `variant`. The bridge and local stores still use `providerID` and `modelID`. Replacing a model without a variant clears the previous reasoning selection.
 
+The composer follows each agent's configured model and remembers per-agent
+choices within its browser instance. Editing a prompt starts with that prompt's
+original agent. The V2 catalog merge retains the native resolved model and
+reasoning variant when an agent configuration omits its model.
+
+Plan menus can prepare an editable implementation prompt or hand the plan to a
+new chat. Revised V2 plans use the existing bounded side-question generation
+route for a consolidated Markdown attachment. Handoff markers are keyed by plan
+message in project browser storage, separately from skipped-plan session state.
+
 `OpenCodeApiCapabilities` reads optional archive and saved-permission PATCH fields from the connected server's OpenAPI schemas. `OpenCodeV2Adapter` uses native boolean archive writes when available and keeps local fallback annotations intact. Native archive state, including an absent timestamp after restore, overrides stale local archives. Reads never migrate sessions. `ServerEvents` forwards archive/restore events for the webview's guarded header refresh.
 
 `OpenCodeSavedPermissions` tracks observed allowances only after acknowledged Always replies. V2's native approvals persist in the database; they are not temporary server memory. Its project-checked list separates observed approvals from `untrackedRules`, whose origin is unknown. Unknown rows are never adopted or edited, but explicit user-confirmed removal is available. Mutations require a fresh validated list and the same URL, API version and connection generation. Removal succeeds only after another list proves that exact ID is absent. Cached observations carry a stale warning and cannot authorize mutations. `ServerMemoryPermissionStore` records native IDs immediately after approval in `VarroStore`, scoped by server URL, API version and project. Host reloads retain those links, including other clients' edits. Reconciliation discards removed IDs and never adopts a replacement just because its scope matches. Edits require advertised support and a matching acknowledgement. Legacy V1 restart-only observations stay in memory and clear on protocol reset. These links remain separate from session and config rules; storage failures do not turn successful approvals into failed replies.

@@ -9,6 +9,7 @@ import {
   onSettled,
   untrack,
 } from 'solid-js';
+import { Portal } from '@solidjs/web';
 import { isAbortedAssistantError } from '../../../shared/error-classification';
 import { forkSession, implementPlan, openPlan } from '../../hooks/useOpenCode';
 import {
@@ -34,8 +35,22 @@ import {
   copyIcon,
   dashboardDotsIcon,
   dollarCircleIcon,
+  navArrowDownIcon,
+  triangleFlagIcon,
   xmarkCircleIcon,
 } from '../../lib/ui-icons';
+import { ariaBoolean } from '../../lib/aria';
+import { startNewChatDraft } from '../../lib/new-chat-draft';
+import { isPlanHandedOff, recordPlanHandoff } from '../../lib/plan-handoff';
+import { requestPlanImplementationDraft } from '../../lib/plan-implementation-draft';
+import {
+  canSummarizePlan,
+  countPlanningTurns,
+  resolvePlanContent,
+  summarizePlanSession,
+} from '../../lib/plan-content';
+import { showSessionActionFeedback } from '../chat/SessionActionFeedback';
+import { ActionsMenu } from './FollowupActionsMenu';
 import { writeClipboard } from '../../lib/write-clipboard';
 import type { ToolCallPermissionMatch } from '../../lib/tool-call-matching';
 import type { MessageEntry, QuestionRequest, ToolPart } from '../../types';
@@ -49,6 +64,7 @@ import { Tooltip } from '../Tooltip';
 import { UiIcon } from '../UiIcon';
 import {
   buildPlanDocumentContent,
+  buildLinkedPlanImplementationPrompt,
   buildPlanImplementationPrompt,
   isPlanningAssistantMessage,
   shouldShowPlanImplementationAction,
@@ -407,6 +423,26 @@ export function AssistantDialogSummaryForMessage(
     'hasBuildAgent' | 'latestPlanImplementationMessageId' | 'onWorkedSummaryHoverChange'
   >
 ) {
+  // Only rows that show plan actions need the turn count over the transcript.
+  const canOpenSummarizedPlan = createMemo(() => {
+    const info = props.msg.info;
+    if (
+      !shouldShowPlanImplementationAction({
+        hasBuildAgent: props.hasBuildAgent,
+        info,
+        latestPlanImplementationMessageId: props.latestPlanImplementationMessageId,
+      }) &&
+      !shouldShowPlanSkippedNotice({
+        info,
+        latestPlanImplementationMessageId: props.latestPlanImplementationMessageId,
+      })
+    ) {
+      return false;
+    }
+    return (
+      countPlanningTurns(info.sessionID, state.messages) > 1 && canSummarizePlan(info.sessionID)
+    );
+  });
   return (
     <AssistantDialogSummary
       summary={props.summary}
@@ -425,10 +461,38 @@ export function AssistantDialogSummaryForMessage(
       onImplementPlan={() =>
         void implementPlan(buildPlanImplementationPrompt(props.msg.parts), props.msg.info.sessionID)
       }
+      onDraftImplementPlan={() =>
+        requestPlanImplementationDraft(
+          props.msg.info.sessionID,
+          buildPlanImplementationPrompt(props.msg.parts)
+        )
+      }
+      onImplementPlanInNewChat={async () => {
+        const sessionId = props.msg.info.sessionID;
+        // One planning turn is its own plan; later turns revise it, so summarize those.
+        const plan = await resolvePlanContent(sessionId, buildPlanDocumentContent(props.msg.parts));
+        skipPlanSession(sessionId);
+        startNewChatDraft();
+        recordPlanHandoff(props.msg.info.id);
+        requestPlanImplementationDraft(
+          null,
+          buildLinkedPlanImplementationPrompt(sessionId),
+          plan ? { name: `plan-${crypto.randomUUID().slice(0, 8)}.md`, text: plan } : undefined
+        );
+      }}
       onOpenPlan={() =>
         void openPlan(buildPlanDocumentContent(props.msg.parts), props.msg.info.sessionID)
       }
+      onOpenSummarizedPlan={
+        canOpenSummarizedPlan()
+          ? async () => {
+              const sessionId = props.msg.info.sessionID;
+              await openPlan(await summarizePlanSession(sessionId), sessionId);
+            }
+          : undefined
+      }
       onSkipPlan={() => skipPlanSession(props.msg.info.sessionID)}
+      planHandedOff={isPlanHandedOff(props.msg.info.id)}
       copyText={props.msg.parts
         .flatMap((part) =>
           part.type === 'text' && !part.synthetic && !part.ignored ? [part.text.trim()] : []
@@ -464,28 +528,153 @@ export function getForkBoundaryMessageId(
     ?.info.id;
 }
 
-function OpenAndImplementPlanButtons(props: {
-  onOpenPlan?: () => void;
-  onImplementPlan?: () => void;
+type PlanMenuItem = { label: string; onSelect: () => void };
+
+/** A plan action button, joined to a chevron menu when it has alternatives. */
+function SplitPlanAction(props: {
+  variant: 'open' | 'implement';
+  label: string;
+  busy: boolean;
+  disabled: boolean;
+  menuLabel: string;
+  moreLabel: string;
+  items: PlanMenuItem[];
+  onClick: () => void;
 }) {
+  const [menu, setMenu] = createSignal<{ x: number; y: number } | null>(null);
+  const buttonClass = () =>
+    `assistant-dialog-summary-action assistant-dialog-summary-action-${props.variant} question-btn`;
+  return (
+    <span class="assistant-dialog-summary-split" data-menu-open={menu() ? 'true' : undefined}>
+      <button
+        type="button"
+        class={buttonClass()}
+        disabled={props.disabled}
+        aria-busy={props.busy ? 'true' : undefined}
+        onClick={() => props.onClick()}
+      >
+        <span>{props.busy ? 'Summarizing…' : props.label}</span>
+      </button>
+      <Show when={props.items.length > 0}>
+        <button
+          type="button"
+          class={`${buttonClass()} assistant-dialog-summary-action-more`}
+          aria-label={props.moreLabel}
+          aria-haspopup="menu"
+          aria-expanded={ariaBoolean(!!menu())}
+          disabled={props.disabled}
+          onClick={(event) => {
+            // Align under the whole split control, not just the chevron.
+            const control = event.currentTarget.parentElement ?? event.currentTarget;
+            const rect = control.getBoundingClientRect();
+            setMenu((current) => (current ? null : { x: rect.left, y: rect.bottom + 4 }));
+          }}
+        >
+          <UiIcon source={navArrowDownIcon} width={10} height={10} aria-hidden="true" />
+        </button>
+      </Show>
+      <Show when={menu()} keyed>
+        {(position) => (
+          <Portal>
+            <ActionsMenu
+              x={position.x}
+              y={position.y}
+              label={props.menuLabel}
+              onClose={() => setMenu(null)}
+              items={props.items.map((item) => ({
+                label: item.label,
+                onSelect: () => {
+                  setMenu(null);
+                  item.onSelect();
+                },
+              }))}
+            />
+          </Portal>
+        )}
+      </Show>
+    </span>
+  );
+}
+
+function OpenAndImplementPlanButtons(props: {
+  /** False once the plan's implementation moved to another chat. */
+  showImplement?: boolean;
+  onOpenPlan?: () => void;
+  onOpenSummarizedPlan?: () => Promise<void>;
+  onImplementPlan?: () => void;
+  onDraftImplementPlan?: () => void;
+  onImplementPlanInNewChat?: () => Promise<void>;
+}) {
+  const [busy, setBusy] = createSignal<'open' | 'implement' | null>(null);
+  // Summaries take seconds; one at a time keeps the plan actions unambiguous.
+  const run = async (kind: 'open' | 'implement', action: () => Promise<void>) => {
+    if (busy()) return;
+    setBusy(kind);
+    try {
+      await action();
+    } catch (cause) {
+      showSessionActionFeedback(
+        `Could not summarize the plan: ${cause instanceof Error ? cause.message : String(cause)}`,
+        'warning'
+      );
+    } finally {
+      setBusy(null);
+    }
+  };
+  const disabled = () => isLoading() || busy() !== null;
+  const openItems = (): PlanMenuItem[] => {
+    const summarize = props.onOpenSummarizedPlan;
+    return summarize
+      ? [
+          {
+            label: 'Open summarized',
+            onSelect: () => void run('open', summarize),
+          },
+        ]
+      : [];
+  };
+  const implementItems = (): PlanMenuItem[] => {
+    const items: PlanMenuItem[] = [];
+    const draft = props.onDraftImplementPlan;
+    if (draft) {
+      items.push({
+        label: 'Edit before implementing',
+        onSelect: draft,
+      });
+    }
+    const newChat = props.onImplementPlanInNewChat;
+    if (newChat) {
+      items.push({
+        label: 'Implement in new chat',
+        onSelect: () => void run('implement', newChat),
+      });
+    }
+    return items;
+  };
   return (
     <>
-      <button
-        type="button"
-        class="assistant-dialog-summary-action assistant-dialog-summary-action-open question-btn"
-        disabled={isLoading()}
+      <SplitPlanAction
+        variant="open"
+        label="Open plan"
+        busy={busy() === 'open'}
+        disabled={disabled()}
+        menuLabel="Open plan options"
+        moreLabel="More ways to open the plan"
+        items={openItems()}
         onClick={() => props.onOpenPlan?.()}
-      >
-        <span>Open plan</span>
-      </button>
-      <button
-        type="button"
-        class="assistant-dialog-summary-action assistant-dialog-summary-action-implement question-btn"
-        disabled={isLoading()}
-        onClick={() => props.onImplementPlan?.()}
-      >
-        <span>Implement the plan</span>
-      </button>
+      />
+      <Show when={props.showImplement !== false}>
+        <SplitPlanAction
+          variant="implement"
+          label="Implement the plan"
+          busy={busy() === 'implement'}
+          disabled={disabled()}
+          menuLabel="Implement the plan options"
+          moreLabel="More ways to implement the plan"
+          items={implementItems()}
+          onClick={() => props.onImplementPlan?.()}
+        />
+      </Show>
     </>
   );
 }
@@ -499,6 +688,10 @@ function AssistantDialogSummary(props: {
   hasBuildAgent?: boolean;
   onOpenPlan?: () => void;
   onImplementPlan?: () => void;
+  onDraftImplementPlan?: () => void;
+  onImplementPlanInNewChat?: () => Promise<void>;
+  onOpenSummarizedPlan?: () => Promise<void>;
+  planHandedOff?: boolean;
   onSkipPlan?: () => void;
   copyText: string;
   onFork: () => void;
@@ -577,6 +770,11 @@ function AssistantDialogSummary(props: {
       messageRow ?? summaryRef.closest<HTMLElement>('.interactive-list-track') ?? summaryRef;
     const isInHoverRegion = (target: EventTarget | null) => {
       if (!(target instanceof Element) || !hoverRoot.contains(target)) return false;
+      // Plan actions are their own controls; hovering them is not hovering the turn.
+      if (
+        target.closest('.assistant-dialog-summary-actions, .assistant-dialog-summary-plan-skipped')
+      )
+        return false;
       if (target.closest('.assistant-dialog-summary') === summaryRef) return true;
       if (summaryRow && target === summaryRow) return true;
       const targetMessageRow = target.closest<HTMLElement>('[data-msg-id]');
@@ -758,6 +956,9 @@ function AssistantDialogSummary(props: {
           <OpenAndImplementPlanButtons
             onOpenPlan={props.onOpenPlan}
             onImplementPlan={props.onImplementPlan}
+            onDraftImplementPlan={props.onDraftImplementPlan}
+            onImplementPlanInNewChat={props.onImplementPlanInNewChat}
+            onOpenSummarizedPlan={props.onOpenSummarizedPlan}
           />
           <button
             type="button"
@@ -774,14 +975,24 @@ function AssistantDialogSummary(props: {
           tabindex={props.hasBuildAgent ? 0 : undefined}
         >
           <span class="assistant-dialog-summary-plan-skipped-label" role="status">
-            <UiIcon source={xmarkCircleIcon} width={14} height={14} />
-            Plan skipped
+            <UiIcon
+              source={props.planHandedOff ? triangleFlagIcon : xmarkCircleIcon}
+              width={14}
+              height={14}
+            />
+            <span class="assistant-dialog-summary-plan-skipped-text">
+              {props.planHandedOff ? 'Side implementation' : 'Plan skipped'}
+            </span>
           </span>
           <Show when={props.hasBuildAgent}>
             <div class="assistant-dialog-summary-plan-skipped-actions">
               <OpenAndImplementPlanButtons
+                showImplement={!props.planHandedOff}
                 onOpenPlan={props.onOpenPlan}
                 onImplementPlan={props.onImplementPlan}
+                onDraftImplementPlan={props.onDraftImplementPlan}
+                onImplementPlanInNewChat={props.onImplementPlanInNewChat}
+                onOpenSummarizedPlan={props.onOpenSummarizedPlan}
               />
             </div>
           </Show>

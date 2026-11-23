@@ -29,6 +29,7 @@ import { manualWorkspaceSelection } from '../../lib/app-state';
 import { composerStore } from '../../lib/stores/composer-store';
 import { permissionsStore } from '../../lib/stores/permissions-store';
 import { ralphStore } from '../../lib/stores/ralph-store';
+import { resolveAgentSwitchModel } from '../../lib/agent-model-selection';
 import { routingStore } from '../../lib/stores/routing-store';
 import {
   captureSessionStatusSnapshotTime,
@@ -185,6 +186,7 @@ export type EditMessageOptions = {
   allowEmptyText?: boolean;
   queuedAttachments?: QueuedAttachmentSnapshot;
   selectedModel?: SelectedModel;
+  selectedAgent?: string;
   onOptimisticPublish?: () => void;
 };
 
@@ -2885,11 +2887,12 @@ export function createOpenCodeRuntime(): OpenCodeRuntime {
     isSessionWorking: (sessionId) => isSessionTreeStatusWorking(sessionId),
     sendEditedMessage: (text, sessionId, queuedAttachments) =>
       sessionSendOperations.sendMessage(text, { targetSessionId: sessionId, queuedAttachments }),
-    prepareEditedMessageSend: (text, sessionId, queuedAttachments, selectedModel) =>
+    prepareEditedMessageSend: (text, sessionId, queuedAttachments, selectedModel, selectedAgent) =>
       sessionSendOperations.prepareSendMessage(text, {
         targetSessionId: sessionId,
         queuedAttachments,
         selectedModel,
+        agent: selectedAgent,
         optimisticModel: selectedModel,
         preserveModelSelection: true,
       }),
@@ -2917,6 +2920,15 @@ export function createOpenCodeRuntime(): OpenCodeRuntime {
     applySelectedAgent: (agent, sessionId) => {
       routingStore.setSelectedAgent(agent, { sessionId, persistGlobal: false });
     },
+    resolveAgentModel: (agent, sessionId) =>
+      resolveAgentSwitchModel({
+        sessionId,
+        previousAgent:
+          routingStore.getSelectedAgentForSession(sessionId) ?? appStore.state.selectedAgent,
+        nextAgent: agent,
+        currentModel:
+          routingStore.getSelectedModelForSession(sessionId) ?? appStore.state.selectedModel,
+      }),
     sendMessage,
     openPlan: (content) => client.varro.openPlan(content),
     createSession: (workspaceTarget) =>
