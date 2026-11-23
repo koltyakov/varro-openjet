@@ -27,14 +27,14 @@ internal class DatabaseExplorerSelection(
 
     fun from(context: DataContext): List<DbElement> {
         if (CommonDataKeys.PROJECT.getData(context) != project) return emptyList()
-        val elements = DatabaseView.DATABASE_ELEMENTS.getData(context)?.asSequence()?.take(9)
+        val elements = DatabaseViewKeys.DATABASE_ELEMENTS.getData(context)?.asSequence()?.take(9)
             ?.mapNotNull(resolveElement)?.toList().orEmpty()
         if (elements.isNotEmpty()) return valid(elements)
-        val psi = DatabaseView.DB_ELEMENTS.getData(context)?.toList()
+        val psi = DatabaseViewKeys.DB_ELEMENTS.getData(context)?.toList()
             ?: LangDataKeys.PSI_ELEMENT_ARRAY.getData(context)?.filterIsInstance<DbElement>()
             ?: listOfNotNull(CommonDataKeys.PSI_ELEMENT.getData(context) as? DbElement)
         if (psi.isNotEmpty()) return valid(psi)
-        return valid(DatabaseView.DATABASE_RELATED_DATA_SOURCES.getData(context)?.take(9)
+        return valid(DatabaseViewKeys.DATABASE_RELATED_DATA_SOURCES.getData(context)?.take(9)
             ?.mapNotNull { project.getService(DbModelRegistry::class.java).findDbDataSource(it) }.orEmpty())
     }
 

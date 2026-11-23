@@ -112,7 +112,7 @@ class DatabaseContextProvider(private val project: Project) : DatabaseContextSou
         val context = DataManager.getInstance().getDataContext(component)
         // Explorer data contexts can also expose the selected editor. The focused
         // tree is the user's explicit target and must take precedence over that editor.
-        if (com.intellij.database.view.DatabaseView.DATABASE_TREE_IS_ORIGIN.getData(context) == true) {
+        if (DatabaseViewKeys.DATABASE_TREE_IS_ORIGIN.getData(context) == true) {
             val elements = selectedObjects(context)
             if (elements.isNotEmpty()) { activateExplorer(elements); return }
         }

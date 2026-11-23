@@ -24,11 +24,20 @@ class DatabaseExplorerSelectionTest {
         }
         val context = DataContext { id -> when (id) {
             CommonDataKeys.PROJECT.name -> project
-            DatabaseView.DATABASE_ELEMENTS.name -> arrayOf(node)
+            DatabaseViewKeys.DATABASE_ELEMENTS.name -> arrayOf(node)
             else -> null
         } }
         val selection = DatabaseExplorerSelection(project) { assertSame(node, it); objectInProject }
         assertSame(objectInProject, selection.from(context).single())
         assertTrue(selection.from(DataContext { null }).isEmpty())
+    }
+
+    // 263.8311 moved these keys to CoreDatabaseViewKeys. Name lookup must still
+    // return the instances the compile platform's Explorer publishes.
+    @Test fun `Explorer keys resolve to the platform's registered instances`() {
+        assertSame(DatabaseView.DATABASE_ELEMENTS, DatabaseViewKeys.DATABASE_ELEMENTS)
+        assertSame(DatabaseView.DB_ELEMENTS, DatabaseViewKeys.DB_ELEMENTS)
+        assertSame(DatabaseView.DATABASE_RELATED_DATA_SOURCES, DatabaseViewKeys.DATABASE_RELATED_DATA_SOURCES)
+        assertSame(DatabaseView.DATABASE_TREE_IS_ORIGIN, DatabaseViewKeys.DATABASE_TREE_IS_ORIGIN)
     }
 }
