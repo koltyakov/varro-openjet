@@ -153,4 +153,32 @@ class WebviewAssetsTest {
         assertFalse(WebviewAssets.isOwnedUrl("https://example.com/webview.mjs"))
         assertFalse(WebviewAssets.isOwnedUrl(null))
     }
+
+    @Test
+    fun `restricts the page with a nonce based content security policy`() {
+        val theme = WebviewTheme(WebviewThemeKind.DARK, linkedMapOf("--vscode-foreground" to "#cccccc"))
+        fun render() = WebviewHtml.render(theme, Json.obj("theme" to "dark"), JsonObject(), "send(message)", "abc123")
+        val html = render()
+        val nonce = Regex("""<script nonce="([A-Za-z0-9_-]{20,})">""").find(html)?.groupValues?.get(1)
+        assertNotNull("The boot script must carry a nonce", nonce)
+        val policy = Regex("""http-equiv="Content-Security-Policy" content="([^"]+)"""").find(html)?.groupValues?.get(1)
+        assertNotNull("The document must declare a CSP", policy)
+        assertTrue(policy!!.contains("default-src 'none'"))
+        assertTrue(policy.contains("script-src 'nonce-$nonce' 'self'"))
+        assertTrue(policy.contains("connect-src 'self'"))
+        assertTrue(policy.contains("frame-src 'none'"))
+        assertTrue(html.indexOf("Content-Security-Policy") < html.indexOf("<script"))
+        assertFalse("Each document gets a fresh nonce", render().contains("nonce=\"$nonce\""))
+        assertTrue(WebviewHtml.renderLoading(theme).contains("script-src 'none'"))
+    }
+
+    @Test
+    fun `navigation is limited to the host origin`() {
+        assertTrue(WebviewAssets.isAllowedNavigation(WebviewAssets.INDEX_URL))
+        assertTrue(WebviewAssets.isAllowedNavigation("about:blank"))
+        assertFalse(WebviewAssets.isAllowedNavigation("https://example.com/"))
+        assertFalse(WebviewAssets.isAllowedNavigation("http://varro.localhost.evil.test/"))
+        assertFalse(WebviewAssets.isAllowedNavigation("file:///etc/passwd"))
+        assertFalse(WebviewAssets.isAllowedNavigation(null))
+    }
 }

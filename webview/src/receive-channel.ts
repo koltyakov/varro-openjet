@@ -5,6 +5,14 @@ export function installReceiveChannel(
 ) {
   target.__varroReceive = deliver;
   target.__varroReceiveBatch = (payloads) => {
-    for (const payload of payloads) deliver(payload);
+    // One failing listener must not drop the rest of the batch, such as a later
+    // `api/response` its caller is waiting on.
+    for (const payload of payloads) {
+      try {
+        deliver(payload);
+      } catch (error) {
+        console.error('Varro host message delivery failed', error);
+      }
+    }
   };
 }

@@ -47,4 +47,36 @@ class EditorIntegrationTest {
             assertSame(failure, caught)
         }
     }
+
+    @Test fun `webview file reads stay inside open roots`() {
+        val base = java.nio.file.Files.createTempDirectory("varro-editor-roots").toRealPath()
+        try {
+            val root = java.nio.file.Files.createDirectories(base.resolve("project"))
+            val sibling = java.nio.file.Files.createDirectories(base.resolve("sibling"))
+            val outside = java.nio.file.Files.createDirectories(base.resolve("outside"))
+            val inside = java.nio.file.Files.writeString(java.nio.file.Files.createDirectories(root.resolve("src")).resolve("a.ts"), "a")
+            val siblingFile = java.nio.file.Files.writeString(sibling.resolve("b.ts"), "b")
+            val secret = java.nio.file.Files.writeString(outside.resolve("secret"), "s")
+            val roots = listOf(root.toString(), sibling.toString())
+
+            assertEquals(inside, EditorIntegration.resolveWithinRoots("src/a.ts", roots))
+            assertEquals(inside, EditorIntegration.resolveWithinRoots(inside.toString(), roots))
+            assertEquals(siblingFile, EditorIntegration.resolveWithinRoots("b.ts", roots))
+            assertNull(EditorIntegration.resolveWithinRoots(secret.toString(), roots))
+            assertNull(EditorIntegration.resolveWithinRoots("../outside/secret", roots))
+            assertNull(EditorIntegration.resolveWithinRoots("src/../../outside/secret", roots))
+            assertNull(EditorIntegration.resolveWithinRoots("src\\..\\..\\outside\\secret", roots))
+            assertNull(EditorIntegration.resolveWithinRoots("", roots))
+            assertNull(EditorIntegration.resolveWithinRoots("missing.ts", roots))
+            assertNull(EditorIntegration.resolveWithinRoots(inside.toString(), emptyList()))
+
+            val link = root.resolve("escape")
+            runCatching { java.nio.file.Files.createSymbolicLink(link, outside) }.onSuccess {
+                assertNull(EditorIntegration.resolveWithinRoots("escape/secret", roots))
+                assertNull(EditorIntegration.resolveWithinRoots(link.resolve("secret").toString(), roots))
+            }
+        } finally {
+            base.toFile().deleteRecursively()
+        }
+    }
 }

@@ -32,6 +32,7 @@ import { adaptHostContext, databaseProvider } from './database-extension';
 import pluginMetadata from './plugin-metadata';
 import { supportsDetachedEditors } from './host-capabilities';
 import { installLinkIntegration } from './link-integration';
+import { matchNativeDropPaths } from './native-drop-paths';
 import { installReceiveChannel as installNativeReceiveChannel } from './receive-channel';
 
 type HostWindow = Window & {
@@ -75,9 +76,23 @@ function installSendChannel() {
  * directly, so the host calls this shim and we re-dispatch it as the `message`
  * event upstream's bridge is already listening for.
  */
+/**
+ * A native database context the browser cannot validate must not cost the user
+ * the message carrying it, the rest of its batch, or the whole view at boot. The
+ * unadapted value stays readable: the UI ignores the native database fields.
+ */
+function adaptOrPassThrough<T>(value: T): T {
+  try {
+    return adaptHostContext(value) as T;
+  } catch (error) {
+    console.error('Varro could not adapt native host context', error);
+    return value;
+  }
+}
+
 function installReceiveChannel() {
   installNativeReceiveChannel(hostWindow, (payload: unknown) => {
-    window.dispatchEvent(new MessageEvent('message', { data: adaptHostContext(payload) }));
+    window.dispatchEvent(new MessageEvent('message', { data: adaptOrPassThrough(payload) }));
   });
 }
 
@@ -102,10 +117,9 @@ function guardNavigation() {
       if (files.length) {
         // Chromium hides File.path. JCEF supplies the original local paths without
         // copying project files to temporary attachments. Keep PDF handling upstream.
-        files.forEach((file) => {
-          const path = paths.find(
-            (path) => path.replace(/\\/g, '/').split('/').pop() === file.name
-          );
+        const matched = matchNativeDropPaths(files, paths);
+        files.forEach((file, index) => {
+          const path = matched[index];
           if (path) nativeFilePaths.set(file, path);
         });
       } else {
@@ -343,9 +357,7 @@ function installMacLineNavigation() {
 }
 
 installSendChannel();
-hostWindow.__varroInitialViewState = adaptHostContext(hostWindow.__varroInitialViewState) as
-  | Record<string, unknown>
-  | undefined;
+hostWindow.__varroInitialViewState = adaptOrPassThrough(hostWindow.__varroInitialViewState);
 installViewStateChannel(hostWindow);
 const projectStorage = installProjectStorage(hostWindow);
 installReceiveChannel();
@@ -355,9 +367,7 @@ forwardHostShortcuts();
 installMacLineNavigation();
 
 hostWindow.__initialTheme = hostWindow.__initialWebviewState?.theme;
-hostWindow.__initialWebviewState = adaptHostContext(
-  hostWindow.__initialWebviewState
-) as HostWindow['__initialWebviewState'];
+hostWindow.__initialWebviewState = adaptOrPassThrough(hostWindow.__initialWebviewState);
 registerHostExtension({
   apiVersion: 1,
   id: 'openjet.host',

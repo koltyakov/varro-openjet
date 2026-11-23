@@ -16,7 +16,11 @@ import java.util.Base64
 import java.util.concurrent.CancellationException
 
 /** Workspace-authorized raster images. No browser file URLs or ambient network requests. */
-internal class LocalImages(private val thumbnails: ImageThumbnails = ImageThumbnails()) : AutoCloseable {
+internal class LocalImages(
+    private val thumbnails: ImageThumbnails = ImageThumbnails(),
+    /** False for the shared application service, which outlives any one view. */
+    private val ownsThumbnails: Boolean = true,
+) : AutoCloseable {
     @Volatile private var closed = false
 
     fun load(body: JsonElement?, defaultDirectory: String?, roots: List<String>,
@@ -61,7 +65,7 @@ internal class LocalImages(private val thumbnails: ImageThumbnails = ImageThumbn
         return Json.obj("url" to url, "path" to path.toString(), "mime" to url.substringAfter("data:").substringBefore(';'))
     }
 
-    override fun close() { closed = true; thumbnails.dispose() }
+    override fun close() { closed = true; if (ownsThumbnails) thumbnails.dispose() }
 
     companion object {
         private interface LibC : com.sun.jna.Library {
@@ -72,12 +76,22 @@ internal class LocalImages(private val thumbnails: ImageThumbnails = ImageThumbn
         }
         private val libc: LibC by lazy { com.sun.jna.Native.load(com.sun.jna.Platform.C_LIBRARY_NAME, LibC::class.java) }
 
+        /**
+         * `O_NOFOLLOW | O_NONBLOCK` for Linux. The values are per-architecture:
+         * x86 uses 0400000 for `O_NOFOLLOW`, while arm, aarch64 and powerpc use
+         * 0100000 (0400000 there is `O_LARGEFILE`, which would silently follow links).
+         */
+        internal fun linuxNoFollowNonBlock(arch: String): Int {
+            val noFollow = if (arch.startsWith("aarch64") || arch.startsWith("arm") || arch.startsWith("ppc")) 0x8000 else 0x20000
+            return noFollow or 0x800
+        }
+
         internal fun readFile(path: Path, check: () -> Unit): ByteArray {
             check()
             if (com.sun.jna.Platform.isMac() || com.sun.jna.Platform.isLinux()) {
                 // A regular file can be replaced with a FIFO after the metadata check.
                 // O_NONBLOCK keeps that final open from waiting for another process.
-                val flags = if (com.sun.jna.Platform.isMac()) 0x100 or 0x4 else 0x20000 or 0x800
+                val flags = if (com.sun.jna.Platform.isMac()) 0x100 or 0x4 else linuxNoFollowNonBlock(com.sun.jna.Platform.ARCH)
                 val fd = libc.open(path.toString(), flags)
                 require(fd >= 0) { "Could not open local image without following links" }
                 try {

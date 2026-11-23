@@ -142,7 +142,9 @@ class GenerateCommitMessageAction : AnAction(), DumbAware {
             check()
             val process = ProcessBuilder(listOf("git") + parameters)
                 .directory(File(root))
-                .redirectErrorStream(false)
+                // Nothing reads stderr, and an undrained pipe (one CRLF warning per
+                // file on Windows) blocks git until the timeout.
+                .redirectError(ProcessBuilder.Redirect.DISCARD)
                 .start()
             val reader = java.util.concurrent.Executors.newSingleThreadExecutor()
             val output = reader.submit<String> { process.inputStream.bufferedReader().use { it.readText() } }

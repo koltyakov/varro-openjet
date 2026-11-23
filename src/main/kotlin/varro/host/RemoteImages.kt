@@ -24,6 +24,8 @@ internal class RemoteImages(
     private val download: (HttpUrl, InetAddress, () -> Unit) -> Download = ::downloadImage,
     private val thumbnails: ImageThumbnails = ImageThumbnails(),
     private val timeoutMs: Long = 15_000,
+    /** False for the shared application service, which outlives any one view. */
+    private val ownsThumbnails: Boolean = true,
 ) : AutoCloseable {
     internal sealed interface Download {
         data class Redirect(val location: String) : Download
@@ -120,7 +122,7 @@ internal class RemoteImages(
     override fun close() {
         synchronized(pending) { closed = true; cancel() }
         workers.shutdownNow()
-        thumbnails.dispose()
+        if (ownsThumbnails) thumbnails.dispose()
     }
 
     companion object {

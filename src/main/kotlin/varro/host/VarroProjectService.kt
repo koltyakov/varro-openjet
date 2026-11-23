@@ -190,7 +190,7 @@ class VarroProjectService(private val project: Project) : Disposable {
     init {
         server.transport.onSessionObserved = { session ->
             if (InternalHelperSessions.isHidden(session)) {
-                session.text("id")?.let { synchronized(store) { store.hiddenSessionIds = store.hiddenSessionIds + it } }
+                session.text("id")?.let(store::hideSession)
             } else {
                 transfers.observe(session)
                 selections.observe(session)
@@ -490,10 +490,13 @@ class VarroProjectService(private val project: Project) : Disposable {
         val parsed = ServerEvents.parse(event) ?: return
         val info = parsed.properties.obj("info")
         if (info != null && InternalHelperSessions.isHidden(info)) {
-            info.text("id")?.let { synchronized(store) { store.hiddenSessionIds = store.hiddenSessionIds + it } }
+            info.text("id")?.let(store::hideSession)
         }
         val eventSessionId = parsed.properties.text("sessionID") ?: info.text("id") ?: parsed.properties.obj("part").text("sessionID")
-        if (eventSessionId in store.hiddenSessionIds) return
+        if (eventSessionId in store.hiddenSessionIds) {
+            if (parsed.type == "session.deleted") store.forgetHiddenSession(eventSessionId!!)
+            return
+        }
         if (parsed.type in setOf("catalog.updated", "global.disposed", "integration.updated", "integration.connection.updated")) {
             pinnedProviderLimits.invalidate()
             hostServices.clearProviderQuotaCache()
@@ -1039,7 +1042,14 @@ class VarroProjectService(private val project: Project) : Disposable {
             explainAttachOnly("Restarting OpenCode")
             return
         }
-        when (server.restart(force)) {
+        val outcome = try {
+            server.restart(force)
+        } catch (failure: Exception) {
+            log.warn("OpenCode restart failed", failure)
+            notify("OpenCode could not be restarted: ${failure.message ?: "unknown error"}", NotificationType.WARNING)
+            return
+        }
+        when (outcome) {
             OpenCodeServer.RestartOutcome.BLOCKED -> broadcast("server/restart-blocked", server.readRestartBlockers())
             OpenCodeServer.RestartOutcome.NOT_MANAGED -> notify(
                 "The OpenCode server is not managed by a Varro product. Restart it where you launched it.",
@@ -1287,8 +1297,8 @@ class VarroProjectService(private val project: Project) : Disposable {
     }
 
     private fun openExternal(url: String) {
-        if (!isAllowedExternalUrl(url)) return
-        com.intellij.ide.BrowserUtil.browse(url)
+        val target = externalBrowserUrl(url) ?: return
+        com.intellij.ide.BrowserUtil.browse(target)
     }
 
     fun openSettings() = ApplicationManager.getApplication().invokeLater {

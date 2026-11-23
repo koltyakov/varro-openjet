@@ -9,9 +9,12 @@ on:
 permissions:
   contents: read
 
+# Superseded pull request runs are cancelled. Main runs are not: a tag selects
+# the successful main CI artifact for its exact commit, so a follow-up push must
+# not cancel the run a release is waiting on.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   build:

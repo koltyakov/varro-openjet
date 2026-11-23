@@ -7,6 +7,7 @@ import com.intellij.openapi.components.PersistentStateComponent
 import com.intellij.openapi.components.Service
 import com.intellij.openapi.components.State
 import com.intellij.openapi.components.Storage
+import com.intellij.openapi.components.StoragePathMacros
 import com.intellij.openapi.components.service
 import com.intellij.openapi.project.Project
 import varro.protocol.Json
@@ -31,7 +32,17 @@ import java.util.concurrent.CopyOnWriteArrayList
  * fields, which keeps the on-disk format stable and diffable.
  */
 @Service(Service.Level.PROJECT)
-@State(name = "VarroOpenJetStore", storages = [Storage("varro-openjet.xml")])
+// Drafts, queued prompts with attachments and the recycle bin are per-user state,
+// so they belong in the workspace file rather than shared `.idea/varro-openjet.xml`,
+// which teams commonly commit. The deprecated storage migrates existing state on
+// first load and is removed after the next save.
+@State(
+    name = "VarroOpenJetStore",
+    storages = [
+        Storage(StoragePathMacros.WORKSPACE_FILE),
+        Storage("varro-openjet.xml", deprecated = true),
+    ],
+)
 class VarroStore : PersistentStateComponent<VarroStore.StoreState> {
 
     class StoreState {
@@ -242,9 +253,36 @@ class VarroStore : PersistentStateComponent<VarroStore.StoreState> {
             pinListeners.forEach { it(ids.toList()) }
         }
 
+    /**
+     * Helper sessions (permission judges, follow-ups) kept out of every surface.
+     * Read for every server event, so the parsed set is cached against the raw
+     * persisted string, which is replaced on every write and on [loadState].
+     */
     var hiddenSessionIds: Set<String>
-        get() = readArray(state.hiddenSessionIds).strings().toSet()
-        set(value) { state.hiddenSessionIds = Json.stringify(Json.array(value)) }
+        get() {
+            val raw = state.hiddenSessionIds
+            hiddenCache?.takeIf { it.first === raw }?.let { return it.second }
+            return readArray(raw).strings().toSet().also { hiddenCache = raw to it }
+        }
+        set(value) {
+            // Newest last; deleted helpers are pruned, and the cap bounds any leftovers.
+            val bounded = if (value.size > MAX_HIDDEN_SESSIONS) value.toList().takeLast(MAX_HIDDEN_SESSIONS).toSet() else value
+            state.hiddenSessionIds = Json.stringify(Json.array(bounded))
+        }
+
+    @Volatile private var hiddenCache: Pair<String, Set<String>>? = null
+
+    @Synchronized fun hideSession(id: String) {
+        val current = hiddenSessionIds
+        if (id !in current) hiddenSessionIds = current + id
+    }
+
+    @Synchronized fun forgetHiddenSession(id: String): Boolean {
+        val current = hiddenSessionIds
+        if (id !in current) return false
+        hiddenSessionIds = current - id
+        return true
+    }
 
     var interruptedSessionIds: List<String>
         get() = readArray(state.interruptedSessionIds).strings()
@@ -313,6 +351,7 @@ class VarroStore : PersistentStateComponent<VarroStore.StoreState> {
 
     companion object {
         private val HISTORY_SCOPES = setOf("directory", "descendants", "project")
+        private const val MAX_HIDDEN_SESSIONS = 5_000
 
         fun getInstance(project: Project): VarroStore = project.service()
     }

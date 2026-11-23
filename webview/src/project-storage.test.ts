@@ -69,3 +69,28 @@ it('updates sibling views without echoing writes and isolates another project', 
   expect(storage.getItem('auto-context')).toBeNull();
   expect(send).not.toHaveBeenCalled();
 });
+
+it('treats a sibling removal without a value field as a removal', () => {
+  vi.stubGlobal(
+    'StorageEvent',
+    class extends Event {
+      constructor(type: string, init: StorageEventInit) {
+        super(type);
+        Object.assign(this, init);
+      }
+    }
+  );
+  const host = Object.assign(new EventTarget(), { __sendToExtension: vi.fn() });
+  const storage = installProjectStorage(host);
+  const deliver = (payload: unknown) =>
+    host.dispatchEvent(new MessageEvent('message', { data: { type: 'host/storage', payload } }));
+  deliver({ key: 'draft', value: 'x' });
+  expect(storage.length).toBe(1);
+  // Kotlin's Json.stringify drops nulls, so this is the real wire form.
+  deliver({ key: 'draft' });
+  expect(storage.getItem('draft')).toBeNull();
+  expect(storage.length).toBe(0);
+  expect(storage.key(0)).toBeNull();
+  deliver({ value: 'orphan' });
+  expect(storage.length).toBe(0);
+});

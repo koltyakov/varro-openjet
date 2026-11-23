@@ -246,7 +246,7 @@ through `SystemNotifications`; retaining this transport is an accepted platform 
 | State | Owner and storage |
 | --- | --- |
 | IDE settings and shared model preferences | Application-level `VarroSettings` and `VarroModelStore`, in the IDE configuration's `varro-openjet.xml` |
-| Session models, permission modes, pins, plan state, unread state and project UI preferences | Project-level `VarroStore`, in the project's `varro-openjet.xml` storage |
+| Session models, permission modes, pins, plan state, unread state and project UI preferences | Project-level `VarroStore`, in the project's workspace file (`.idea/workspace.xml`). Earlier versions used the shared `.idea/varro-openjet.xml`, which is migrated on first load |
 | Drafts and view snapshots | `VarroStore.viewStates`, keyed by view ID, through `host/view-state` |
 | Editor chat routes | `VarroStore.editorRoutes` |
 | Queued dispatches, Ralph runs and recycle-bin entries | JSON journals under `<IDE config>/varro/<project location hash>/`, with project-store snapshots |

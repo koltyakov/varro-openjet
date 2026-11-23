@@ -52,6 +52,10 @@ class PortedFeaturesTest {
         assertTrue(path.startsWith(root))
         assertNotEquals(first.str("path"), second.str("path"))
         assertArrayEquals(bytes, Files.readAllBytes(path))
+        if (path.fileSystem.supportedFileAttributeViews().contains("posix")) {
+            assertEquals("rw-------", java.nio.file.attribute.PosixFilePermissions.toString(Files.getPosixFilePermissions(path)))
+            assertEquals("rwx------", java.nio.file.attribute.PosixFilePermissions.toString(Files.getPosixFilePermissions(path.parent)))
+        }
         assertEquals("notes.txt", first.str("relativePath"))
         val directory = Files.createDirectory(workspace.resolve("source files"))
         assertEquals("directory", store.describe(directory.toUri().toString()).str("type"))

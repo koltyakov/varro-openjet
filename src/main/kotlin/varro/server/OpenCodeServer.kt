@@ -432,6 +432,19 @@ class OpenCodeServer(
             }
         })
 
+        // Until ownership is confirmed nothing else knows this child exists: an
+        // interrupted wait (dispose), a failed confirmation or any other escape
+        // must stop it, or it outlives the IDE holding a password nobody saved.
+        var started = false
+        try {
+            started = awaitLaunchedHealth(generation)
+            return started
+        } finally {
+            if (!started) runCatching { process.stop() }.onFailure { log.warn("Could not stop an unconfirmed OpenCode launch", it) }
+        }
+    }
+
+    private fun awaitLaunchedHealth(generation: Int): Boolean {
         val deadline = System.currentTimeMillis() + STARTUP_TIMEOUT_MS
         while (System.currentTimeMillis() < deadline) {
             if (disposeGeneration.get() != generation) {
@@ -636,6 +649,7 @@ class OpenCodeServer(
             return RestartOutcome.RESTARTED
         }
         if (!phase.compareAndSet(Phase.IDLE, Phase.RESTARTING)) return RestartOutcome.BUSY
+        var stopFailure: Throwable? = null
         try {
             if (status.get() is ServerStatus.Running) {
                 if (!force && readRestartBlockers().get("totalSessionCount").asInt > 0) return RestartOutcome.BLOCKED
@@ -645,7 +659,9 @@ class OpenCodeServer(
             transport.stopEventStream()
             transport.abortRequests()
             transport.clearPendingAttentionRequests()
-            process.stop()
+            // The stream and requests are already torn down, so a failed stop must
+            // still reset state; otherwise status stays Running with no live events.
+            stopFailure = runCatching { process.stop() }.exceptionOrNull()
             cli.clearCache()
             serverVersion.set(null)
             transport.resetProtocol()
@@ -654,7 +670,10 @@ class OpenCodeServer(
             phase.set(Phase.IDLE)
         }
 
+        // Reconnects to whichever server now holds the port, including one that
+        // refused to stop, before the failure is reported.
         ensureStarted()
+        stopFailure?.let { throw it }
         return RestartOutcome.RESTARTED
     }
 
@@ -670,6 +689,7 @@ class OpenCodeServer(
             scheduler.execute {
                 offlineRunning.set(true)
                 var stopped = false
+                var tornDown = false
                 var failure: Throwable? = null
                 var value: T? = null
                 try {
@@ -685,6 +705,7 @@ class OpenCodeServer(
                     requireIdle()
                     check(phase.compareAndSet(Phase.MAINTENANCE, Phase.RESTARTING)) { "OpenCode was disposed before maintenance started" }
                     disposeGeneration.incrementAndGet()
+                    tornDown = true
                     transport.stopEventStream()
                     transport.abortRequests()
                     transport.clearPendingAttentionRequests()
@@ -713,6 +734,14 @@ class OpenCodeServer(
                     }
                     phase.compareAndSet(Phase.RESTARTING, Phase.IDLE)
                     phase.compareAndSet(Phase.MAINTENANCE, Phase.IDLE)
+                    if (tornDown && !stopped && phase.get() == Phase.IDLE) {
+                        // The stop failed after the stream was torn down: reconnect
+                        // rather than leave a Running status with no events.
+                        serverVersion.set(null)
+                        transport.resetProtocol()
+                        setStatus(ServerStatus.Stopped)
+                        ensureStarted()
+                    }
                     if (phase.get() == Phase.DISPOSING) {
                         try { process.disconnect() } catch (error: Throwable) {
                             if (failure == null) failure = error else failure.addSuppressed(error)

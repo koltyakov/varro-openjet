@@ -38,9 +38,12 @@ RUN set -eux; \
       arm64) NODE_ARCH=arm64 ;; \
       *) echo "unsupported architecture" >&2; exit 1 ;; \
     esac; \
-    curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${NODE_ARCH}.tar.xz" -o /tmp/node.tar.xz; \
-    tar -xJf /tmp/node.tar.xz -C /usr/local --strip-components=1 --no-same-owner; \
-    rm /tmp/node.tar.xz; \
+    NODE_TARBALL="node-v${NODE_VERSION}-linux-${NODE_ARCH}.tar.xz"; \
+    curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/${NODE_TARBALL}" -o "/tmp/${NODE_TARBALL}"; \
+    curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/SHASUMS256.txt" -o /tmp/SHASUMS256.txt; \
+    (cd /tmp && grep " ${NODE_TARBALL}\$" SHASUMS256.txt | sha256sum -c -); \
+    tar -xJf "/tmp/${NODE_TARBALL}" -C /usr/local --strip-components=1 --no-same-owner; \
+    rm "/tmp/${NODE_TARBALL}" /tmp/SHASUMS256.txt; \
     npm install -g "npm@${NPM_VERSION}"; \
     test "$(node --version)" = "v${NODE_VERSION}"; \
     test "$(npm --version)" = "${NPM_VERSION}"; \

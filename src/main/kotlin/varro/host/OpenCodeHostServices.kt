@@ -399,8 +399,7 @@ class OpenCodeHostServices(
             server.transport.request(method, path, body, RequestOptions(timeoutMs = timeout)).data
         },
         hide = { id ->
-            val store = varro.store.VarroStore.getInstance(project)
-            synchronized(store) { store.hiddenSessionIds = store.hiddenSessionIds + id }
+            varro.store.VarroStore.getInstance(project).hideSession(id)
         },
         jev = JevDecisions(JevClient(decisionProviders::apiKey), decisionProviders::readSettings, decisionProviders::hasApiKey),
         native = nativeDecisions,

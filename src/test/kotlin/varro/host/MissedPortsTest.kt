@@ -191,14 +191,42 @@ class MissedPortsTest {
 
     @Test fun `expired retained session is deleted before the tombstone is removed`() {
         val store = VarroStore().apply { recycleBin = Json.array(listOf(Json.obj("rootID" to "expired",
-            "expiresAt" to 5, "sessions" to JsonArray()))) }
+            "deletedAt" to 1, "expiresAt" to 5, "sessions" to JsonArray()))) }
         var removed = false
         val trash = SessionTrash(store, { method, path, _, _ ->
-            assertEquals("DELETE", method); assertEquals("/session/expired", path)
-            assertEquals(1, store.recycleBin.size()); removed = true; Json.toElement(true)
+            assertEquals("/session/expired", path)
+            if (method == "GET") Json.obj("id" to "expired", "time" to Json.obj("archived" to 2, "updated" to 2))
+            else {
+                assertEquals("DELETE", method)
+                assertEquals(1, store.recycleBin.size()); removed = true; Json.toElement(true)
+            }
         }, { 10 })
         assertEquals(0, trash.list().size())
         assertTrue(removed)
+    }
+
+    @Test fun `expiry never deletes a tree that was restored or resumed elsewhere`() {
+        val day = 24L * 60 * 60 * 1000
+        for (current in listOf(
+            Json.obj("id" to "root", "time" to Json.obj("updated" to 2 * day)),
+            Json.obj("id" to "root", "time" to Json.obj("archived" to day, "updated" to 3 * day)),
+        )) {
+            val store = VarroStore().apply { recycleBin = Json.array(listOf(Json.obj("rootID" to "root",
+                "deletedAt" to day, "expiresAt" to 8 * day, "sessions" to JsonArray()))) }
+            val calls = mutableListOf<String>()
+            val trash = SessionTrash(store, { method, _, _, _ -> calls += method; current }, { 9 * day })
+            assertEquals(0, trash.list().size())
+            assertEquals(listOf("GET"), calls)
+        }
+    }
+
+    @Test fun `a failing expiry purge keeps the bin listable`() {
+        val store = VarroStore().apply { recycleBin = Json.array(listOf(
+            Json.obj("rootID" to "broken", "expiresAt" to 5, "sessions" to JsonArray()),
+            Json.obj("rootID" to "fresh", "expiresAt" to 50, "sessions" to JsonArray()),
+        )) }
+        val trash = SessionTrash(store, { _, _, _, _ -> error("503 unavailable") }, { 10 })
+        assertEquals(listOf("broken", "fresh"), trash.list().map { it.asJsonObject.str("rootID") })
     }
 
     @Test fun `unconfirmed deletion keeps the recycle entry until absence is confirmed`() {

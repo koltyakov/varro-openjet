@@ -171,6 +171,9 @@ val buildWebview = tasks.register<Exec>("buildWebview") {
     inputs.files(
         layout.projectDirectory.file("gradle.properties"),
         webviewDir.file("package.json"),
+        // A lockfile-only bump changes the bundled dependency code without
+        // touching package.json; without it the stale bundle stays UP-TO-DATE.
+        webviewDir.file("package-lock.json"),
         webviewDir.file("vite.config.mts"),
         webviewDir.file("tsconfig.json"),
     )

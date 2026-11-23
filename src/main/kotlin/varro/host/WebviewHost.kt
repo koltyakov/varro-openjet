@@ -189,6 +189,8 @@ class WebviewHost(
             "window.__varroHostSend(JSON.stringify({type:'host/benchmark-ack',payload:{id:$id}}));"
         }.orEmpty()
         val script = "if (window.__varroReceiveBatch) { window.__varroReceiveBatch($json); $acknowledgement }"
+        // Host messages carry session content; never deliver them to a foreign document.
+        if (cefBrowser.url?.let(WebviewAssets::isOwnedUrl) == false) return
         runCatching { cefBrowser.executeJavaScript(script, cefBrowser.url ?: WebviewAssets.INDEX_URL, 0) }
             .onFailure { log.warn("Failed to post message to the Varro webview", it) }
     }
@@ -214,6 +216,22 @@ class WebviewHost(
     private fun installAssetHandler() {
         browser.jbCefClient.addRequestHandler(
             object : CefRequestHandlerAdapter() {
+                // The page must never leave its own origin: the bridge functions and
+                // host messages would otherwise run against foreign content. Links are
+                // opened externally by the bridge's click guard before this point.
+                override fun onBeforeBrowse(
+                    cefBrowser: CefBrowser?,
+                    frame: CefFrame?,
+                    request: CefRequest?,
+                    userGesture: Boolean,
+                    isRedirect: Boolean,
+                ): Boolean {
+                    val url = request?.url
+                    if (WebviewAssets.isAllowedNavigation(url)) return false
+                    log.warn("Blocked Varro webview navigation to ${url?.take(200)}")
+                    return true
+                }
+
                 override fun getResourceRequestHandler(
                     cefBrowser: CefBrowser?,
                     frame: CefFrame?,

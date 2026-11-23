@@ -36,7 +36,10 @@ export function installProjectStorage(host: ProjectStorageHost): Storage {
   host.addEventListener('message', (event) => {
     const message = (event as MessageEvent).data;
     if (message?.type !== 'host/storage') return;
-    const { key, value } = message.payload;
+    const key = message.payload?.key;
+    if (typeof key !== 'string') return;
+    // The host serializes without nulls, so a removal arrives with no `value`.
+    const value: string | null = typeof message.payload.value === 'string' ? message.payload.value : null;
     const oldValue = storage.getItem(key);
     if (oldValue === value) return;
     if (value === null) values.delete(key);

@@ -73,10 +73,11 @@ class AttachmentStore(private val root: Path, private val workspace: () -> Strin
         require(bytes.size.toLong() == size) { "Attachment size does not match its content" }
         val name = payload.str("name").orEmpty().substringAfterLast('/').substringAfterLast('\\')
             .replace(Regex("[^\\p{L}\\p{N}._ -]"), "_").take(160).takeIf { it != "." && it != ".." && it.isNotBlank() } ?: "attachment"
+        // Pasted images, PDFs and database rows: owner-only, like dropped folders.
         val directory = root.resolve(UUID.randomUUID().toString())
-        Files.createDirectories(directory)
+        createPrivateDirectories(directory)
         val target = directory.resolve(name)
-        Files.write(target, bytes)
+        writePrivateFile(target, bytes)
         return (describe(target.toString()) ?: error("Could not store attachment")).apply {
             payload.get("database")?.takeIf { it.isJsonObject }?.let { add("database", it.deepCopy()) }
         }
@@ -108,23 +109,13 @@ class AttachmentStore(private val root: Path, private val workspace: () -> Strin
         require(decoded.map { it.first.lowercase(java.util.Locale.ROOT) }.distinct().size == decoded.size) { "Duplicate dropped file paths" }
         val owner = root.resolve(UUID.randomUUID().toString())
         val target = owner.resolve(name)
-        fun mkdir(path: Path) {
-            if (path.fileSystem.supportedFileAttributeViews().contains("posix")) Files.createDirectories(path,
-                java.nio.file.attribute.PosixFilePermissions.asFileAttribute(java.nio.file.attribute.PosixFilePermissions.fromString("rwx------")))
-            else Files.createDirectories(path)
-        }
         try {
-            mkdir(target)
-            paths.forEach { mkdir(target.resolve(it)) }
+            createPrivateDirectories(target)
+            paths.forEach { createPrivateDirectories(target.resolve(it)) }
             decoded.forEach { (relative, bytes) ->
                 val file = target.resolve(relative)
-                mkdir(file.parent)
-                val permissions = if (file.fileSystem.supportedFileAttributeViews().contains("posix")) arrayOf(
-                    java.nio.file.attribute.PosixFilePermissions.asFileAttribute(java.nio.file.attribute.PosixFilePermissions.fromString("rw-------"))) else emptyArray()
-                Files.newByteChannel(file, setOf(java.nio.file.StandardOpenOption.CREATE_NEW, java.nio.file.StandardOpenOption.WRITE), *permissions).use {
-                    val buffer = java.nio.ByteBuffer.wrap(bytes)
-                    while (buffer.hasRemaining()) it.write(buffer)
-                }
+                createPrivateDirectories(file.parent)
+                writePrivateFile(file, bytes)
             }
             return Json.obj("path" to target.toString(), "relativePath" to name, "type" to "directory")
         } catch (failure: Exception) {
@@ -135,6 +126,23 @@ class AttachmentStore(private val root: Path, private val workspace: () -> Strin
 
     companion object {
         private const val MAX_BYTES = 20L * 1024 * 1024
+
+        private fun posix(path: Path) = path.fileSystem.supportedFileAttributeViews().contains("posix")
+
+        internal fun createPrivateDirectories(path: Path) {
+            if (posix(path)) Files.createDirectories(path,
+                java.nio.file.attribute.PosixFilePermissions.asFileAttribute(java.nio.file.attribute.PosixFilePermissions.fromString("rwx------")))
+            else Files.createDirectories(path)
+        }
+
+        internal fun writePrivateFile(file: Path, bytes: ByteArray) {
+            val permissions = if (posix(file)) arrayOf(
+                java.nio.file.attribute.PosixFilePermissions.asFileAttribute(java.nio.file.attribute.PosixFilePermissions.fromString("rw-------"))) else emptyArray()
+            Files.newByteChannel(file, setOf(java.nio.file.StandardOpenOption.CREATE_NEW, java.nio.file.StandardOpenOption.WRITE), *permissions).use {
+                val buffer = java.nio.ByteBuffer.wrap(bytes)
+                while (buffer.hasRemaining()) it.write(buffer)
+            }
+        }
 
         internal fun safeRelativePath(path: String): Boolean = path.isNotEmpty() && path.length <= 1024 &&
             path.split('/').let { parts -> parts.size <= 32 && parts.all {

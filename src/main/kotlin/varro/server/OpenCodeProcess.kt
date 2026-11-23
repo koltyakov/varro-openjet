@@ -311,17 +311,37 @@ class OpenCodeProcess(
         managed.set(false)
         if (processHandler.isProcessTerminated) return
 
+        // Snapshot the tree first. A launcher shim (`cmd /c opencode.cmd`, a Node
+        // bin wrapper) exits as soon as it is signalled, after which its children
+        // are no longer reachable through it while the real server holds the port.
+        val descendants = runCatching { processHandler.process.descendants().toList() }.getOrDefault(emptyList())
         runCatching { processHandler.destroyProcess() }
         if (!processHandler.waitFor(gracePeriodMs)) {
             log.warn("OpenCode server did not exit within ${gracePeriodMs}ms; forcing termination")
             // OpenCode spawns helpers, so the whole tree has to go: killing only the
             // parent leaves a child holding the port and the next start collides.
             runCatching {
-                processHandler.process.descendants().forEach { it.destroyForcibly() }
+                (processHandler.process.descendants().toList() + descendants).forEach { it.destroyForcibly() }
                 processHandler.process.destroyForcibly()
             }
             runCatching { processHandler.process.waitFor(2, TimeUnit.SECONDS) }
         }
+        stopSurvivors(descendants, gracePeriodMs)
+    }
+
+    private fun stopSurvivors(descendants: List<ProcessHandle>, gracePeriodMs: Long) {
+        val survivors = descendants.filter { it.isAlive }
+        if (survivors.isEmpty()) return
+        log.info("Stopping ${survivors.size} OpenCode process(es) left by the launcher")
+        survivors.forEach { runCatching { it.destroy() } }
+        val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(gracePeriodMs)
+        try {
+            while (survivors.any { it.isAlive } && System.nanoTime() < deadline) Thread.sleep(50)
+        } catch (_: InterruptedException) {
+            // Disposal interrupts the start thread; finish the kill rather than leak.
+            Thread.currentThread().interrupt()
+        }
+        survivors.filter { it.isAlive }.forEach { runCatching { it.destroyForcibly() } }
     }
 
     /** Upgrades the CLI in place. Returns the combined output for diagnostics. */
@@ -336,7 +356,7 @@ class OpenCodeProcess(
         // `opencode upgrade` is preferred when the install method supports it,
         // but an install placed by a package manager has to be upgraded by that
         // manager or the binary and its metadata drift apart.
-        val commandLine = GeneralCommandLine(splitShellCommand(command)).apply {
+        val commandLine = GeneralCommandLine(upgradeCommandLine(command, com.intellij.openapi.util.SystemInfo.isWindows)).apply {
             withEnvironment(cli.serverEnvironment())
             withParentEnvironmentType(GeneralCommandLine.ParentEnvironmentType.NONE)
             charset = Charsets.UTF_8
@@ -387,28 +407,14 @@ class OpenCodeProcess(
 
         fun isPortInUseMessage(text: String): Boolean = PORT_IN_USE.containsMatchIn(text)
 
-        /** Minimal shell-ish split; upgrade commands are fixed constants, not user input. */
-        private fun splitShellCommand(command: String): List<String> {
-            val parts = mutableListOf<String>()
-            val current = StringBuilder()
-            var quote: Char? = null
-            for (char in command) {
-                when {
-                    quote != null && char == quote -> quote = null
-                    quote != null -> current.append(char)
-                    char == '"' || char == '\'' -> quote = char
-                    char.isWhitespace() -> {
-                        if (current.isNotEmpty()) {
-                            parts.add(current.toString())
-                            current.setLength(0)
-                        }
-                    }
-                    else -> current.append(char)
-                }
-            }
-            if (current.isNotEmpty()) parts.add(current.toString())
-            return parts
-        }
+        /**
+         * Upgrade commands are fixed constants, not user input, but they are shell
+         * commands: the curl installer pipes into `bash`, and npm, pnpm and Yarn are
+         * `.cmd` shims on Windows that `CreateProcess` cannot launch directly. Run
+         * them through the platform shell as upstream's `spawn(..., { shell: true })`.
+         */
+        internal fun upgradeCommandLine(command: String, windows: Boolean): List<String> =
+            if (windows) listOf("cmd.exe", "/d", "/s", "/c", command) else listOf("/bin/sh", "-c", command)
     }
 }
 

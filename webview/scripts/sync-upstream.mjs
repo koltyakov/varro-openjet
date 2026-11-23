@@ -53,6 +53,9 @@ function resolveSource() {
   const clone = join(webviewRoot, '.upstream');
   if (existsSync(join(clone, '.git'))) {
     console.log(`Updating existing clone: ${clone}`);
+    // The manifest names the source of truth. An older clone's origin may point at
+    // a previous repository, which would vendor its ref under the new URL.
+    run('git', ['remote', 'set-url', 'origin', config.repository], clone);
     run('git', ['fetch', '--depth', '1', 'origin', config.ref], clone);
     run('git', ['checkout', '--force', 'FETCH_HEAD'], clone);
   } else {

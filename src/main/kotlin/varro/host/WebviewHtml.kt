@@ -20,6 +20,35 @@ import varro.protocol.Json
  */
 object WebviewHtml {
 
+    private val random = java.security.SecureRandom()
+
+    private fun nonce(): String = ByteArray(18).also(random::nextBytes).let {
+        java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(it)
+    }
+
+    /**
+     * Port of upstream's `webview-html.ts` policy with this page's own origin as
+     * `cspSource`. Only the nonce-tagged boot script runs inline. Images and fonts
+     * come from the bundle or `data:` (the host inlines thumbnails), the highlighter
+     * worker is a `blob:` URL, and nothing may connect, frame or submit elsewhere.
+     */
+    internal fun contentSecurityPolicy(nonce: String?): String = listOf(
+        "default-src 'none'",
+        "img-src 'self' data:",
+        "script-src " + (if (nonce != null) "'nonce-$nonce' 'self'" else "'none'"),
+        "worker-src blob:",
+        "connect-src 'self'",
+        "style-src 'unsafe-inline' 'self'",
+        "font-src 'self' data:",
+        "frame-src 'none'",
+        "object-src 'none'",
+        "base-uri 'none'",
+        "form-action 'none'",
+    ).joinToString("; ")
+
+    private fun cspMeta(nonce: String?) =
+        "<meta http-equiv=\"Content-Security-Policy\" content=\"${contentSecurityPolicy(nonce)}\" />"
+
     private val LOADING_STYLES = """
         html, body, #root { width: 100%; height: 100%; margin: 0; }
         html > body { padding: 0; }
@@ -75,6 +104,7 @@ object WebviewHtml {
         <head>
           <meta charset="UTF-8" />
           <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+          ${cspMeta(null)}
           <title>Varro</title>
           <style>
         :root {
@@ -111,6 +141,7 @@ object WebviewHtml {
         assetVersion: String,
         staticImports: List<String> = emptyList(),
     ): String {
+        val nonce = nonce()
         val serializedState = serializeForInlineScript(initialState)
         val serializedViewState = serializeForInlineScript(viewState)
         val cacheKey = if (assetVersion.isBlank()) "" else "?v=$assetVersion"
@@ -124,6 +155,7 @@ object WebviewHtml {
         <head>
           <meta charset="UTF-8" />
           <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+          ${cspMeta(nonce)}
           <title>Varro</title>
           <style>
         :root {
@@ -136,7 +168,7 @@ object WebviewHtml {
         </head>
         <body class="${theme.kind.bodyClass}" data-vscode-theme-kind="${theme.kind.id}">
           <div id="root">$LOADING_MARKUP</div>
-          <script>
+          <script nonce="$nonce">
         $BOOTSTRAP_FAILURE_HANDLER
             window.__varroHostSend = function(message) { $hostSendSnippet };
             window.__initialWebviewState = $serializedState;

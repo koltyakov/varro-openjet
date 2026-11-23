@@ -234,10 +234,17 @@ class EditorIntegration(private val project: Project) {
         return result.get()
     }
 
+    /**
+     * Reads a file the webview names. Like upstream's `restrictToWorkspace`,
+     * the path must resolve, after following links, inside an open project
+     * root, so the page is never a read primitive for arbitrary local files.
+     */
     fun readWorkspaceFile(path: String): JsonObject? {
-        val file = resolve(path) ?: return null
-        if (file.isDirectory) return null
-        if (file.length > MAX_READ_BYTES) {
+        val verified = resolveWithinRoots(path, workspaceRoots()) ?: return null
+        if (Files.isDirectory(verified)) return null
+        val size = runCatching { Files.size(verified) }.getOrNull() ?: return null
+        val file = LocalFileSystem.getInstance().refreshAndFindFileByNioFile(verified) ?: return null
+        if (size > MAX_READ_BYTES) {
             return Json.obj("path" to file.path, "truncated" to true, "content" to "")
         }
         val content = runCatching { VfsUtil.loadText(file) }.getOrNull() ?: return null
@@ -250,7 +257,9 @@ class EditorIntegration(private val project: Project) {
     }
 
     fun resolveWorkspacePath(path: String): JsonObject? {
-        val file = resolve(path)
+        val file = resolveWithinRoots(path, workspaceRoots())?.let {
+            LocalFileSystem.getInstance().refreshAndFindFileByNioFile(it)
+        }
         return Json.obj(
             "path" to (file?.path ?: path),
             "exists" to (file != null),
@@ -339,6 +348,27 @@ class EditorIntegration(private val project: Project) {
 
     companion object {
         private const val MAX_READ_BYTES = 2L * 1024 * 1024
+
+        /**
+         * Canonical path of [input] when it lies inside one of [roots] after
+         * following links, or `null`. Raw `..` segments are refused outright, a
+         * relative path is tried against each root in order, and an absolute one
+         * must already sit inside a root. Mirrors upstream `resolvePath` with
+         * `restrictToWorkspace` and sibling workspace folders allowed.
+         */
+        internal fun resolveWithinRoots(input: String, roots: List<String>): Path? {
+            val trimmed = input.trim()
+            if (trimmed.isEmpty() || trimmed.indexOf('\u0000') >= 0) return null
+            if (trimmed.replace('\\', '/').split('/').contains("..")) return null
+            val parsed = runCatching { Paths.get(trimmed) }.getOrNull() ?: return null
+            val realRoots = roots.mapNotNull { root -> runCatching { Paths.get(root).toRealPath() }.getOrNull() }
+            val candidates = if (parsed.isAbsolute) listOf(parsed) else realRoots.map { it.resolve(parsed) }
+            for (candidate in candidates) {
+                val real = runCatching { candidate.normalize().toRealPath() }.getOrNull() ?: continue
+                if (realRoots.any { real.startsWith(it) }) return real
+            }
+            return null
+        }
 
         /** No line target means the registered image, PDF or custom editor owns the file. */
         internal fun openResponseFile(line: Int?, openRegistered: () -> Boolean, openAtLine: (Int) -> Boolean): String {

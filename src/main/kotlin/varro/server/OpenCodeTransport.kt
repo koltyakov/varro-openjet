@@ -488,8 +488,9 @@ class OpenCodeTransport(
             val scoped = OpenCodeRequestScope.scope(serverUrl, if (apiVersion == 2) "/api/event" else EVENT_STREAM_PATH, null)
             val builder = HttpRequest.newBuilder(URI.create(scoped.url))
                 .header("Accept", "text/event-stream")
-                // No read timeout: an idle SSE connection is normal. Stalls are
-                // caught by the heartbeat check in the read loop below.
+                // No read timeout: an idle SSE connection is normal, and OpenCode V2
+                // sends no periodic heartbeat to distinguish idleness from a stall.
+                // A half-open connection is recovered by restart or rescope.
                 .timeout(Duration.ofMillis(EVENT_CONNECT_TIMEOUT_MS))
                 .GET()
             OpenCodeRequestScope.directoryHeaders(scoped.directory).forEach(builder::header)
@@ -497,6 +498,10 @@ class OpenCodeTransport(
             lastEventId.get().takeIf { it.isNotEmpty() }?.let { builder.header("Last-Event-ID", it) }
 
             val response = client.send(builder.build(), HttpResponse.BodyHandlers.ofInputStream())
+            // Publish the body before the currency check: a cancel() between the two
+            // either sees it and closes it, or is seen by the check. Otherwise the
+            // read below could block this single stream thread on an orphaned socket.
+            handle.body = response.body()
             if (!isCurrent(handle)) {
                 runCatching { response.body().close() }
                 return
@@ -510,7 +515,6 @@ class OpenCodeTransport(
                 throw OpenCodeRequestException("OpenCode returned a non-SSE event stream")
             }
 
-            handle.body = response.body()
             continuityEstablished = true
             connectedAt = System.currentTimeMillis()
             updateEventStreamState(EventStreamState.HEALTHY)

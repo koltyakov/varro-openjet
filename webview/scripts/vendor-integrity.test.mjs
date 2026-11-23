@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { vendorHash } from './vendor-integrity.mjs';
+import { compareNames, vendorHash } from './vendor-integrity.mjs';
 
 test('vendor hash includes directory contents and individual asset files', () => {
   const root = mkdtempSync(join(tmpdir(), 'varro-vendor-integrity-'));
@@ -26,6 +26,23 @@ test('vendor hash includes directory contents and individual asset files', () =>
     assert.equal(vendorHash(root, entries), expected);
     writeFileSync(join(root, 'assets/icon.png'), 'changed icon');
     assert.notEqual(vendorHash(root, entries), expected);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('entry order does not depend on the ICU locale', () => {
+  const names = ['hooks', 'chat-input', 'Chat.tsx', 'chat.ts', 'a-b', 'a.b', 'ä'];
+  assert.deepEqual([...names].sort(compareNames), ['Chat.tsx', 'a-b', 'a.b', 'chat-input', 'chat.ts', 'hooks', 'ä']);
+});
+
+test('vendor hash refuses symlinks', () => {
+  const root = mkdtempSync(join(tmpdir(), 'varro-vendor-integrity-'));
+  try {
+    mkdirSync(join(root, 'vendor/webview'), { recursive: true });
+    writeFileSync(join(root, 'outside.ts'), 'outside');
+    symlinkSync(join(root, 'outside.ts'), join(root, 'vendor/webview/link.ts'));
+    assert.throws(() => vendorHash(root, [{ to: 'vendor/webview' }]), /symlinks/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

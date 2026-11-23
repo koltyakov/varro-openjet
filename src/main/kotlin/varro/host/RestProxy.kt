@@ -60,8 +60,9 @@ class RestProxy(
 ) {
     private val log = logger<RestProxy>()
     private val modelPricing = ModelPricingCatalog()
-    private val remoteImages = RemoteImages()
-    private val localImages = LocalImages()
+    // One decoder and cache for every view, as the architecture guide documents.
+    private val remoteImages = RemoteImages(thumbnails = service<ImageThumbnails>(), ownsThumbnails = false)
+    private val localImages = LocalImages(service<ImageThumbnails>(), ownsThumbnails = false)
     private val citationPaths = CitationPaths()
     private val sideQuestions = SideQuestions(server.transport::request, { server.transport.apiVersion },
         { server.currentStatus() is varro.server.ServerStatus.Running }, { server.requestGeneration() to server.url() },
@@ -78,6 +79,13 @@ class RestProxy(
     private fun authorizedTransfer(id: String, directory: String): Boolean = transfers?.get(id)?.let {
         WorkspacePaths.isSame(it.str("directory"), directory) && it.obj("transfer").bool("available") == true
     } == true
+    private val requestDirectories = RequestDirectories(::workspaceRoots, { server.transport.observedSessionDirectories() },
+        ::authorizedTransfer, authorizeSession = { session, directory ->
+            val options = RequestOptions(unscoped = true, timeoutMs = 15_000, maxResponseBytes = 2 * 1024 * 1024)
+            FileReferences.authorizeDirectory(session, directory, workspaceRoots(), store.sessionHistoryScope,
+                { server.transport.request("GET", "/session/${encode(session)}", options = options).data.asObjectOrNull() },
+                { root -> server.transport.request("GET", "/project/current", options = options.copy(unscoped = false, directory = root)).data.asObjectOrNull() })
+        }, cacheKey = { "${server.requestGeneration()}|${server.url()}|${store.sessionHistoryScope}" })
     private val childTasks = ChildTasks(server.transport::request, { server.transport.apiVersion },
         { server.requestGeneration() to server.url() },
         { (listOfNotNull(project.basePath) + context.context.arr("workspaceFolders")?.mapNotNull { it.asObjectOrNull().text("path") }.orEmpty()).distinct() },
@@ -194,6 +202,7 @@ class RestProxy(
                 return
             }
             val transferDirectory = transfers?.authorizeRequest(method, path, payload.get("body"))
+            if (transferDirectory == null) authorizeRequestedDirectory(method, path, payload.get("body"))
             val forwardedPath = if (transferDirectory == null) path else {
                 val request = ApiRoutes.parse(method, path)!!
                 val query = request.query.filterKeys { it != "directory" }.flatMap { (key, values) -> values.map { "${encode(key)}=${encode(it)}" } } +
@@ -223,6 +232,25 @@ class RestProxy(
             }
         } finally {
             if (admitted && !success) completeQueuedDispatch(payload, false, rejected)
+        }
+    }
+
+    /**
+     * Checks the page-supplied `directory` before it can rescope OpenCode. Retained
+     * transfers were already authorized by [SessionTransfers.authorizeRequest].
+     */
+    private fun authorizeRequestedDirectory(method: String, path: String, body: JsonElement?) {
+        val request = ApiRoutes.parse(method, path) ?: return
+        // History scope only reads `.git` presence for its answer; it never rescopes.
+        if (request.pathname == ApiRoutes.Endpoints.SESSION_HISTORY_SCOPE) return
+        val varroSession = ApiRoutes.varroSessionId(path)
+        val sessionId = varroSession ?: request.segments.takeIf { it.size >= 2 && it[0] == "session" }?.get(1)?.takeIf { it != "status" }
+        request.query["directory"]?.firstOrNull()?.let { requestDirectories.require(sessionId, it) }
+        if (varroSession != null && request.segments.lastOrNull() == "activate") {
+            body.asObjectOrNull().text("directory")?.let { requestDirectories.require(varroSession, it) }
+        }
+        if (sessionId != null && request.pathname.matches(Regex("^/session/[^/]+/message$"))) {
+            body.asObjectOrNull().str("workspaceDirectory")?.let { requestDirectories.require(sessionId, it) }
         }
     }
 

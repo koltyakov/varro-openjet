@@ -107,4 +107,11 @@ class LocalImagesTest {
         assertEquals(0, process.exitValue())
         assertThrows(IllegalArgumentException::class.java) { LocalImages.readFile(link) {} }
     }
+
+    @Test fun `linux no-follow flag matches each architecture`() {
+        assertEquals(0x20000 or 0x800, LocalImages.linuxNoFollowNonBlock("x86-64"))
+        assertEquals(0x8000 or 0x800, LocalImages.linuxNoFollowNonBlock("aarch64"))
+        assertEquals(0x8000 or 0x800, LocalImages.linuxNoFollowNonBlock("arm"))
+        assertEquals(0x8000 or 0x800, LocalImages.linuxNoFollowNonBlock("ppc64le"))
+    }
 }

@@ -69,8 +69,15 @@ class NextSessionAction : VarroAction() {
 
 /** `varro.server.restart` */
 class RestartServerAction : VarroAction() {
-    override fun perform(project: Project, service: VarroProjectService, event: AnActionEvent) =
-        service.restartServer(force = false)
+    // Restart runs preflight HTTP checks, process discovery and a graceful stop,
+    // which can take seconds; actions are invoked on the EDT.
+    override fun perform(project: Project, service: VarroProjectService, event: AnActionEvent) {
+        object : com.intellij.openapi.progress.Task.Backgroundable(project, "Restarting OpenCode", false) {
+            override fun run(indicator: com.intellij.openapi.progress.ProgressIndicator) {
+                if (!project.isDisposed) service.restartServer(force = false)
+            }
+        }.queue()
+    }
 }
 
 /**

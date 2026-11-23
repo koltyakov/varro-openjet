@@ -58,6 +58,9 @@ object WebviewAssets {
     fun isBundlePresent(): Boolean =
         WebviewAssets::class.java.getResource("$RESOURCE_ROOT/webview.mjs") != null
 
+    /** Navigations the host browser may perform: its own documents, plus the empty initial frame. */
+    fun isAllowedNavigation(url: String?): Boolean = url == "about:blank" || isOwnedUrl(url)
+
     fun isOwnedUrl(url: String?): Boolean = runCatching {
         val uri = URI(url ?: return false)
         uri.scheme == "http" && uri.host == "varro.localhost" && uri.port == -1 && uri.rawUserInfo == null
