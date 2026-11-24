@@ -321,6 +321,13 @@ class OpenCodeCli(
         /** Lowest OpenCode release whose APIs Varro relies on. */
         const val MINIMUM_SUPPORTED_VERSION: String = "1.16.0"
 
+        /** Lowest V2 release. 2.0.6 adds `/api/info` and the `/api/location/reload` route used to apply config changes. */
+        const val MINIMUM_SUPPORTED_V2_VERSION: String = "2.0.6"
+
+        /** The support floor for the API family of [version]. */
+        fun minimumSupportedVersion(version: String): String =
+            if (version.startsWith("2.")) MINIMUM_SUPPORTED_V2_VERSION else MINIMUM_SUPPORTED_VERSION
+
         private val MISSING_CLI_MARKERS = listOf(
             "enoent",
             "command not found",

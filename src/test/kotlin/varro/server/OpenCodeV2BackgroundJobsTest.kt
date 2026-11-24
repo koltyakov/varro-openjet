@@ -21,6 +21,7 @@ class OpenCodeV2BackgroundJobsTest {
             "shell" -> { addProperty("shellID", "sh_one"); addProperty("command", "npm test") }
             "subagent" -> { addProperty("childSessionID", "ses_child"); addProperty("agent", "explore"); addProperty("description", "Inspect project") }
             "image" -> { addProperty("path", "/repo/image.png"); addProperty("model", "fixture/image") }
+            "video" -> addProperty("path", "/repo/video.mp4")
         }
     }
     private fun shell() = Json.obj("id" to "sh_one", "status" to "running", "command" to "npm test",
@@ -31,17 +32,19 @@ class OpenCodeV2BackgroundJobsTest {
         var shells = listOf(shell())
         var active = Json.obj()
         var jobFailure: String? = null
+        var cancelFailure: String? = null
         var ancestryFailure: String? = null
         var onJobs: (() -> Unit)? = null
         val calls = mutableListOf<String>()
+        val requests = mutableListOf<Pair<String, String>>()
         val sessions = mutableMapOf(
             "ses_root" to Json.obj("id" to "ses_root", "location" to Json.obj("directory" to "/repo")),
             "ses_child" to Json.obj("id" to "ses_child", "parentID" to "ses_root", "location" to Json.obj("directory" to "/repo")),
             "ses_nested" to Json.obj("id" to "ses_nested", "parentID" to "ses_child", "location" to Json.obj("directory" to "/nested")),
             "ses_other" to Json.obj("id" to "ses_other", "location" to Json.obj("directory" to "/other")),
         )
-        val adapter = OpenCodeV2Adapter({ _, path, _, _ ->
-            synchronized(calls) { calls.add(path) }
+        val adapter = OpenCodeV2Adapter({ method, path, _, _ ->
+            synchronized(calls) { calls.add(path); requests.add(method to path) }
             OpenCodeResponse(Json.obj("data" to when (val route = path.substringBefore('?')) {
                 "/api/session/active" -> active
                 "/api/shell" -> shells
@@ -52,7 +55,11 @@ class OpenCodeV2BackgroundJobsTest {
                     jobFailure?.let { error(it) }
                     captured
                 }
-                else -> {
+                "/api/session/ses_root/interrupt" -> true
+                else -> if (Regex("/api/experimental/job/[^/]+/cancel").matches(route)) {
+                    cancelFailure?.let { error(it) }
+                    null
+                } else {
                     ancestryFailure?.let { error(it) }
                     sessions[route.removePrefix("/api/session/")] ?: error("404 session not found")
                 }
@@ -63,7 +70,7 @@ class OpenCodeV2BackgroundJobsTest {
     }
 
     @Test fun `native shell subagent image and Code Mode jobs restore waiting for owners and ancestors`() {
-        for (kind in listOf("shell", "subagent", "image", "codemode")) {
+        for (kind in listOf("shell", "subagent", "image", "codemode", "video")) {
             val fixture = Fixture(listOf(job(kind, "ses_nested"), job(kind, "ses_other")))
             fixture.shells = emptyList()
             val status = fixture.status()
@@ -71,6 +78,7 @@ class OpenCodeV2BackgroundJobsTest {
             assertEquals(true, status.obj("ses_root").bool("background"))
             assertEquals(10L, status.obj("ses_root").long("backgroundStartedAt"))
             if (kind == "codemode") assertEquals("Code Mode script", status.obj("ses_root").str("backgroundCommand"))
+            if (kind == "video") assertEquals("/repo/video.mp4", status.obj("ses_root").str("backgroundCommand"))
             assertEquals(1, fixture.calls.count { it == "/api/session/ses_root" })
             assertEquals(1, fixture.calls.count { it == "/api/session/ses_nested" })
         }
@@ -97,7 +105,7 @@ class OpenCodeV2BackgroundJobsTest {
     }
 
     @Test fun `completed and errored jobs wait until consumption and completion handoff`() {
-        for (outcome in listOf("completed", "error")) for (kind in listOf("image", "codemode")) {
+        for (outcome in listOf("completed", "error")) for (kind in listOf("image", "codemode", "video")) {
             var now = 0L
             val work = OpenCodeV2BackgroundWork { now }
             val jobs = mapOf("ses_root" to listOf(job(kind, status = outcome)))
@@ -156,12 +164,13 @@ class OpenCodeV2BackgroundJobsTest {
     }
 
     @Test fun `authentication transport malformed and ancestry errors preserve pending work`() {
-        for (failure in listOf("401 Unauthorized", "500 unavailable", "network failed", "ancestry", "malformed", "malformed-session")) {
+        for (failure in listOf("401 Unauthorized", "500 unavailable", "network failed", "ancestry", "malformed", "malformed-video", "malformed-session")) {
             val fixture = Fixture(listOf(job("image")))
             fixture.status()
             when (failure) {
                 "ancestry" -> fixture.ancestryFailure = "503 ancestry unavailable"
                 "malformed" -> fixture.jobs = Json.array(listOf(Json.obj("kind" to "image")))
+                "malformed-video" -> fixture.jobs = Json.array(listOf(job("video").apply { remove("path") }))
                 "malformed-session" -> fixture.sessions["ses_root"]!!.remove("location")
                 else -> fixture.jobFailure = failure
             }
@@ -200,6 +209,84 @@ class OpenCodeV2BackgroundJobsTest {
                 else -> assertEquals(Json.obj(), fixture.status())
             }
         }
+    }
+
+    @Test fun `native video titles take precedence over the output path`() {
+        val fixture = Fixture(listOf(job("video").apply { addProperty("title", "Render the demo") }))
+        fixture.shells = emptyList()
+        assertEquals("Render the demo", fixture.status().obj("ses_root").str("backgroundCommand"))
+    }
+
+    private val list = "GET" to "/api/experimental/job?sessionID=ses_root&descendants=true&status=running"
+    private val interrupt = "POST" to "/api/session/ses_root/interrupt?resume=false"
+    private val deleteShell = "DELETE" to "/api/shell/sh_one?location%5Bdirectory%5D=%2Frepo"
+    private fun cancel(id: String) = "POST" to "/api/experimental/job/$id/cancel"
+    private fun Fixture.stop(): List<Pair<String, String>> {
+        val from = requests.size
+        assertEquals(true, adapter.request("POST", "/session/ses_root/abort", Json.obj(), RequestOptions(directory = "/repo")).data?.asBoolean)
+        return requests.drop(from)
+    }
+    private fun Fixture.backgroundPending() = event("session.status.updated", Json.obj("sessionID" to "ses_root", "status" to Json.obj("type" to "idle")))
+        .single().obj("properties").obj("status").bool("background") == true
+
+    @Test fun `Stop cancels running jobs including descendants instead of deleting their shells on 2_4`() {
+        val fixture = Fixture(listOf(job(), job("codemode"), job("video", "ses_child"), job("image", status = "completed")))
+        fixture.adapter.setServerVersion("2.4.0")
+        assertEquals(true, fixture.status().obj("ses_root").bool("background"))
+        assertEquals(listOf(list, cancel("job_shell"), cancel("job_codemode"), cancel("job_video"), interrupt), fixture.stop())
+        assertFalse(fixture.backgroundPending())
+    }
+
+    @Test fun `Stop keeps a service shell job running while cancelling other work`() {
+        val fixture = Fixture(listOf(job(), job("video")))
+        fixture.adapter.setServerVersion("2.4.1")
+        fixture.adapter.request("PATCH", "/session/ses_root/background-process/sh_one", Json.obj("service" to true), RequestOptions(directory = "/repo"))
+        val status = fixture.status().obj("ses_root")
+        assertEquals(true, status.bool("background"))
+        assertEquals(1L, status.long("backgroundServices"))
+        assertEquals(listOf(list, cancel("job_video"), interrupt), fixture.stop())
+        assertEquals(1, fixture.adapter.backgroundServiceCount("ses_root"))
+    }
+
+    @Test fun `older and prerelease servers keep shell-only Stop without probing cancellation`() {
+        for (version in listOf("2.2.6", "2.3.2", "2.4.0-beta.1")) {
+            val fixture = Fixture(listOf(job(), job("video")))
+            fixture.adapter.setServerVersion(version)
+            assertEquals(true, fixture.status().obj("ses_root").bool("background"))
+            assertEquals(listOf(deleteShell, interrupt), fixture.stop())
+        }
+    }
+
+    @Test fun `missing job routes fall back to deleting shells`() {
+        for (missing in listOf("list", "cancel")) {
+            val fixture = Fixture(listOf(job()))
+            fixture.adapter.setServerVersion("2.4.0")
+            assertEquals(true, fixture.status().obj("ses_root").bool("background"))
+            if (missing == "list") fixture.jobFailure = "404 Not Found" else fixture.cancelFailure = "404 Not Found"
+            val expected = if (missing == "list") listOf(list, deleteShell, interrupt) else listOf(list, cancel("job_shell"), deleteShell, interrupt)
+            assertEquals(expected, fixture.stop())
+        }
+    }
+
+    @Test fun `failed cancellation is reported instead of interrupting`() {
+        val fixture = Fixture(listOf(job("video")))
+        fixture.adapter.setServerVersion("2.4.0")
+        assertEquals(true, fixture.status().obj("ses_root").bool("background"))
+        fixture.cancelFailure = "500 Storage is read-only"
+        val from = fixture.requests.size
+        val failure = assertThrows(Exception::class.java) {
+            fixture.adapter.request("POST", "/session/ses_root/abort", Json.obj(), RequestOptions(directory = "/repo"))
+        }
+        assertTrue(failure.message.orEmpty().contains("500 Storage is read-only"))
+        assertFalse(fixture.requests.drop(from).contains(interrupt))
+    }
+
+    @Test fun `Stop only interrupts a running session without listing its jobs`() {
+        val fixture = Fixture(listOf(job("video")))
+        fixture.adapter.setServerVersion("2.4.0")
+        fixture.active = Json.obj("ses_root" to Json.obj("type" to "running"))
+        assertEquals("busy", fixture.status().obj("ses_root").str("type"))
+        assertEquals(listOf(interrupt), fixture.stop())
     }
 
     @Test fun `older empty snapshot cannot replace a newer native job snapshot`() {

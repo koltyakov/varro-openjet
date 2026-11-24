@@ -18,6 +18,18 @@ class OpenCodeV2Test {
             assertEquals(child == "ses_child" && state == "completed", result.bool("backgroundPending") == true)
         }
     }
+
+    @Test fun `v2_4 background-result envelopes retain only a matching running subagent as pending`() {
+        for ((kind, child, pending) in listOf(Triple("subagent", "ses_child", true), Triple("subagent", "ses_wrong", false), Triple("shell", "ses_child", false))) {
+            val message = OpenCodeV2Projection.message(Json.obj("id" to "msg_notice", "type" to "synthetic",
+                "text" to "<background-result kind=\"$kind\" sessionID=\"$child\" state=\"running\" description=\"Audit\">\nPartial\n</background-result>",
+                "metadata" to Json.obj("source" to "subagent", "childID" to "ses_child", "state" to "completed")), "ses_parent")
+            val result = message.arr("parts")!![0].asJsonObject.obj("subagentResult")
+            assertEquals("ses_child", result.str("sessionID"))
+            assertEquals("completed", result.str("state"))
+            assertEquals(pending, result.bool("backgroundPending") == true)
+        }
+    }
     @JvmField @Rule val temporary = TemporaryFolder()
 
     @Test fun `project and saved worktree inventories preserve native bare arrays without location loading`() {

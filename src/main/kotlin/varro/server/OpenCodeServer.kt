@@ -614,7 +614,7 @@ class OpenCodeServer(
 
     private fun checkCompatibility(version: String?): ServerStatus.Error? {
         if (version == null) return null
-        val required = if (version.startsWith("2.")) "2.0.5" else OpenCodeCli.MINIMUM_SUPPORTED_VERSION
+        val required = OpenCodeCli.minimumSupportedVersion(version)
         if (version.substringBefore('.') !in setOf("1", "2")) return ServerStatus.Error("Unsupported OpenCode API version: $version")
         if (OpenCodeCli.compareVersions(version, required) >= 0) return null
         if (isAttachOnly()) return ServerStatus.Error(

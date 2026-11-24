@@ -13,8 +13,9 @@ import java.util.concurrent.TimeUnit
 
 class OpenCodeV2OAuthPasteTest {
     @JvmField @Rule val temporary = TemporaryFolder()
-    private inner class Fixture(val paste: Boolean? = true, val mode: String = "auto") {
+    private inner class Fixture(val paste: Boolean? = true, val mode: String = "auto", val sequential: Boolean = false) {
         val calls = java.util.concurrent.CopyOnWriteArrayList<String>()
+        var attempts = 0
         var code: String? = null
         var reject = false
         var onSubmit: (() -> Unit)? = null
@@ -26,7 +27,7 @@ class OpenCodeV2OAuthPasteTest {
                 route == "/api/provider/cloud" -> Json.obj("data" to Json.obj("integrationID" to "login"))
                 route == "/api/integration/login" -> Json.obj("data" to Json.obj("methods" to listOf(Json.obj("id" to "oauth", "type" to "oauth"))))
                 route == "/api/mcp" -> Json.obj("data" to listOf(Json.obj("name" to "docs", "integrationID" to "login", "status" to Json.obj("status" to "connected"))))
-                route.endsWith("/connect/oauth") -> Json.obj("data" to Json.obj("attemptID" to "attempt", "mode" to mode, "url" to "https://example.com/auth").apply {
+                route.endsWith("/connect/oauth") -> Json.obj("data" to Json.obj("attemptID" to if (sequential) "attempt_${++attempts}" else "attempt", "mode" to mode, "url" to "https://example.com/auth").apply {
                     if (paste != null) addProperty("paste", paste)
                 })
                 route.endsWith("/complete") -> {
@@ -126,5 +127,22 @@ class OpenCodeV2OAuthPasteTest {
         fixture.adapter.request("POST", "/mcp/docs/auth/callback", Json.obj("attemptID" to "attempt", "code" to "http://localhost/callback?code=a%2Fb"), fixture.options)
         assertEquals("http://localhost/callback?code=a%2Fb", fixture.code)
         assertFalse(fixture.calls.any { it.startsWith("DELETE") })
+    }
+
+    @Test fun `MCP code callback selects its own attempt when several views started sign-in`() {
+        val fixture = Fixture(sequential = true)
+        assertEquals("attempt_1", fixture.authorize(true).str("oauthState"))
+        assertEquals("attempt_2", fixture.authorize(true).str("oauthState"))
+        // Without an attempt ID, two pending attempts cannot be disambiguated.
+        assertThrows(IllegalStateException::class.java) {
+            fixture.adapter.request("POST", "/mcp/docs/auth/callback", Json.obj("code" to "code"), fixture.options)
+        }
+        fixture.calls.clear()
+        fixture.adapter.request("POST", "/mcp/docs/auth/callback", Json.obj("code" to "second", "attemptID" to "attempt_2"), fixture.options)
+        assertEquals("second", fixture.code)
+        assertTrue(fixture.calls.any { it.startsWith("POST /api/integration/login/connect/oauth/attempt_2/complete") })
+        assertFalse(fixture.calls.any { it.contains("attempt_1") })
+        fixture.adapter.request("POST", "/mcp/docs/auth/callback", Json.obj("code" to "first", "attemptID" to "attempt_1"), fixture.options)
+        assertEquals("first", fixture.code)
     }
 }

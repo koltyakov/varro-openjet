@@ -134,7 +134,7 @@ Explicit V2 service discovery can recover lifecycle ownership after a CLI replac
 PID or port. The discovered credentials must match a private retired Varro lease, the executable
 must match, and the sole listener's PID and birth identity must survive reinspection under the
 original claim. Known foreign users are rejected; unknown account evidence is not same-user proof.
-The authenticated V2 HTTP PID must match the OS listener, with `/api/status` fallback on 2.0.5.
+The authenticated V2 HTTP PID must match the OS listener, with `/api/status` fallback on unsupported 2.0.5 services.
 Recovery publishes a new owner and drops obsolete injected configuration. Generic private-credential
 attachment and PID-free companions remain read-only and do not rewrite ownership evidence.
 

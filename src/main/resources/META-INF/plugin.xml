@@ -34,7 +34,7 @@
         <ul>
             <li>A JetBrains IDE 2025.2 or newer with a JCEF-enabled runtime.
                 Detached chat window commands require IDE 2026.1 or newer.</li>
-            <li>OpenCode CLI V2 2.0.5 or newer, or V1 1.16.0 or newer, on <code>PATH</code> or
+            <li>OpenCode CLI V2 2.0.6 or newer, or V1 1.16.0 or newer, on <code>PATH</code> or
                 configured in <em>Settings | Tools | Varro</em>. Install V2 with
                 <code>npm install -g @opencode/cli</code>.</li>
             <li>A configured provider. Run <code>opencode auth login</code>, or use

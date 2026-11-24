@@ -384,7 +384,11 @@ internal class OpenCodeV2Adapter(
                 "message" -> if (method == "GET") return messages(id, directory, query, options)
                 "abort", "summarize" -> {
                     if (action == "abort" && backgroundWork.isWaiting(id)) {
-                        backgroundWork.shellIDs(id).forEach { raw("DELETE", scoped("/api/shell/${encode(it)}")) }
+                        val choices = mutableMapOf<String, JsonObject>()
+                        val cancelledShells = backgroundJobs.cancel(id, { data("GET", it) }, { raw("POST", it, Json.obj()) }) { job ->
+                            choices.getOrPut(job.str("sessionID")!!) { backgroundServices.read(job.str("sessionID")!!) }.bool(job.str("shellID")!!) == true
+                        }
+                        backgroundWork.shellIDs(id).filterNot { it in cancelledShells }.forEach { raw("DELETE", scoped("/api/shell/${encode(it)}")) }
                         backgroundWork.clearSession(id)
                     }
                     raw("POST", "$endpoint/${if (action == "abort") "interrupt?resume=false" else "compact"}", Json.obj()); return result(true)

@@ -27,8 +27,15 @@ class OpenCodeRecoveryClaimTest {
             val unsubscribe = server.onStatus { if (it is ServerStatus.Running || it is ServerStatus.Error) ready.countDown() }
             try {
                 if (server.currentStatus() !is ServerStatus.Running) assertTrue(ready.await(10, TimeUnit.SECONDS))
-                assertTrue(server.currentStatus().toString(), server.currentStatus() is ServerStatus.Running)
-                assertEquals(version, server.version())
+                if (version == "2.0.5") {
+                    // Below the V2 floor, /api/status still identifies the server so it can be reported as outdated.
+                    val status = server.currentStatus()
+                    assertTrue(status.toString(), status is ServerStatus.Error &&
+                        status.message.startsWith("OpenCode update required. Varro needs 2.0.6 or newer, but found 2.0.5."))
+                } else {
+                    assertTrue(server.currentStatus().toString(), server.currentStatus() is ServerStatus.Running)
+                    assertEquals(version, server.version())
+                }
                 val releaseDeadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
                 while (Files.exists(root.resolve("varro-opencode-server-$port.json.claim"))) {
                     assertTrue("Startup did not release its recovery claim", System.nanoTime() < releaseDeadline)

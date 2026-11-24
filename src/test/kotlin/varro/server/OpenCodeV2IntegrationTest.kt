@@ -658,14 +658,28 @@ class OpenCodeV2IntegrationTest {
         val global = varro.host.GlobalPermissionConfig(globalPath.parent)
         val sessions = mutableListOf<String>()
         val directories = mutableMapOf<String, String>()
-        fun create(directory: java.nio.file.Path, askAll: Boolean = false): String {
-            // 2.2.7 agent reads are snapshots, not an activation barrier. Model reads still await policy plugins.
+        fun rule(action: String, resource: String, effect: String) = Triple(action, resource, effect)
+        fun create(directory: java.nio.file.Path, askAll: Boolean = false, present: List<Triple<String, String, String>> = emptyList(),
+                   absent: List<Triple<String, String, String>> = emptyList()): String {
+            // 2.2.7 agent reads are snapshots, not an activation barrier. Before 2.4.0, model reads awaited policy plugins.
             transport.request("GET", "/api/model", options = RequestOptions(directory = directory.toString()))
             transport.request("GET", "/agent", options = RequestOptions(directory = directory.toString()))
             val body = Json.obj("title" to "Permission scope fixture", "agent" to "build")
             if (askAll) body.add("permission", Json.array(listOf(Json.obj("permission" to "*", "pattern" to "*", "action" to "ask"))))
             return transport.request("POST", "/session", body, RequestOptions(directory = directory.toString())).data.asObjectOrNull().str("id")!!.also {
                 sessions.add(it); directories[it] = directory.toString()
+                // 2.4.0 model reads no longer wait for config plugins. Wait for the build agent's effective config
+                // rules, then issue exactly one permission check.
+                val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+                while (true) {
+                    val build = OpenCodeV2Adapter.objects(transport.request("GET", "/api/agent", options = RequestOptions(directory = directory.toString()))
+                        .data.asObjectOrNull()?.get("data")).firstOrNull { agent -> agent.str("id") == "build" }
+                    val actual = build.arr("permissions").orEmpty().mapNotNull { it.asObjectOrNull() }
+                        .map { rule(it.str("action").orEmpty(), it.str("resource").orEmpty(), it.str("effect").orEmpty()) }
+                    if (actual.containsAll(present) && absent.none(actual::contains)) break
+                    assertTrue("Build agent rules $actual did not include $present and exclude $absent", System.nanoTime() < deadline)
+                    Thread.sleep(100)
+                }
             }
         }
         fun ask(id: String, action: String, resource: String) = transport.request("POST", "/api/session/$id/permission",
@@ -684,8 +698,10 @@ class OpenCodeV2IntegrationTest {
                 }
             }) { method, path, body, directory -> transport.request(method, path, body, RequestOptions(directory = directory)).data }
         try {
+            val readAsk = rule("read", "*", "ask"); val readFixture = rule("read", "fixture-read/*", "allow")
+            val webfetchAsk = rule("webfetch", "*", "ask"); val trusted = rule("webfetch", "https://trusted.example/*", "allow")
             val before = saved()
-            val first = create(workspace)
+            val first = create(workspace, present = listOf(readAsk))
             val pending = ask(first, "read", "fixture-read/one")
             assertEquals("ask", pending.str("effect"))
             service.allow(Json.obj("sessionId" to first, "permissionId" to pending.str("id"), "patterns" to listOf("fixture-read/*")), true, workspace.toString())
@@ -696,13 +712,13 @@ class OpenCodeV2IntegrationTest {
             reply(first, pending)
             assertEquals(before, saved())
             transport.request("POST", "/instance/dispose", options = RequestOptions(directory = workspace.toString()))
-            val second = create(workspace)
+            val second = create(workspace, present = listOf(readAsk, readFixture))
             assertEquals("allow", ask(second, "read", "fixture-read/two").str("effect"))
             assertEquals(before, saved())
             Files.delete(config.path())
             assertTrue(Files.exists(base))
             transport.request("POST", "/instance/dispose", options = RequestOptions(directory = workspace.toString()))
-            val third = create(workspace)
+            val third = create(workspace, present = listOf(readAsk), absent = listOf(readFixture))
             val revoked = ask(third, "read", "fixture-read/three")
             assertEquals("ask", revoked.str("effect")); reply(third, revoked)
 
@@ -712,23 +728,23 @@ class OpenCodeV2IntegrationTest {
                 assertTrue(git.waitFor(10, TimeUnit.SECONDS)); assertEquals(0, git.exitValue())
             }
             val one = globalProject("one")
-            val globalSession = create(one)
+            val globalSession = create(one, present = listOf(webfetchAsk))
             val globalPending = ask(globalSession, "webfetch", "https://trusted.example/one")
             assertEquals("ask", globalPending.str("effect"))
             service.allowGlobal(Json.obj("sessionId" to globalSession, "permissionId" to globalPending.str("id"),
                 "patterns" to listOf("https://trusted.example/*")), one.toString())
             reply(globalSession, globalPending)
-            val other = create(globalProject("two"))
+            val other = create(globalProject("two"), present = listOf(webfetchAsk, trusted))
             assertEquals("allow", ask(other, "webfetch", "https://trusted.example/two").str("effect"))
             val outside = ask(other, "webfetch", "https://other.example/")
             assertEquals("ask", outside.str("effect")); reply(other, outside)
             global.write(Json.array(listOf(Json.obj("permission" to "webfetch", "pattern" to "*", "action" to "ask"))))
-            val afterGlobalRemoval = create(globalProject("revoked"))
+            val afterGlobalRemoval = create(globalProject("revoked"), present = listOf(webfetchAsk), absent = listOf(trusted))
             val globalRevoked = ask(afterGlobalRemoval, "webfetch", "https://trusted.example/revoked")
             assertEquals("ask", globalRevoked.str("effect")); reply(afterGlobalRemoval, globalRevoked)
             assertEquals(before, saved())
 
-            val unknown = create(workspace, true)
+            val unknown = create(workspace, true, present = listOf(readAsk))
             val resource = "fixture-untracked-approval *"
             val unknownPending = ask(unknown, "shell", resource)
             assertEquals("ask", unknownPending.str("effect")); reply(unknown, unknownPending, true)
@@ -762,8 +778,15 @@ class OpenCodeV2IntegrationTest {
             ) }.toTypedArray()),
         )))
         val options = RequestOptions(directory = directory)
-        val models = transport.request("GET", "/api/model", options = options).data.asObjectOrNull().arr("data")!!
-        assertTrue(models.any { it.asObjectOrNull().str("providerID") == "fixture" && it.asObjectOrNull().str("id") == "fixture" })
+        // 2.4.0 catalogs answer with what a cold location has loaded; wait for the configured model before exclusions.
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+        var models: com.google.gson.JsonArray
+        while (true) {
+            models = transport.request("GET", "/api/model", options = options).data.asObjectOrNull().arr("data")!!
+            if (models.any { it.asObjectOrNull().str("providerID") == "fixture" && it.asObjectOrNull().str("id") == "fixture" }) break
+            assertTrue("Configured fixture model did not load", System.nanoTime() < deadline)
+            Thread.sleep(100)
+        }
         assertFalse(models.any { it.asObjectOrNull().str("providerID") in ids && it.asObjectOrNull().str("id") == "free-fixture" })
         for (route in listOf("/provider", "/config/providers")) {
             val providers = transport.request("GET", route, options = options).data.asObjectOrNull()

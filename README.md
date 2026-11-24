@@ -8,7 +8,7 @@ Run [OpenCode](https://opencode.ai) in JetBrains IDEs with [Varro](https://githu
 
 ## Getting started
 
-Requires a JetBrains IDE from 2025.2 onward with a JCEF-enabled runtime, plus OpenCode v2 2.0.5+ or v1 1.16.0+.
+Requires a JetBrains IDE from 2025.2 onward with a JCEF-enabled runtime, plus OpenCode v2 2.0.6+ or v1 1.16.0+.
 
 Install OpenCode using its [installation guide](https://opencode.ai/v2/docs/cli), or npm:
 

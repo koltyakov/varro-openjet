@@ -8,6 +8,13 @@ import org.junit.rules.TemporaryFolder
 class OpenCodeCliVersionTest {
     @get:Rule val temporary = TemporaryFolder()
 
+    @Test fun `V2 floor is 2_0_6 and V1 floor is unchanged`() {
+        for (version in listOf("2.0.5", "2.0.6", "2.4.1")) assertEquals("2.0.6", OpenCodeCli.minimumSupportedVersion(version))
+        for (version in listOf("1.15.9", "1.19.6")) assertEquals("1.16.0", OpenCodeCli.minimumSupportedVersion(version))
+        org.junit.Assert.assertTrue(OpenCodeCli.compareVersions("2.0.5", OpenCodeCli.minimumSupportedVersion("2.0.5")) < 0)
+        assertEquals(0, OpenCodeCli.compareVersions("2.0.6", OpenCodeCli.minimumSupportedVersion("2.0.6")))
+    }
+
     @Test fun `version diagnostics can refresh an upgraded CLI without dropping command discovery`() {
         val windows = System.getProperty("os.name").lowercase().contains("windows")
         val executable = temporary.newFile(if (windows) "opencode.cmd" else "opencode")
