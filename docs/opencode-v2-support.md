@@ -1,6 +1,6 @@
 # OpenCode V2 support
 
-OpenJet supports V1 from 1.16.0 and V2 from 2.0.6. The webview and shared sources were synced from Varro's `main` branch at `5beb97bfe6cb`, version 0.36.4. Tested baselines are V1 1.19.6 and V2 2.4.1. The Kotlin adapter handles released-server contracts, including generated skill, shell and synthetic transcript records. Synthetic text appears as automatic-action notices, except goal kickoffs, which appear as user prompts. Canonical subagent completion metadata produces linked subagent activities. Pending and running V2 patch calls render as active edits. Assistant history preserves automatic retry metadata for recovery notices. History attachments use deferred references with Kotlin-generated thumbnails and on-demand original reads. Chat annotations retain bounded display context before deferral. [Session cleanup and usage export](session-cleanup.md) preserve statistics and optional parent transcripts before confirmed deletions.
+OpenJet supports V1 from 1.16.0 and V2 from 2.0.6. The webview and shared sources were synced from Varro's `main` branch at `456ca2167d74`, version 0.36.6. Tested baselines are V1 1.19.6 and V2 2.4.1. The Kotlin adapter handles released-server contracts, including generated skill, shell and synthetic transcript records. Synthetic text appears as automatic-action notices, except goal kickoffs, which appear as user prompts. Canonical subagent completion metadata produces linked subagent activities. Pending and running V2 patch calls render as active edits. Assistant history preserves automatic retry metadata for recovery notices. History attachments use deferred references with Kotlin-generated thumbnails and on-demand original reads. Chat annotations retain bounded display context before deferral. [Session cleanup and usage export](session-cleanup.md) preserve statistics and optional parent transcripts before confirmed deletions.
 
 V2 sessions support `/pause` and a Resume action in the transcript. Pausing parks queued messages and interrupts with `resume=false`. Pause markers persist in the shared Varro session annotations, and session summaries and usage reports exclude paused time. Commit-message generation uses the stateless endpoint when the server advertises it, falling back to a helper session when the endpoint or selected model is unavailable before generation starts.
 
@@ -3695,6 +3695,50 @@ Remaining differences and verification limits:
 | Accepted older differences, unchanged | See the preceding sync reviews | Unchanged by this sync. |
 | Existing dependency advisories, unchanged | Locked Seroval and Solid dependencies in `webview/package-lock.json` | `npm audit` still reports four moderate Seroval findings through `solid-js`/`@solidjs/web` 2.0.3. This sync did not change them. |
 | Interactive/platform coverage | MCP OAuth dialog, Stop on waiting sessions, background-result transcripts; `OpenCodeV2Adapter.kt`, `OpenCodeV2BackgroundJobs.kt`, `OpenCodeV2Projection.kt` | Covered by Kotlin fixtures and released-server suites, not an interactive sandbox IDE, live MCP OAuth account, real video job or Windows/Linux run. |
+
+No missing, partial or uncertain Kotlin host or consumed-contract gap remains
+in the reviewed changes.
+
+## Upstream sync review, 2026-11-24, 456ca216
+
+Reviewed Varro `5beb97bfe6cbcd40dfd5a1c5a80012b265a4cba3` through
+`456ca2167d742d8d77c3d24497b6dd1d75a27fc3`, versions 0.36.4 to 0.36.6. The
+comparison covers changed extension sources and tests, shared sources,
+configuration and dependency declarations, and browser sources. Vendored sources
+remain unmodified. No dependency changed, so the lockfile and the pinned Node
+24.22.3 and npm 12.2.3 toolchain are unchanged. SDK/client baselines remain V1
+1.19.6 and V2 2.4.1, so there is no new released OpenCode range to review. The
+user's OpenJet 0.12.4 version is preserved.
+
+| Upstream change | OpenJet alignment and regression coverage |
+| --- | --- |
+| `shared/opencode-compatibility.ts`, docs; V2 minimum raised to 2.0.6 | Already aligned. OpenJet raised its floor to 2.0.6 in the previous release for the same `/api/location/reload` route. The vendored constant now matches `OpenCodeCli.MINIMUM_SUPPORTED_V2_VERSION`. |
+| `opencode-v2.integration.test.ts`; global provider config reloads without a restart | `OpenCodeV2IntegrationTest` adds `verifyGlobalProviderReload`. It renames the isolated global `fixture` provider, calls `/global/dispose`, waits for the new name in a directory without a project override, and requires the same server version and PID. It runs from 2.0.27, the first fixture release that writes native global providers. At the 2.0.6 floor, the existing offline-maintenance managed-service case already verifies a `/global/dispose` config reload with the same listener PID. |
+| `provider-file-refresh-controller.ts`, `server.ts` `serverOwnership`; only the owning window reloads after provider files change | Not applicable. OpenJet has never implemented the VS Code provider-file watcher (see the earlier provider-refresh notes), so IDE windows never reload a shared server on file changes. Explicit refreshes keep their existing connection-state handling. |
+| `data-loaders.ts`, `lib/log.ts`; empty-catalog and applied-catalog diagnostics sent as `log` with `level: "info"` | `WebviewLog.kt` maps explicit `info` browser messages to the IDE log at info level, like upstream's output channel. Untagged messages stay at debug. `VarroProjectService.kt` uses it. `WebviewLogTest` covers every level and missing messages. |
+| `provider-setup-prompt.ts`, `ChatWorkspace.tsx`, `App.tsx`, `Chat.tsx`, settings panels, routing store, styles | Browser-only. They use existing provider, permission, MCP and restart routes; there are no new host requests or messages. |
+
+`scripts/check-opencode-compatibility.py --version 2.4.1 --full-check` passed a
+fresh `./gradlew check buildPlugin --rerun-tasks` with the exact published 2.4.1
+binary. The V2 adapter suite, including the new global reload check, and all
+three managed-service cases passed without skips. The 126 browser host tests,
+TypeScript checking, vendor integrity and bundling passed too. The helper also
+passed against published 2.0.6, the floor, and 2.0.27, the first release where
+the new reload check runs. All fixtures used isolated HOME/XDG/database/service-state
+roots. Evidence is `build/opencode-compatibility/{2.4.1,2.0.6,2.0.27}/verification.json`
+and `build/sync-456ca216-*.log`. The V1 SDK is unchanged, so the V1 released
+suite was not rerun. Plugin Verifier was not rerun. The rebuilt package is
+`build/distributions/varro-openjet-0.12.4.zip`, SHA-256
+`15b3a6cfb2b0d7fb14d92625ed51d818fbd0ce27c97c71344973f336a8c3f7a9`.
+
+Remaining differences and verification limits:
+
+| Status | Upstream files/endpoints and OpenJet code | User-visible impact |
+| --- | --- | --- |
+| Not applicable to JetBrains | `provider-file-refresh-controller.ts` owner-only reload and its logging | OpenJet does not watch provider files, so this upstream fix has nothing to correct. Provider-file edits made outside the IDE still need an explicit refresh or the server's own config watcher. |
+| Accepted older differences, unchanged | See the preceding sync reviews | Unchanged by this sync. |
+| Existing dependency advisories, unchanged | `webview/package-lock.json` | The four moderate Seroval findings remain. No dependency changed. |
+| Interactive/platform coverage | Provider setup prompt, settings panels | Browser host tests and released-server fixtures only, not an interactive sandbox IDE or Windows/Linux run. |
 
 No missing, partial or uncertain Kotlin host or consumed-contract gap remains
 in the reviewed changes.

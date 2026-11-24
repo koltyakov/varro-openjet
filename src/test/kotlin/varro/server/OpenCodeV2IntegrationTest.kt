@@ -260,6 +260,7 @@ class OpenCodeV2IntegrationTest {
             verifySymlinkedWorkspace(root, workspace, port, password, version)
             if (OpenCodeCli.compareVersions(version, "2.2.6") >= 0) verifyPermissionScopes(root, transport)
             if (OpenCodeCli.compareVersions(version, "2.1.2") >= 0) verifyFreeModelExclusions(transport, root)
+            if (OpenCodeCli.compareVersions(version, "2.0.27") >= 0) verifyGlobalProviderReload(root, transport)
             if (OpenCodeCli.compareVersions(version, "2.2.0") >= 0) {
                 val requestsBefore = providerRequests.get()
                 val native = varro.host.NativeDecisions({ transport.apiVersion }, { "" }, transport::request)
@@ -764,6 +765,49 @@ class OpenCodeV2IntegrationTest {
             Files.writeString(globalPath, originalGlobal)
             sessions.reversed().forEach { transport.request("DELETE", "/session/$it") }
             transport.request("POST", "/global/dispose")
+        }
+    }
+
+    /** A global provider edit applies through `/global/dispose` (`/api/location/reload`) without restarting OpenCode. */
+    private fun verifyGlobalProviderReload(root: java.nio.file.Path, transport: OpenCodeTransport) {
+        val health = transport.readHealthInfo()
+        assertNotNull(health.pid)
+        val configPath = root.resolve("config/opencode/opencode.json")
+        val original = Files.readString(configPath)
+        // The workspace config also declares `fixture` and would override the global name; use a directory without one.
+        val directory = Files.createDirectories(root.resolve("global-provider-reload"))
+        val options = RequestOptions(directory = directory.toString())
+        // A cold location answers 404 until its configured providers load.
+        fun providerName() = try {
+            transport.request("GET", "/api/provider/fixture", options = options).data.asObjectOrNull().obj("data").str("name")
+        } catch (failure: OpenCodeRequestException) {
+            if (!failure.message.orEmpty().startsWith("404 ")) throw failure
+            null
+        }
+        fun awaitName(expected: String?) {
+            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10)
+            var actual = providerName()
+            while (if (expected == null) actual == null else actual != expected) {
+                assertTrue("Provider name $actual did not become ${expected ?: "available"}", System.nanoTime() < deadline)
+                Thread.sleep(100)
+                actual = providerName()
+            }
+        }
+        awaitName(null)
+        var reloaded = false
+        try {
+            val config = Json.parse(original).asJsonObject
+            config.obj("providers").obj("fixture")!!.addProperty("name", "Reloaded fixture provider")
+            Files.writeString(configPath, Json.stringify(config))
+            transport.request("POST", "/global/dispose")
+            reloaded = true
+            awaitName("Reloaded fixture provider")
+            val after = transport.readHealthInfo()
+            assertEquals(health.version, after.version)
+            assertEquals(health.pid, after.pid)
+        } finally {
+            Files.writeString(configPath, original)
+            if (reloaded) transport.request("POST", "/global/dispose")
         }
     }
 

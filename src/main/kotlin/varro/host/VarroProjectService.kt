@@ -1026,12 +1026,11 @@ class VarroProjectService(private val project: Project) : Disposable {
     }
 
     private fun logFromWebview(payload: JsonObject?) {
-        val message = payload.str("msg") ?: return
-        val detail = payload.str("error") ?: payload.str("data")
-        when (payload.str("level")) {
-            "error" -> log.warn("webview: $message${detail?.let { " - $it" }.orEmpty()}")
-            "warn" -> log.info("webview: $message${detail?.let { " - $it" }.orEmpty()}")
-            else -> log.debug("webview: $message")
+        val (level, line) = WebviewLog.entry(payload) ?: return
+        when (level) {
+            WebviewLog.Level.WARN -> log.warn(line)
+            WebviewLog.Level.INFO -> log.info(line)
+            WebviewLog.Level.DEBUG -> log.debug(line)
         }
     }
 
