@@ -117,6 +117,55 @@ class QuotaAdaptersTest {
         }
     }
 
+    @Test fun `Anthropic weekly Fable reads the limits list before the legacy key and stays with weekly windows`() {
+        val creds = QuotaCredentials(temporary.newFolder().toPath(), mapOf("CLAUDE_CODE_OAUTH_TOKEN" to "token")) { null }
+        fun poll(payload: String) = QuotaAdapters(QuotaHttp { QuotaResponse(200, payload.toByteArray()) }, creds, null)
+            .poll(Json.obj("id" to "claude-agent", "models" to Json.obj()), JsonObject(), null, now)!!
+            .arr("windows")!!.map { it.asJsonObject }
+        val listed = poll("""{"five_hour":{"utilization":20},"seven_day":{"utilization":30},"seven_day_overage_included":{"utilization":99},
+            "extra_usage":{"is_enabled":true,"utilization":5,"monthly_limit":100,"used_credits":5},
+            "limits":[{"kind":"session","group":"session","percent":20},
+            {"kind":"weekly_scoped","group":"weekly","percent":41.5,"resets_at":"2026-11-30T00:00:00Z","scope":{"model":{"display_name":"Fable"}}}]}""")
+        assertEquals(listOf("five_hour", "seven_day", "seven_day_fable", "extra_usage"), listed.map { it.str("id") })
+        val fable = listed[2]
+        assertEquals("Weekly Fable", fable.str("label"))
+        assertEquals(58.5, fable.num("remaining")!!, 0.0)
+        assertEquals(100.0, fable.num("limit")!!, 0.0)
+        assertEquals(41.5, fable.num("percent")!!, 0.0)
+        assertEquals(java.time.Instant.parse("2026-11-30T00:00:00Z").toEpochMilli(), fable.long("resetAt"))
+
+        val legacy = poll("""{"five_hour":{"utilization":20},"seven_day_overage_included":{"utilization":12}}""")
+        assertEquals(listOf("five_hour", "seven_day_fable"), legacy.map { it.str("id") })
+        assertEquals(88, legacy[1].int("remaining"))
+        assertEquals("Weekly Fable", legacy[1].str("label"))
+
+        val other = poll("""{"five_hour":{"utilization":20},"limits":[{"kind":"weekly_scoped","percent":10,"scope":{"model":{"display_name":"Sonnet"}}}]}""")
+        assertEquals(listOf("five_hour"), other.map { it.str("id") })
+    }
+
+    @Test fun `Claude Code subscription and rate-limit tier name the plan`() {
+        for ((subscription, tier, plan) in listOf(
+            Triple("max", "default_claude_max_5x", "Max 5x"), Triple("max", "default_claude_max_20x", "Max 20x"),
+            Triple("max", null, "Max"), Triple("pro", "default_claude_pro", "Pro"), Triple("constructor", null, null),
+        )) {
+            for (source in listOf("keychain", "file")) {
+                val home = temporary.newFolder().toPath()
+                val oauth = Json.obj("accessToken" to "claude-token", "subscriptionType" to subscription, "rateLimitTier" to tier)
+                val file = Json.obj("claudeAiOauth" to oauth).toString()
+                val creds = QuotaCredentials(home, emptyMap()) { if (source == "keychain") file else null }
+                if (source == "file") { Files.createDirectories(creds.claudePath.parent); Files.writeString(creds.claudePath, file) }
+                val result = QuotaAdapters(QuotaHttp { QuotaResponse(200, """{"five_hour":{"utilization":20}}""".toByteArray()) }, creds, null)
+                    .poll(Json.obj("id" to "claude-agent", "models" to Json.obj()), JsonObject(), null, now)!!
+                assertEquals("available", result.str("status"))
+                assertEquals("$subscription/$tier/$source", plan, result.str("planName"))
+            }
+        }
+        val environment = QuotaCredentials(temporary.newFolder().toPath(), mapOf("CLAUDE_CODE_OAUTH_TOKEN" to "token")) { error("Environment token bypasses Keychain") }
+        val result = QuotaAdapters(QuotaHttp { QuotaResponse(200, """{"five_hour":{"utilization":20}}""".toByteArray()) }, environment, null)
+            .poll(Json.obj("id" to "claude-agent", "models" to Json.obj()), JsonObject(), null, now)!!
+        assertFalse(result.has("planName"))
+    }
+
     @Test fun `expired Claude Agent credentials never refresh or write Claude-owned secrets`() {
         for (code in listOf(401, 403)) {
             val creds = QuotaCredentials(temporary.newFolder().toPath(), emptyMap()) { null }

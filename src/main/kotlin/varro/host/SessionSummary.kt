@@ -53,6 +53,8 @@ internal object SessionSummary {
                 info.str("variant")?.takeIf { it.isNotEmpty() }?.let { addProperty("variant", it) }
             })
         }
+        models(listOf(history.messages) + history.descendants.map { it.messages })
+            .takeIf { it.isNotEmpty() }?.let { edits.add("models", Json.array(it)) }
         if (history.messages.any { it.obj("info").obj("summary").bool("diffsOmitted") == true }) {
             edits.addProperty("historyStatsUnavailable", true)
             edits.remove("tokenBreakdown")
@@ -62,6 +64,20 @@ internal object SessionSummary {
         val breakdown = contextBreakdown(contexts)
         if (breakdown.isNotEmpty()) edits.add("nestedContextBreakdown", Json.array(breakdown))
         return edits
+    }
+
+    /** Distinct models with recorded usage in the session and its nested sessions. */
+    private fun models(lists: List<List<JsonObject>>): List<JsonObject> {
+        val models = linkedMapOf<String, JsonObject>()
+        for (info in lists.flatten().mapNotNull { it.obj("info") }) {
+            if (info.str("role") != "assistant") continue
+            val providerID = info.str("providerID") ?: info.obj("model").str("providerID")
+            val modelID = info.str("modelID") ?: info.obj("model").str("modelID")
+            if (providerID.isNullOrEmpty() || modelID.isNullOrEmpty()) continue
+            if (tokenUsage(info.obj("tokens")).getValue("total") <= 0) continue
+            models["$providerID/$modelID"] = Json.obj("providerID" to providerID, "modelID" to modelID)
+        }
+        return models.values.toList()
     }
 
     /** Counts come from bounded native rows before transcript text and tool output are dropped. */

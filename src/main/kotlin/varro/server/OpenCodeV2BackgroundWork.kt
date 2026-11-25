@@ -3,17 +3,23 @@ package varro.server
 import com.google.gson.JsonObject
 import varro.protocol.*
 
+/**
+ * The work a waiting session names: its command or title, kind, and subagent session.
+ * [kind] is `subagent` or `task` for non-shell jobs and unset for shell processes.
+ */
+internal data class BackgroundWorkSummary(val command: String? = null, val kind: String? = null, val childSessionID: String? = null)
+
 /** Keeps sessions busy through background job completion and the follow-up turn. */
 internal class OpenCodeV2BackgroundWork(private val now: () -> Long = System::currentTimeMillis) {
     private data class Shell(val sessionID: String, val directory: String?, val startedAt: Double?, val command: String?, var service: Boolean = false)
-    private data class Waiting(val directory: String?, var endedAt: Long?, var command: String?)
+    private data class Waiting(val directory: String?, var endedAt: Long?, var work: BackgroundWorkSummary?)
     private val shells = mutableMapOf<String, Shell>()
     private val mutations = mutableMapOf<String, Long>()
     private val sessionMutations = mutableMapOf<String, Long>()
     private val waiting = mutableMapOf<String, Waiting>()
     private val stopped = mutableSetOf<String>()
     private data class Jobs(val directory: String?, val version: Long, val items: List<JsonObject>, var serviceIDs: Set<String>)
-    private data class Pending(val directory: String?, val startedAt: Double?, val command: String?)
+    private data class Pending(val directory: String?, val startedAt: Double?, val command: String?, val kind: String? = null, val childSessionID: String? = null)
     private val jobs = mutableMapOf<String, Jobs>()
     private val snapshots = mutableMapOf<String?, Long>()
     private var revision = 0L
@@ -36,7 +42,8 @@ internal class OpenCodeV2BackgroundWork(private val now: () -> Long = System::cu
             if (sessionID != null) {
                 sessionMutations[sessionID] = revision
                 waiting[sessionID]?.takeIf { shell.service != true && shellIDs(sessionID).isEmpty() }?.let {
-                    it.endedAt = now(); it.command = shell.command ?: it.command
+                    it.endedAt = now()
+                    shell.command?.let { command -> it.work = BackgroundWorkSummary(command) }
                 }
             }
         }
@@ -44,7 +51,7 @@ internal class OpenCodeV2BackgroundWork(private val now: () -> Long = System::cu
         if (type.startsWith("session.execution.") || type.startsWith("session.step.")) sessionMutations[sessionID] = ++revision
         if (type == "session.execution.succeeded" || (type == "session.step.ended" && data.str("finish") == "stop")) {
             pending(sessionID).firstOrNull()?.takeIf { sessionID !in stopped }?.let {
-                waiting[sessionID] = Waiting(it.directory, null, it.command)
+                waiting[sessionID] = Waiting(it.directory, null, leadWork(sessionID))
             }
         }
         if (type in setOf("session.step.started", "session.execution.failed", "session.execution.interrupted", "session.deleted")) waiting.remove(sessionID)
@@ -56,7 +63,8 @@ internal class OpenCodeV2BackgroundWork(private val now: () -> Long = System::cu
     @Synchronized fun hasShell(id: String) = shells.containsKey(id)
     @Synchronized fun shellIDs(sessionID: String) = shells.filterValues { it.sessionID == sessionID && !it.service }.keys.toList()
     @Synchronized fun startedAt(sessionID: String) = pending(sessionID).mapNotNull { it.startedAt }.minOrNull()
-    @Synchronized fun command(sessionID: String) = pending(sessionID).firstOrNull { it.command != null }?.command ?: waiting[sessionID]?.command
+    @Synchronized fun describe(sessionID: String) = leadWork(sessionID) ?: waiting[sessionID]?.work ?: BackgroundWorkSummary()
+    fun command(sessionID: String) = describe(sessionID).command
     @Synchronized fun serviceCount(sessionID: String) = shells.values.count { it.sessionID == sessionID && it.service }
     @Synchronized fun serviceSessionIDs() = shells.values.filter { it.service }.map { it.sessionID }.distinct()
     @Synchronized fun setService(id: String, service: Boolean) {
@@ -95,7 +103,7 @@ internal class OpenCodeV2BackgroundWork(private val now: () -> Long = System::cu
         for (id in sessionIDs) {
             if (pending(id).isEmpty()) continue
             if ((sessionMutations[id] ?: 0) > version) continue
-            if (id !in active && id !in stopped) waiting[id] = Waiting(directory, null, command(id))
+            if (id !in active && id !in stopped) waiting[id] = Waiting(directory, null, describe(id))
         }
         for ((id, pending) in waiting.toMap()) {
             if (pending.directory != directory) continue
@@ -134,13 +142,22 @@ internal class OpenCodeV2BackgroundWork(private val now: () -> Long = System::cu
                     Pending(native.directory, it.startedAt, it.command)
                 }
             }
-            Pending(native.directory, job.obj("time").num("started"), summary(when (job.str("kind")) {
+            val kind = job.str("kind")
+            Pending(native.directory, job.obj("time").num("started"), summary(when (kind) {
                 "shell" -> job.str("command")
                 "subagent" -> job.str("title") ?: job.str("description")
                 "codemode" -> job.str("title") ?: "Code Mode script"
                 else -> job.str("title") ?: job.str("path")
-            }))
+            }), when (kind) {
+                "shell" -> null
+                "subagent" -> "subagent"
+                else -> "task"
+            }, job.str("childSessionID")?.takeIf { kind == "subagent" })
         } + live
+    }
+
+    private fun leadWork(sessionID: String) = pending(sessionID).firstOrNull { it.command != null }?.let {
+        BackgroundWorkSummary(it.command, it.kind, it.childSessionID)
     }
 
     private fun summary(value: String?) = value?.take(512)?.replace(Regex("\\s+"), " ")?.trim()

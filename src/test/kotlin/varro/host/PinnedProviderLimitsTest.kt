@@ -30,6 +30,14 @@ class PinnedProviderLimitsTest {
         assertEquals("", PinnedProviderLimits.summary(null))
     }
 
+    @Test fun `model-scoped weekly Fable stays out of the inline summary but keeps its tooltip reset`() {
+        val value = status("anthropic").apply { add("windows", Json.array(listOf(
+            window("seven_day", "Weekly All-Model", 30.0), window("seven_day_fable", "Weekly Fable", 60.0).apply { addProperty("resetAt", 1_000_000L) },
+        ))) }
+        assertEquals("w 70%", PinnedProviderLimits.summary(value))
+        assertTrue(PinnedProviderLimits.tooltip("Anthropic", value, 0).contains("Weekly Fable reset in"))
+    }
+
     @Test fun `polls are provider-wide scoped nonblocking and rotate without resetting on renders`() {
         var now = 0L
         val calls = AtomicInteger()

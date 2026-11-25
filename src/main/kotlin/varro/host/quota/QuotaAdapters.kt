@@ -15,7 +15,7 @@ internal class QuotaAdapters(
 ) {
     fun poll(
         provider: JsonObject, auth: JsonObject, model: String?, now: Long,
-        claudeAgentToken: String? = if (provider.str("id") == "claude-agent") credentials.claudeAgentToken() else null,
+        claudeAgentLogin: JsonObject? = if (provider.str("id") == "claude-agent") credentials.claudeAgentLogin() else null,
     ): JsonObject? {
         val id = provider.str("id") ?: return null
         fun available(windows: List<JsonObject>, plan: String? = null, creditBalance: Double? = null): JsonObject = Json.obj(
@@ -70,7 +70,9 @@ internal class QuotaAdapters(
                 }
                 val openCode = if (claudeAgent) null else auth.obj(id)?.takeIf { it.str("type") == "oauth" }
                 val local = if (!claudeAgent && openCode == null) credentials.read(credentials.claudePath).obj("claudeAiOauth") else null
-                var access = if (claudeAgent) claudeAgentToken else openCode.string("access") ?: local.string("accessToken")
+                var access = if (claudeAgent) claudeAgentLogin.string("accessToken") else openCode.string("access") ?: local.string("accessToken")
+                // The plan comes from the local Claude Code login that supplies the token.
+                val plan = (if (claudeAgent) claudeAgentLogin else local)?.takeIf { access != null }?.let(::anthropicPlanName)
                 if (access == null && windows.isNotEmpty()) return available(windows)
                 if (access == null && claudeAgent) throw QuotaFailure("Claude Code OAuth credentials are unavailable. Run claude auth login to sign in.", 401)
                 if (access == null) throw QuotaFailure("No Anthropic OAuth credentials available. Connect Anthropic in OpenCode or Claude Code.", 401)
@@ -100,8 +102,16 @@ internal class QuotaAdapters(
                             limit, row.reset(now, "resets_at", "resetsAt"), row.number("utilization"),
                             if (limit != null && used != null) "credits" else "unknown")?.let(windows::add)
                     }
+                    (anthropicFableWindow(payload, now) ?: payload.obj(ANTHROPIC_FABLE_LEGACY_KEY)?.let { row ->
+                        if (row.bool("is_enabled") == false || row.bool("isEnabled") == false) null
+                        else window(ANTHROPIC_FABLE_ID, ANTHROPIC_FABLE_LABEL, null, null, row.reset(now, "resets_at", "resetsAt"), row.number("utilization"))
+                    })?.let { fable ->
+                        // Keep weekly windows together, ahead of monthly and extra-usage spend.
+                        val spend = windows.indexOfFirst { it.str("id") in setOf("monthly_limit", "extra_usage") }
+                        windows.add(if (spend < 0) windows.size else spend, fable)
+                    }
                 } catch (failure: Exception) { if (windows.isEmpty()) throw failure }
-                available(windows)
+                available(windows, plan)
             }
             "openai" -> {
                 if (auth.obj(id).str("type") == "oauth" && auth.obj(id).str("methodID") == "chatgpt-token-sharing") {
@@ -273,6 +283,33 @@ internal class QuotaAdapters(
         fun requiresOpenCodeAuth(id: String) = id in setOf("anthropic", "openai", "github-copilot", "openrouter", "opencode-go",
             "ollama-cloud", "google", "gemini", "zai", "zai-coding-plan", "minimax", "kimi-for-coding", "xai")
     }
+}
+
+private const val ANTHROPIC_FABLE_ID = "seven_day_fable"
+private const val ANTHROPIC_FABLE_LABEL = "Weekly Fable"
+// Claude Code reports Fable's included weekly usage under this legacy key.
+private const val ANTHROPIC_FABLE_LEGACY_KEY = "seven_day_overage_included"
+private val ANTHROPIC_PLAN_NAMES = mapOf("free" to "Free", "pro" to "Pro", "max" to "Max", "team" to "Team", "enterprise" to "Enterprise")
+
+/** Reads Fable's weekly row from the usage endpoint's server-defined `limits` list. */
+private fun anthropicFableWindow(payload: JsonObject, now: Long): JsonObject? {
+    for (item in payload.elements("limits")) {
+        val row = item.asObjectOrNull() ?: continue
+        if (row.str("kind") != "weekly_scoped") continue
+        val name = row.obj("scope").obj("model").string("display_name").orEmpty()
+        if (!Regex("^fable\\b", RegexOption.IGNORE_CASE).containsMatchIn(name)) continue
+        val percent = row.number("percent") ?: return null
+        return window(ANTHROPIC_FABLE_ID, ANTHROPIC_FABLE_LABEL, null, null, row.reset(now, "resets_at", "resetsAt"), percent)
+    }
+    return null
+}
+
+/** Maps Claude Code's subscription and rate-limit tier to a known plan label. */
+internal fun anthropicPlanName(oauth: JsonObject): String? {
+    val plan = ANTHROPIC_PLAN_NAMES[oauth.string("subscriptionType")?.lowercase()]
+    if (plan != "Max") return plan
+    val multiplier = Regex("max_(5|20)x\\b", RegexOption.IGNORE_CASE).find(oauth.string("rateLimitTier").orEmpty())?.groupValues?.get(1)
+    return multiplier?.let { "Max ${it}x" } ?: plan
 }
 
 internal fun periodLabel(id: String): String = when (id) {

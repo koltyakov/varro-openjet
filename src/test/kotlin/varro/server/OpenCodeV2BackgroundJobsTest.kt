@@ -99,6 +99,42 @@ class OpenCodeV2BackgroundJobsTest {
         }
     }
 
+    @Test fun `waiting work is labelled by kind with the subagent session`() {
+        for ((kind, expected) in listOf("shell" to null, "subagent" to "subagent", "codemode" to "task", "video" to "task", "image" to "task")) {
+            val fixture = Fixture(listOf(job(kind)))
+            fixture.shells = emptyList()
+            val status = fixture.status().obj("ses_root")!!
+            assertEquals(kind, "busy", status.str("type"))
+            assertEquals(kind, expected, status.str("backgroundKind"))
+            assertEquals(kind, if (kind == "subagent") "ses_child" else null, status.str("backgroundSessionID"))
+            if (expected == null) assertFalse(status.has("backgroundKind"))
+            val idle = fixture.event("session.status.updated", Json.obj("sessionID" to "ses_root", "status" to Json.obj("type" to "idle"))).single()
+                .obj("properties").obj("status")!!
+            assertEquals(kind, true, idle.bool("background"))
+            assertEquals(kind, expected, idle.str("backgroundKind"))
+            assertEquals(kind, if (kind == "subagent") "ses_child" else null, idle.str("backgroundSessionID"))
+            if (expected == null) assertFalse(idle.has("backgroundKind") || idle.has("backgroundSessionID"))
+        }
+    }
+
+    @Test fun `mixed shells and subagents describe the work named by the status`() {
+        val status = Fixture(listOf(job("subagent"), job())).status().obj("ses_root")!!
+        assertEquals("Inspect project", status.str("backgroundCommand"))
+        assertEquals("subagent", status.str("backgroundKind"))
+        assertEquals("ses_child", status.str("backgroundSessionID"))
+    }
+
+    @Test fun `shell exit after subagent completion keeps the shell command without a kind`() {
+        val work = OpenCodeV2BackgroundWork { 0 }
+        work.observe("shell.created", Json.obj("info" to shell()), "/repo")
+        work.reconcile(listOf(shell()), emptySet(), "/repo", work.snapshotVersion(), nativeJobs = mapOf("ses_root" to listOf(job("subagent"))))
+        assertEquals(BackgroundWorkSummary("Inspect project", "subagent", "ses_child"), work.describe("ses_root"))
+        work.reconcile(listOf(shell()), emptySet(), "/repo", work.snapshotVersion(), nativeJobs = emptyMap())
+        work.observe("shell.exited", Json.obj("id" to "sh_one"), "/repo")
+        assertTrue(work.isWaiting("ses_root"))
+        assertEquals(BackgroundWorkSummary("npm test"), work.describe("ses_root"))
+    }
+
     @Test fun `native empty snapshot excludes ordinary shells and cancelled jobs`() {
         assertEquals(Json.obj(), Fixture().status())
         assertEquals(Json.obj(), Fixture(listOf(job(status = "cancelled"))).status())

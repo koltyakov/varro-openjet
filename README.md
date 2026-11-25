@@ -64,7 +64,9 @@ Quota badges show remaining allowances and reset times when available. Supported
 
 Pin providers in the chat provider list to show remaining quotas in the IDE status bar, including while chats are closed. Custom display names are optional. **Settings > Tools > Varro > Models > Pinned provider quotas** chooses 15-second rotation or all providers at once. Providers selected in visible chats are excluded; the tooltip lists the remaining pinned providers. Quotas refresh every two minutes without running model inference.
 
-Open usage reports from the tool-window menu for prompt counts, tokens, cache usage and assistant duration by provider and model. V2 auxiliary generation, titles and compaction appear as unattributed usage. Native totals with no retained dated record appear separately as undated usage, not as additional user prompts.
+Open usage reports from the tool-window menu for prompt counts, tokens, cache usage and assistant duration by provider and model. V2 auxiliary generation, titles and compaction appear as unattributed usage. Native totals with no retained dated record appear separately as undated usage, not as additional user prompts. The chat context popup opens a session usage report covering the conversation's root session and all nested sessions, by model and by session. Cache write tokens are included in Input unless **Settings > Tools > Varro > Models > Show cache write tokens in usage reports** gives them a separate column.
+
+Anthropic's weekly Fable allowance appears in the limits popup but not in inline or status-bar summaries. Claude Code logins also report their Pro or Max plan.
 
 The Yesterday section covers the previous local calendar day, including daylight-saving transitions.
 

@@ -22,13 +22,13 @@
     "**/*.test-support.ts"
   ],
   "revision": {
-    "commit": "456ca2167d74c9bec176f37e79ff8b581fb23657",
+    "commit": "abc0e6933e88068ad87f9400d6142acdce158823",
     "localChanges": false,
-    "describedAt": "2026-11-24T16:55:28.208Z"
+    "describedAt": "2026-11-25T18:37:24.993Z"
   },
   "opencodeDependencies": {
     "sdk": "^1.19.6",
     "client": "^2.4.1"
   },
-  "sourceHash": "0c89a893a4c59b80924f6addca61e161f58b84a1cc9f879cf73e2307bb15dd40"
+  "sourceHash": "61b2c8dfda0b3f4932a39778f1fdd5f025793b183b09477412f9fc3cec0bc3de"
 }

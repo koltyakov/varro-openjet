@@ -159,6 +159,11 @@ class VarroConfigurable : BoundConfigurable("Varro") {
                     .comment("Rotate pinned providers every 15 seconds, or show all. Providers selected in visible chats are excluded. Manage pins and display names in the chat provider list.")
             }
             row {
+                checkBox("Show cache write tokens in usage reports")
+                    .bindSelected(settings::usageReportsShowCacheWrite)
+                    .comment("Adds a separate Cache write column. When disabled, cache write tokens are included in the Input column.")
+            }
+            row {
                 checkBox("Suggest follow-up actions after Build responses")
                     .bindSelected(settings::chatFollowupsEnabled)
                     .comment("Requires OpenCode V2 stateless generation. Sends the request and final answer for extra inference, which may consume paid tokens or subscription quota. Disable to opt out.")

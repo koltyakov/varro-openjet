@@ -1,6 +1,6 @@
 # OpenCode V2 support
 
-OpenJet supports V1 from 1.16.0 and V2 from 2.0.6. The webview and shared sources were synced from Varro's `main` branch at `456ca2167d74`, version 0.36.6. Tested baselines are V1 1.19.6 and V2 2.4.1. The Kotlin adapter handles released-server contracts, including generated skill, shell and synthetic transcript records. Synthetic text appears as automatic-action notices, except goal kickoffs, which appear as user prompts. Canonical subagent completion metadata produces linked subagent activities. Pending and running V2 patch calls render as active edits. Assistant history preserves automatic retry metadata for recovery notices. History attachments use deferred references with Kotlin-generated thumbnails and on-demand original reads. Chat annotations retain bounded display context before deferral. [Session cleanup and usage export](session-cleanup.md) preserve statistics and optional parent transcripts before confirmed deletions.
+OpenJet supports V1 from 1.16.0 and V2 from 2.0.6. The webview and shared sources were synced from Varro's `main` branch at `abc0e6933e88`, version 0.36.9. Tested baselines are V1 1.19.6 and V2 2.4.1. The Kotlin adapter handles released-server contracts, including generated skill, shell and synthetic transcript records. Synthetic text appears as automatic-action notices, except goal kickoffs, which appear as user prompts. Canonical subagent completion metadata produces linked subagent activities. Pending and running V2 patch calls render as active edits. Assistant history preserves automatic retry metadata for recovery notices. History attachments use deferred references with Kotlin-generated thumbnails and on-demand original reads. Chat annotations retain bounded display context before deferral. [Session cleanup and usage export](session-cleanup.md) preserve statistics and optional parent transcripts before confirmed deletions.
 
 V2 sessions support `/pause` and a Resume action in the transcript. Pausing parks queued messages and interrupts with `resume=false`. Pause markers persist in the shared Varro session annotations, and session summaries and usage reports exclude paused time. Commit-message generation uses the stateless endpoint when the server advertises it, falling back to a helper session when the endpoint or selected model is unavailable before generation starts.
 
@@ -3739,6 +3739,59 @@ Remaining differences and verification limits:
 | Accepted older differences, unchanged | See the preceding sync reviews | Unchanged by this sync. |
 | Existing dependency advisories, unchanged | `webview/package-lock.json` | The four moderate Seroval findings remain. No dependency changed. |
 | Interactive/platform coverage | Provider setup prompt, settings panels | Browser host tests and released-server fixtures only, not an interactive sandbox IDE or Windows/Linux run. |
+
+No missing, partial or uncertain Kotlin host or consumed-contract gap remains
+in the reviewed changes.
+
+## Upstream sync review, 2026-11-25, abc0e693
+
+Reviewed Varro `456ca2167d742d8d77c3d24497b6dd1d75a27fc3` through
+`abc0e6933e88068ad87f9400d6142acdce158823`, versions 0.36.6 to 0.36.9. The
+comparison covers changed extension sources and tests, shared sources,
+configuration and dependency declarations, and browser sources. Vendored sources
+remain unmodified. Solid 2.0.4, `@types/node` 26.6.10 and Vitest 5.1.2 updated
+the lockfile with the pinned Node 24.22.3 and npm 12.2.3 toolchain. SDK/client
+baselines remain V1 1.19.6 and V2 2.4.1, so there is no new released OpenCode
+range to review. The user's OpenJet 0.12.5 version is preserved.
+
+| Upstream change | OpenJet alignment and regression coverage |
+| --- | --- |
+| `opencode-v2-background-work.ts`, `opencode-v2-adapter.ts`, `opencode-v2-events.ts`, `shared/background-process.ts`, `SessionStatus`; waiting status names `backgroundKind` (`subagent` or `task`) and the subagent's `backgroundSessionID` | `OpenCodeV2BackgroundWork.describe` returns a `BackgroundWorkSummary` for the lead pending job, falling back to the retained waiting work. A finished shell replaces it with its command and no kind. `/session/status` and projected idle events add both fields only when set. `OpenCodeV2BackgroundJobsTest` covers shell, subagent, Code Mode, image and video kinds, mixed shell/subagent work, and the shell-exit handoff. |
+| `provider-limits/adapters/anthropic.ts`; weekly Fable from `limits[]` `weekly_scoped` rows, falling back to `seven_day_overage_included`, kept before spend windows | `QuotaAdapters.kt` reads the same row and fallback and inserts `seven_day_fable` before `monthly_limit`/`extra_usage`. `QuotaAdaptersTest` covers the list, legacy key and non-Fable scoped rows. |
+| `anthropic.ts`; Claude Code `subscriptionType`/`rateLimitTier` report `planName` | `QuotaCredentials.claudeAgentLogin` returns the Keychain or file OAuth record. Environment tokens carry no plan. `anthropicPlanName` maps Free/Pro/Max/Team/Enterprise and Max 5x/20x. `ProviderQuotaBackend` includes the plan fields in its cache identity. `QuotaAdaptersTest` covers each tier from Keychain and file and the environment case. |
+| `provider-quota-coordinator.ts`, `anthropic-usage-v2` identity; cross-editor snapshot labels | Not applicable. OpenJet keeps its quota cache in memory and does not share snapshot files with other editors. |
+| `shared/provider-limit-summary.ts`; Fable stays out of inline summaries | `PinnedProviderLimits.summary` excludes `seven_day_fable` from the status-bar text; its tooltip still lists the reset. `PinnedProviderLimitsTest` covers both. |
+| `session-summary.ts`, `SessionDiffSummary.models`; distinct used models across the session tree | `SessionSummary.summarize` adds `models` from root and descendant assistant messages with positive token totals. `SessionSummaryTest` covers deduplication, nested `model` records and skipped empty or blank routes. |
+| `usage-report-service.ts`, `message-router.ts`, `webview-message.ts`, `sidebar-provider-actions.ts`; `usage/session-report` | `VarroProjectService` validates the bounded ID and directory, authorizes the session with `SessionLocations.location`, and deduplicates concurrent requests per session. `UsageReport.buildSession` resolves the root, walks `/session/{id}/children` depth first (oldest first, 250-session and 64-level limits), reads REST usage and V2 auxiliary logs, and applies preserved original completion times only for local V2 servers. It renders By model and By session tables with warnings. `UsageReportTest` covers ordering, indentation, totals, warnings, cycles, malformed records and timing. |
+| `package.json` `varro.usageReports.showCacheWrite`; cache write folded into Input by default | `VarroSettings.usageReportsShowCacheWrite`, shown in **Settings > Tools > Varro > Models**, controls both reports. `UsageReportTest` and `PortedFeaturesTest` cover both layouts. |
+| `usage-report-service.ts` `formatProviderID`; `claude-agent` shows as `claude` | `UsageReport` provider labels match. |
+| `lib/client.ts`; `Claude Agent` displays as `Claude` | Browser-only. The IDE status bar keeps the server's provider name, as upstream's status bar does. |
+| Remaining browser sources and styles | Browser-only. They use existing routes and messages. |
+
+`scripts/check-opencode-compatibility.py --version 2.4.1 --full-check` passed a
+fresh `./gradlew check buildPlugin` with the exact published 2.4.1 binary in
+isolated HOME/XDG/database/service-state roots. The V2 adapter and
+managed-service suites passed without skips. 990 Kotlin tests ran with no
+failures; the two skips are the opt-in local-database benchmark and the V1
+released suite. The 126 browser host tests, TypeScript checking, vendor
+integrity and bundling passed too. Evidence is
+`build/opencode-compatibility/2.4.1/verification.json` and
+`build/sync-abc0e693-2.4.1.log`. A later one-line change to the session report
+tab title was compiled and packaged with `./gradlew buildPlugin`, but the full
+check was not rerun. The V1 SDK is unchanged, so the V1 released suite was not
+rerun. Plugin Verifier was not rerun. The rebuilt package is
+`build/distributions/varro-openjet-0.12.5.zip`, SHA-256
+`1a799a12c04000350b29d81a02fc315bd3df3933fc6fe7159b0459406c358580`.
+
+Remaining differences and verification limits:
+
+| Status | Upstream files/endpoints and OpenJet code | User-visible impact |
+| --- | --- | --- |
+| Not applicable to JetBrains | `provider-quota-coordinator.ts` shared snapshot identity and labels | No cross-editor snapshot is shared, so an older editor cannot drop the Fable window. |
+| JetBrains difference | Session report output | Opens as an IDE Markdown editor tab, the same as the global report, instead of VS Code's Markdown preview. |
+| Accepted older differences, unchanged | See the preceding sync reviews | Unchanged by this sync. |
+| Existing dependency advisories, unchanged | `webview/package-lock.json` | The four moderate Seroval findings remain after the Solid 2.0.4 update. |
+| Interactive/platform coverage | Session usage report action, settings checkbox, quota popup | Unit tests, browser host tests and released-server fixtures only, not an interactive sandbox IDE or Windows/Linux run. |
 
 No missing, partial or uncertain Kotlin host or consumed-contract gap remains
 in the reviewed changes.

@@ -943,6 +943,12 @@ class VarroProjectService(private val project: Project) : Disposable {
 
                 "usage/report" -> generateUsageReport(payload.bool("includeAllTime") == true)
 
+                "usage/session-report" -> payload.text("sessionId")?.takeIf { it.length <= 512 }?.let { id ->
+                    val directory = payload?.get("directory")
+                    if (directory == null) generateSessionUsageReport(id, null)
+                    else payload.text("directory")?.takeIf { it.length <= 4096 }?.let { generateSessionUsageReport(id, it) }
+                }
+
                 "ralph/start", "ralph/stop", "ralph/pause", "ralph/resume",
                 "ralph/update-model", "ralph/sync",
                 -> ralph.handle(type, payload)
@@ -1213,23 +1219,56 @@ class VarroProjectService(private val project: Project) : Disposable {
         }
     }
 
+    private fun awaitServer(indicator: com.intellij.openapi.progress.ProgressIndicator) {
+        ensureServerStarted()
+        val deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(30)
+        while (lastStatus.get() !is ServerStatus.Running) {
+            indicator.checkCanceled()
+            val status = lastStatus.get()
+            if (status is ServerStatus.Error) error(status.message)
+            check(System.nanoTime() < deadline) { "OpenCode did not become available within 30 seconds" }
+            Thread.sleep(100)
+        }
+    }
+
+    private fun usageReport(indicator: com.intellij.openapi.progress.ProgressIndicator) = UsageReport(
+        attachOnly = server.isAttachOnly(), apiVersion = { server.transport.apiVersion },
+        showCacheWrite = settings.usageReportsShowCacheWrite, ensureServerStarted = { awaitServer(indicator) },
+    ) { path, options -> server.transport.request("GET", path, options = options) }
+
+    private val sessionUsageReports = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+
+    /** Usage for a conversation's root session and its nested sessions, limited to this workspace's sessions. */
+    fun generateSessionUsageReport(sessionId: String, directory: String?) {
+        if (!sessionUsageReports.add(sessionId)) return
+        com.intellij.openapi.progress.ProgressManager.getInstance().run(
+            object : com.intellij.openapi.progress.Task.Backgroundable(project, "Building OpenCode session usage report", true) {
+                override fun run(indicator: com.intellij.openapi.progress.ProgressIndicator) {
+                    try {
+                        val report = usageReport(indicator)
+                        awaitServer(indicator)
+                        val location = sessionLocations.location(sessionId, directory, transfers.get(sessionId),
+                            store.sessionHistoryScope, sessionId in store.hiddenSessionIds, indicator::isCanceled)
+                        val result = report.buildSession(sessionId, location.str("directory"), checkCancelled = indicator::checkCanceled)
+                        editor.openText(result.content, "OpenCode Session Usage - ${result.title.take(80)}.md", "markdown")
+                    } catch (cancelled: com.intellij.openapi.progress.ProcessCanceledException) {
+                        throw cancelled
+                    } catch (failure: Exception) {
+                        notify("Could not build OpenCode session usage report: ${failure.message}", NotificationType.ERROR)
+                    } finally {
+                        sessionUsageReports.remove(sessionId)
+                    }
+                }
+            },
+        )
+    }
+
     fun generateUsageReport(includeAllTime: Boolean = false) {
         com.intellij.openapi.progress.ProgressManager.getInstance().run(
             object : com.intellij.openapi.progress.Task.Backgroundable(project, "Building OpenCode usage report", true) {
                 override fun run(indicator: com.intellij.openapi.progress.ProgressIndicator) {
                     try {
-                        val report = UsageReport(attachOnly = server.isAttachOnly(), apiVersion = { server.transport.apiVersion }, ensureServerStarted = {
-                            ensureServerStarted()
-                            val deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(30)
-                            while (lastStatus.get() !is ServerStatus.Running) {
-                                indicator.checkCanceled()
-                                val status = lastStatus.get()
-                                if (status is ServerStatus.Error) error(status.message)
-                                check(System.nanoTime() < deadline) { "OpenCode did not become available within 30 seconds" }
-                                Thread.sleep(100)
-                            }
-                        }) { path, options -> server.transport.request("GET", path, options = options) }
-                            .build(includeAllTime, checkCancelled = indicator::checkCanceled)
+                        val report = usageReport(indicator).build(includeAllTime, checkCancelled = indicator::checkCanceled)
                         editor.openText(report, "OpenCode Usage Report.md", "markdown")
                     } catch (cancelled: com.intellij.openapi.progress.ProcessCanceledException) {
                         throw cancelled

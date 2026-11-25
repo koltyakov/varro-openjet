@@ -94,7 +94,7 @@ class PortedFeaturesTest {
             }
         }.build(true, now)
         assertTrue(requests.any { it.contains("cursor=next+page") })
-        assertTrue(report.contains("| provider | model | 2 | 330 | - | 200 | 20 | 10 | 40 | 60 |"))
+        assertTrue(report.contains("| provider | model | 2 | 330 | - | 260 | 20 | 10 | 40 | 13.3% |"))
         assertTrue(report.contains("## All time"))
         assertTrue(report.contains("2 sessions scanned"))
     }
@@ -121,7 +121,7 @@ class PortedFeaturesTest {
         assertEquals(250, scanned.size)
         assertEquals(250, scanned.toSet().size)
         assertTrue(report.contains("250 sessions scanned"))
-        assertTrue(report.contains("| provider | model | 250 | 250 | - | 250 | 0 | 0 | 0 | 0 |"))
+        assertTrue(report.contains("| provider | model | 250 | 250 | - | 250 | 0 | 0 | 0 | 0.0% |"))
     }
 
     @Test fun `usage omits incomplete history diagnostics from report`() {

@@ -94,6 +94,25 @@ class SessionSummaryTest {
     }
 
     @Test
+    fun `models list distinct routes with usage across the session and nested sessions`() {
+        val result = SessionSummary.summarize(SessionSummary.History(
+            messages("""[
+              {"info":{"role":"user","providerID":"user","modelID":"ignored"}},
+              {"info":{"role":"assistant","providerID":"anthropic","modelID":"opus","tokens":{"input":10}}},
+              {"info":{"role":"assistant","providerID":"anthropic","modelID":"opus","tokens":{"input":5}}},
+              {"info":{"role":"assistant","providerID":"openai","modelID":"unused","tokens":{"input":0}}}
+            ]"""),
+            listOf(SessionSummary.Descendant(null, messages("""[
+              {"info":{"role":"assistant","model":{"providerID":"claude-agent","modelID":"sonnet"},"tokens":{"output":3}}},
+              {"info":{"role":"assistant","providerID":"","modelID":"blank","tokens":{"input":1}}}
+            ]"""))),
+        ))
+        assertEquals(Json.array(listOf(Json.obj("providerID" to "anthropic", "modelID" to "opus"),
+            Json.obj("providerID" to "claude-agent", "modelID" to "sonnet"))), result.get("models"))
+        assertFalse(SessionSummary.summarize(SessionSummary.History(emptyList())).has("models"))
+    }
+
+    @Test
     fun `cost breakdown includes assistant costs without tokens and ignores invalid costs`() {
         val result = SessionSummary.summarize(SessionSummary.History(messages("""[
             {"info":{"role":"user","cost":99}},

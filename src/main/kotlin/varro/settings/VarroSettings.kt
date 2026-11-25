@@ -101,6 +101,8 @@ class VarroSettings : PersistentStateComponent<VarroSettings> {
     /** Optional absolute Handy executable path. Empty searches standard locations and PATH. */
     var dictationHandyPath: String = ""
     var providerLimitsStatusBarDisplay: String = "rotating"
+    /** Mirrors `varro.usageReports.showCacheWrite`; when off, cache writes are added to Input. */
+    var usageReportsShowCacheWrite: Boolean = false
 
     /** Font family override; `default` follows the IDE. */
     var chatFontFamily: String = "default"

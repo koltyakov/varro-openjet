@@ -155,7 +155,8 @@ internal class PinnedProviderLimits(
         internal fun summary(status: JsonObject?): String {
             if (status.str("status") != "available") return ""
             val periods = listOf("5h", "D", "W", "M")
-            return status.arr("windows")?.mapNotNull { it.asObjectOrNull() }?.sortedBy {
+            // Model-scoped windows stay in the limits popover but out of inline summaries.
+            return status.arr("windows")?.mapNotNull { it.asObjectOrNull() }?.filter { it.str("id") != "seven_day_fable" }?.sortedBy {
                 periods.indexOf(period(it)).takeIf { index -> index >= 0 } ?: periods.size
             }?.joinToString(", ") { window ->
                 val label = period(window).lowercase().ifEmpty { window.str("label").orEmpty() }

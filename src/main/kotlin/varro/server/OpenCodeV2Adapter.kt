@@ -82,7 +82,10 @@ internal class OpenCodeV2Adapter(
         return OpenCodeV2Events.project(event, context.deepCopy().apply {
             addProperty("backgroundPending", sessionID?.let(backgroundWork::isWaiting) == true)
             add("backgroundStartedAt", Json.toElement(sessionID?.let(backgroundWork::startedAt)))
-            add("backgroundCommand", Json.toElement(sessionID?.let(backgroundWork::command)))
+            val work = sessionID?.let(backgroundWork::describe)
+            add("backgroundCommand", Json.toElement(work?.command))
+            work?.kind?.let { addProperty("backgroundKind", it) }
+            work?.childSessionID?.let { addProperty("backgroundSessionID", it) }
             addProperty("backgroundServices", sessionID?.let(backgroundWork::serviceCount) ?: 0)
         })
     }
@@ -193,7 +196,10 @@ internal class OpenCodeV2Adapter(
                 waiting.forEach { id -> add(id, status(id, "busy").apply {
                     addProperty("background", true)
                     backgroundWork.startedAt(id)?.let { addProperty("backgroundStartedAt", it) }
-                    backgroundWork.command(id)?.let { addProperty("backgroundCommand", it) }
+                    val work = backgroundWork.describe(id)
+                    work.command?.let { addProperty("backgroundCommand", it) }
+                    work.kind?.let { addProperty("backgroundKind", it) }
+                    work.childSessionID?.let { addProperty("backgroundSessionID", it) }
                 }) }
                 backgroundWork.serviceSessionIDs().filter { it !in active.keySet() && it !in waiting }.forEach {
                     add(it, status(it, "idle"))

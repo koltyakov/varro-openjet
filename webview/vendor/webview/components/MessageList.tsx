@@ -83,6 +83,7 @@ import {
   type SessionProgress,
 } from '../lib/session-pauses';
 import { isSessionResumeMessage, readSessionPauses } from '../../shared/session-pauses';
+import { normalizeSessionTitle } from '../../shared/session-title';
 import { collectSteeringMessages } from '../lib/message-steering';
 import type { SteeringMessages } from '../lib/message-steering';
 import type { AssistantMessage, MessageEntry, Part } from '../types';
@@ -976,6 +977,21 @@ export function MessageList() {
       (id) => id !== state.activeSessionId && isSessionStatusWorking(state.sessionStatus[id])
     )
   );
+  const runningSubagentTitles = createMemo(
+    () => {
+      const sessionId = state.activeSessionId;
+      const running = new Set(
+        getSessionTreeIds(sessionId).filter(
+          (id) => id !== sessionId && isSessionStatusWorking(state.sessionStatus[id])
+        )
+      );
+      if (running.size === 0) return [];
+      return state.sessions
+        .filter((session) => running.has(session.id))
+        .map((session) => normalizeSessionTitle(session.title) || 'Untitled');
+    },
+    { equals: (a, b) => a.length === b.length && a.every((title, index) => title === b[index]) }
+  );
   const backgroundScopeIds = createMemo(() => {
     const sessionId = state.activeSessionId;
     if (!sessionId) return [];
@@ -999,14 +1015,24 @@ export function MessageList() {
     });
     return starts.length > 0 ? Math.min(...starts) : undefined;
   });
-  const backgroundWorkCommand = createMemo(() => {
-    for (const id of backgroundScopeIds()) {
-      const status = state.sessionStatus[id];
-      if (status?.type === 'busy' && status.background && status.backgroundCommand)
-        return status.backgroundCommand;
+  const backgroundWorkLead = createMemo(
+    () => {
+      for (const id of backgroundScopeIds()) {
+        const status = state.sessionStatus[id];
+        if (status?.type === 'busy' && status.background && status.backgroundCommand)
+          return {
+            command: status.backgroundCommand,
+            kind: status.backgroundKind,
+            sessionID: status.backgroundSessionID,
+          };
+      }
+      return undefined;
+    },
+    {
+      equals: (a, b) =>
+        a?.command === b?.command && a?.kind === b?.kind && a?.sessionID === b?.sessionID,
     }
-    return undefined;
-  });
+  );
   const activePermissionReviewInFlight = createMemo(() => {
     const sessionId = state.activeSessionId;
     if (!sessionId) return false;
@@ -11673,7 +11699,10 @@ export function MessageList() {
                   keepThinking={managedChildWorking()}
                   toolsRunning={waitingForTools()}
                   waitingStartedAt={backgroundWorkStartedAt()}
-                  waitingCommand={backgroundWorkCommand()}
+                  waitingCommand={backgroundWorkLead()?.command}
+                  waitingKind={backgroundWorkLead()?.kind}
+                  waitingSessionID={backgroundWorkLead()?.sessionID}
+                  waitingSubagents={runningSubagentTitles()}
                   turnStartedAt={loadingTurnStartedAt()}
                   elapsedStartedAt={loadingElapsedStartedAt()}
                   visible={!state.messagesLoading && showLoadingRow()}

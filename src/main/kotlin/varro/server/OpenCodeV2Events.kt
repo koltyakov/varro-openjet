@@ -20,6 +20,7 @@ internal object OpenCodeV2Events {
             addProperty("background", true)
             add("backgroundStartedAt", context.get("backgroundStartedAt"))
             add("backgroundCommand", context.get("backgroundCommand"))
+            for (key in listOf("backgroundKind", "backgroundSessionID")) if (context.hasNonNull(key)) add(key, context.get(key))
         }
         when (type) {
             "server.connected" -> return listOf(emit(type))

@@ -116,7 +116,11 @@ class ProviderQuotaBackend(
                 if (attached && auth.obj("openai").str("type") != "oauth") return status(key, "unsupported",
                     "OpenAI subscription limits require an active Codex OAuth connection on the OpenCode server.")
                 val token = if (attached) auth.obj("openai").str("access") else credentials.token(provider, auth)
-                val claudeAgentToken = if (key.provider == "claude-agent") credentials.claudeAgentToken() else null
+                val claudeAgentLogin = if (key.provider == "claude-agent") credentials.claudeAgentLogin() else null
+                // The plan travels with the cached status, so a subscription change invalidates it.
+                val claudeAgentToken = claudeAgentLogin?.let { login ->
+                    listOf("accessToken", "subscriptionType", "rateLimitTier").joinToString("\u0000") { login.str(it).orEmpty() }
+                }
                 // Re-read identity before using a quota cache, so logging in with a new
                 // account cannot show the previous account's remaining allowance.
                 identity = if (attached) QuotaCredentials.fingerprint("attached-v2", Json.stringify(provider), Json.stringify(auth))
@@ -141,7 +145,7 @@ class ProviderQuotaBackend(
                     request("PUT", "/auth/$id", value, key.directory)
                 }
                 val adapters = QuotaAdapters(http, credentials, writeAuth)
-                adapters.poll(provider, auth, key.model, clock(), claudeAgentToken) ?: run {
+                adapters.poll(provider, auth, key.model, clock(), claudeAgentLogin) ?: run {
                     var windows = directWindows(provider.obj("models").obj(key.model.orEmpty()), clock())
                         .ifEmpty { directWindows(provider, clock()) }
                     if (windows.isEmpty()) {

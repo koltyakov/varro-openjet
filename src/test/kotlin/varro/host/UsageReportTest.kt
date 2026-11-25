@@ -60,7 +60,100 @@ class UsageReportTest {
             add("s", first)
             merge(UsageReport.Total().apply { add("s", message()) })
         }
-        assertEquals("| provider | model | 1 | 12.5K | 1h 1m | 200 | 40 | 6 | 80 | 10 | 27.6% |", total.row("provider", "model"))
+        assertEquals("| provider | model | 1 | 12.5K | 1h 1m | 200 | 40 | 6 | 80 | 10 | 27.6% |", total.row("provider", "model", showCacheWrite = true))
+        // Cache writes fold into Input unless the separate column is enabled.
+        assertEquals("| provider | model | 1 | 12.5K | 1h 1m | 210 | 40 | 6 | 80 | 27.6% |", total.row("provider", "model"))
+    }
+
+    @Test fun `report header shows the cache write column only when enabled`() {
+        val path = fixture()
+        val hidden = UsageReport(path) { _, _ -> error("API must not be called") }.build(true, now)
+        assertTrue(hidden, hidden.contains("| Provider | Model | Prompts | Total | Duration | Input | Output | Reasoning | Cache read | Cache rate |\n| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |"))
+        assertTrue(hidden.contains("| provider | model | 1 | 168 | 1s | 105 | 20 | 3 | 40 | 27.6% |"))
+        val shown = UsageReport(path, showCacheWrite = true) { _, _ -> error("API must not be called") }.build(true, now)
+        assertTrue(shown.contains("| Cache read | Cache write | Cache rate |"))
+        assertTrue(shown.contains("| provider | model | 1 | 168 | 1s | 100 | 20 | 3 | 40 | 5 | 27.6% |"))
+    }
+
+    @Test fun `session report covers the root and nested sessions depth first`() {
+        val requests = mutableListOf<String>()
+        fun session(id: String, parent: String? = null, created: Long = 0, title: String = id) = Json.obj(
+            "id" to id, "directory" to "/repo", "title" to title, "parentID" to parent, "time" to Json.obj("created" to created))
+        val sessions = mapOf(
+            "root" to session("root", title = "Main | work"), "late" to session("late", "root", 20, "Later child"),
+            "early" to session("early", "root", 10, "Earlier child"), "grand" to session("grand", "early", 5, "Grandchild"),
+        )
+        fun usage(id: String, provider: String, input: Int) = Json.obj("info" to message().apply {
+            addProperty("id", "$id-m"); addProperty("parentID", "$id-p"); addProperty("providerID", provider)
+            add("tokens", Json.obj("input" to input, "output" to 1, "cache" to Json.obj("read" to 0, "write" to 2)))
+        })
+        val report = UsageReport(temporary.root.toPath().resolve("missing.db"), { requests += "start" }) { path, options ->
+            requests += path
+            assertEquals("/repo", options.directory ?: "/repo")
+            val id = path.removePrefix("/session/").substringBefore('/')
+            OpenCodeResponse(when {
+                path.endsWith("/children") -> Json.array(sessions.values.filter { it.get("parentID")?.takeUnless { p -> p.isJsonNull }?.asString == id })
+                path.endsWith("/message") -> Json.array(listOf(usage(id, if (id == "grand") "claude-agent" else "provider", if (id == "root") 10 else 1)))
+                else -> sessions[id] ?: error("404 Session not found")
+            })
+        }.buildSession("grand", "/repo", now)
+        assertEquals("Main | work", report.title)
+        val content = report.content
+        assertEquals("start", requests.first())
+        // A nested session resolves to its root before listing the tree.
+        assertTrue(requests.indexOf("/session/root") < requests.indexOf("/session/root/children"))
+        assertTrue(content, content.contains("Session: **Main \\| work** (`root`)"))
+        assertTrue(content.contains("from 4 sessions (main session and 3 nested sessions)"))
+        assertTrue(content.contains("| Session | Models | Prompts | Total | Duration | Input | Output | Reasoning | Cache read | Cache rate |"))
+        val rows = content.lineSequence().filter { it.startsWith("| Main") || it.contains("child |") || it.contains("Grandchild") }.toList()
+        assertEquals(listOf("| Main \\| work | provider/model |", "| ↳ Earlier child | provider/model |",
+            "| &nbsp;&nbsp;↳ Grandchild | claude/model |", "| ↳ Later child | provider/model |"), rows.map { it.substringBefore(" | 1 |") + " |" })
+        assertTrue(content.contains("| claude | model | 1 |"))
+        assertTrue(content.contains("| provider | model | 3 |"))
+        assertTrue(content, content.contains("| **Total** |  | 4 | 25 |"))
+        assertFalse(content.contains("## Warnings"))
+    }
+
+    @Test fun `v2 session report applies preserved original completion time only for local servers`() {
+        val path = temporary.root.toPath().resolve("timing.db")
+        Class.forName("org.sqlite.JDBC")
+        DriverManager.getConnection("jdbc:sqlite:${HistoryDatabase.sidecar(path, "stats")}").use { database ->
+            OriginalUsageTiming.initialize(database)
+            OriginalUsageTiming.insert(database, Json.obj("session_id" to "copy", "message_id" to "m", "source_session_id" to "s",
+                "source_message_id" to "m", "time_created" to now - 1000, "provider_id" to "provider", "model_id" to "model",
+                "time_completed" to now + 59_000, "provenance" to "v1-message"))
+        }
+        fun report(attachOnly: Boolean) = UsageReport(path, attachOnly = attachOnly, apiVersion = { 2 }) { route, _ ->
+            OpenCodeResponse(when {
+                route.endsWith("/children") -> Json.array(emptyList<Any>())
+                route.endsWith("/message") -> Json.array(listOf(Json.obj("info" to message())))
+                route.contains("/log") -> Json.array(emptyList<Any>())
+                else -> Json.obj("id" to "copy", "directory" to "/repo", "metadata" to Json.obj("varroLegacyImport" to Json.obj("sourceSessionID" to "s")))
+            })
+        }.buildSession("copy", "/repo", now).content
+        assertTrue(report(false), report(false).contains("| provider | model | 1 | 168 | 1m |"))
+        assertTrue(report(true).contains("| provider | model | 1 | 168 | 1s |"))
+    }
+
+    @Test fun `session report warns about unreadable nested sessions and rejects cycles`() {
+        val report = UsageReport(temporary.root.toPath().resolve("missing.db")) { path, _ ->
+            OpenCodeResponse(when {
+                path.endsWith("/children") -> error("503 unavailable")
+                path.endsWith("/message") -> Json.array(emptyList<Any>())
+                else -> Json.obj("id" to "root", "directory" to "/repo")
+            })
+        }.buildSession("root", null, now)
+        assertEquals("root", report.title)
+        assertTrue(report.content.contains("_No token usage._"))
+        assertTrue(report.content, report.content.contains("- Could not list nested sessions of root: 503 unavailable."))
+
+        val cycle = UsageReport(temporary.root.toPath().resolve("missing.db")) { path, _ ->
+            val id = path.removePrefix("/session/")
+            OpenCodeResponse(Json.obj("id" to id, "directory" to "/repo", "parentID" to if (id == "a") "b" else "a"))
+        }
+        assertTrue(assertThrows(IllegalStateException::class.java) { cycle.buildSession("a", null, now) }.message!!.contains("root session of a"))
+        val malformed = UsageReport(temporary.root.toPath().resolve("missing.db")) { _, _ -> OpenCodeResponse(Json.obj("id" to "other")) }
+        assertThrows(IllegalArgumentException::class.java) { malformed.buildSession("a", null, now) }
     }
 
     @Test
@@ -79,7 +172,7 @@ class UsageReportTest {
         val first = message().apply { add("tokens", Json.obj("input" to 100, "output" to 9_000_000, "reasoning" to 500_000, "cache" to Json.obj("read" to 900, "write" to 0))) }
         val second = message().apply { add("tokens", Json.obj("input" to 9_000, "cache" to Json.obj("read" to 0, "write" to 0))) }
         val total = UsageReport.Total().apply { add("s", first); add("s", second) }
-        assertTrue(total.row("p", "m"), total.row("p", "m").endsWith("| 900 | 0 | 9.0% |"))
+        assertTrue(total.row("p", "m", true), total.row("p", "m", true).endsWith("| 900 | 0 | 9.0% |"))
         assertTrue(total.row("p", "m").contains("9M | 500K"))
         assertTrue(UsageReport.Total().row("p", "m").endsWith("| - |"))
     }
@@ -99,7 +192,7 @@ class UsageReportTest {
         assertEquals(remote, local)
         assertEquals(1, starts)
         assertEquals(2, calls)
-        assertTrue(local.contains("| provider | model | 1 | 168 | 1s | 100 | 20 | 3 | 40 | 5 | 27.6% |"))
+        assertTrue(local.contains("| provider | model | 1 | 168 | 1s | 105 | 20 | 3 | 40 | 27.6% |"))
     }
 
     @Test
@@ -229,7 +322,7 @@ class UsageReportTest {
                 it.setString(1, native.toString()); it.executeUpdate()
             }
             val report = UsageReport(path) { _, _ -> error("No REST requests expected") }.build(true, now)
-            assertTrue(report, report.contains("| provider | model | 1 | 268 | 1s | 200 |"))
+            assertTrue(report, report.contains("| provider | model | 1 | 268 | 1s | 205 |"))
             // An unrelated message with the same ID must not supply the completion time.
             database.createStatement().use {
                 it.execute("UPDATE message SET data=json_set(data,'$.providerID','different')")

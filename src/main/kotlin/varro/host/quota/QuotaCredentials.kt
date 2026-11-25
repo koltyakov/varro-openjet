@@ -37,12 +37,15 @@ class QuotaCredentials(
     fun authStore(): JsonObject = read(authPath) ?: JsonObject()
 
     /** Claude Agent uses Claude Code's account, never OpenCode's Anthropic credentials. */
-    fun claudeAgentToken(): String? {
-        environment["CLAUDE_CODE_OAUTH_TOKEN"]?.trim()?.takeIf { it.isNotEmpty() }?.let { return it }
-        runCatching { Json.parseOrNull(readClaudeKeychain().orEmpty()).asObjectOrNull().obj("claudeAiOauth").string("accessToken") }
-            .getOrNull()?.let { return it }
+    fun claudeAgentToken(): String? = claudeAgentLogin().string("accessToken")
+
+    /** Claude Code's OAuth record, including its subscription fields when a stored login supplies the token. */
+    fun claudeAgentLogin(): JsonObject? {
+        environment["CLAUDE_CODE_OAUTH_TOKEN"]?.trim()?.takeIf { it.isNotEmpty() }?.let { return Json.obj("accessToken" to it) }
+        runCatching { Json.parseOrNull(readClaudeKeychain().orEmpty()).asObjectOrNull().obj("claudeAiOauth") }
+            .getOrNull()?.takeIf { it.string("accessToken") != null }?.let { return it }
         // Missing, inaccessible or malformed Claude credentials are a signed-out state.
-        return runCatching { read(claudePath).obj("claudeAiOauth").string("accessToken") }.getOrNull()
+        return runCatching { read(claudePath).obj("claudeAiOauth") }.getOrNull()?.takeIf { it.string("accessToken") != null }
     }
 
     val v2DatabasePath: Path get() = environment["OPENCODE_DB"]?.trim()?.takeIf { it.isNotEmpty() }?.let(Path::of)
