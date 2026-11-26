@@ -211,6 +211,9 @@ class VarroProjectService(private val project: Project) : Disposable {
             val cache = response.asObjectOrNull().obj("data").obj("tokens").obj("cache")
             return PromptCacheWarming.Usage(cache.num("read") ?: 0.0, cache.num("write") ?: 0.0)
         }
+        override fun readProviders(directory: String?): JsonArray =
+            server.transport.request("GET", "/config/providers", options = varro.server.RequestOptions(directory = directory))
+                .data.asObjectOrNull().arr("providers") ?: error("Invalid OpenCode provider catalog")
         override fun readOpenCodeWarming(): Boolean {
             val warming = server.transport.request("GET", "/config").data.asObjectOrNull()?.get("warming")
             return warming?.isJsonObject == true || (warming?.isJsonPrimitive == true && warming.asJsonPrimitive.isBoolean && warming.asBoolean)
@@ -220,7 +223,7 @@ class VarroProjectService(private val project: Project) : Disposable {
         override fun saveChosen(ids: List<String>) { store.promptCacheWarmingSessions = ids }
         override fun post(state: JsonObject) = broadcast("warming/state", state)
         override fun logWarning(message: String) = log.warn(message)
-    })
+    }, sharedPromptCacheLearner)
     @Volatile private var promptCacheWarmingSettings = settings.promptCacheWarmingMode() to settings.promptCacheWarmingDurationMs()
 
     init {
@@ -1052,6 +1055,9 @@ class VarroProjectService(private val project: Project) : Disposable {
                 }
 
                 "warming/sync" -> ApplicationManager.getApplication().executeOnPooledThread { promptCacheWarming.sync() }
+                "warming/samples" -> PromptCacheWarming.parseHistorySamples(payload)?.let { (id, samples) ->
+                    promptCacheWarming.recordHistory(id, samples)
+                }
                 "warming/set" -> {
                     val sessionId = payload.str("sessionId")?.takeIf { it.length <= 512 && SESSION_ID.matches(it) } ?: return
                     val enabled = payload?.get("enabled")?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isBoolean }?.asBoolean ?: return
@@ -1630,5 +1636,14 @@ class VarroProjectService(private val project: Project) : Disposable {
         private val SESSION_ID = Regex("""^[A-Za-z0-9_-]+$""")
 
         fun getInstance(project: Project): VarroProjectService = project.service()
+
+        /** Learned cache lifetimes span projects, like upstream's global state. */
+        private val sharedPromptCacheLearner by lazy {
+            val store = varro.store.PromptCacheLearningStore.getInstance()
+            PromptCacheLearner(object : PromptCacheLearner.Storage {
+                override fun load() = store.load()
+                override fun save(value: JsonElement) = store.save(value)
+            })
+        }
     }
 }

@@ -178,7 +178,7 @@ class VarroSettings : PersistentStateComponent<VarroSettings> {
     companion object {
         const val DEFAULT_SERVER_PORT = 4096
         /** `package.json` default for `varro.chat.promptCacheWarningTokens`. */
-        const val DEFAULT_PROMPT_CACHE_WARNING_TOKENS = 250_000
+        const val DEFAULT_PROMPT_CACHE_WARNING_TOKENS = 300_000
         val PROMPT_CACHE_WARMING_MINUTES = listOf(30, 60, 120, 180)
         private val PERMISSION_MODES = setOf("default", "auto", "full")
 

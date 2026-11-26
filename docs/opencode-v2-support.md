@@ -1,6 +1,6 @@
 # OpenCode V2 support
 
-OpenJet supports V1 from 1.16.0 and V2 from 2.0.6. The webview and shared sources were synced from Varro's `main` branch at `d2a8477131a6`, version 0.37.0. Tested baselines are V1 1.19.6 and V2 2.4.2. The Kotlin adapter handles released-server contracts, including generated skill, shell and synthetic transcript records. Synthetic text appears as automatic-action notices, except goal kickoffs, which appear as user prompts. Canonical subagent completion metadata produces linked subagent activities. Pending and running V2 patch calls render as active edits. Assistant history preserves automatic retry metadata for recovery notices. History attachments use deferred references with Kotlin-generated thumbnails and on-demand original reads. Chat annotations retain bounded display context before deferral. [Session cleanup and usage export](session-cleanup.md) preserve statistics and optional parent transcripts before confirmed deletions.
+OpenJet supports V1 from 1.16.0 and V2 from 2.0.6. The webview and shared sources were synced from Varro's `main` branch at `1ba7b6e6ccb1`, version 0.37.1. Tested baselines are V1 1.19.6 and V2 2.4.2. The Kotlin adapter handles released-server contracts, including generated skill, shell and synthetic transcript records. Synthetic text appears as automatic-action notices, except goal kickoffs, which appear as user prompts. Canonical subagent completion metadata produces linked subagent activities. Pending and running V2 patch calls render as active edits. Assistant history preserves automatic retry metadata for recovery notices. History attachments use deferred references with Kotlin-generated thumbnails and on-demand original reads. Chat annotations retain bounded display context before deferral. [Session cleanup and usage export](session-cleanup.md) preserve statistics and optional parent transcripts before confirmed deletions.
 
 V2 sessions support `/pause` and a Resume action in the transcript. Pausing parks queued messages and interrupts with `resume=false`. Pause markers persist in the shared Varro session annotations, and session summaries and usage reports exclude paused time. Commit-message generation uses the stateless endpoint when the server advertises it, falling back to a helper session when the endpoint or selected model is unavailable before generation starts.
 
@@ -3904,11 +3904,11 @@ Remaining differences and verification limits:
 No missing, partial or uncertain Kotlin host or consumed-contract gap remains
 in the reviewed changes.
 
-## Upstream sync review, 2026-11-26, d2a84771
+## Upstream sync review, 2026-11-26, d2a84771 and 1ba7b6e6
 
 Reviewed Varro `0aa056cf536605cf699eb12a68dc9711ee37acbc` through
 `d2a8477131a613ac7781183bb234dfe16b61563e`, versions 0.36.12 to 0.37.0 (19
-commits). The comparison covers changed extension sources and tests, shared
+commits), then through `1ba7b6e6ccb1` (0.37.1, one commit). The comparison covers changed extension sources and tests, shared
 sources, contributed commands, menus and settings, dependency declarations and
 browser sources. Vendored sources remain unmodified. The only dependency change
 the webview consumes is Vite 8.3.8 to 8.4.0, and the lockfile was refreshed with
@@ -3922,7 +3922,8 @@ config (`true` or `{ duration }`). The user's OpenJet 0.14.0 version is preserve
 | Upstream change | OpenJet alignment and regression coverage |
 | --- | --- |
 | `todo-session-manager.ts`, `rest-proxy.ts`, `sidebar-provider.ts`, `protocol.ts`; ToDo session marks | `VarroStore` persists marks with the time each was set. `POST /varro/session/:id/todo` (allowlisted with an optional directory, boolean body, hidden sessions rejected) returns the ids, and every change broadcasts `todo-sessions/sync`. `todoSessionIds` is in the boot snapshot. `session.next.prompt.admitted`, a newer user `message.updated` and `session.deleted` clear marks. `TodoSessionsTest`, `ApiRoutesTest`. |
-| `prompt-cache-warming.ts`, `opencode-config-service.ts`, `extension-config.ts`, `package.json`; prompt cache warming and the expired-cache warning | `PromptCacheWarming` ports the scheduler: verbatim keep-alive prompt, 4-minute pings, 5-minute TTL estimate, 50 chosen sessions, cache-miss/failed/expired stops and OpenCode-warming detection. Pings use V2 `/api/session/:id/generate` on a pooled thread and only for root, visible, idle sessions. `warming/sync` and `warming/set` are handled and `warming/state` keeps explicit nulls on the wire. `all` mode writes or removes OpenCode's global `warming` through `GlobalWarmingConfig`, which preserves comments, refuses unsaved or concurrently edited files and reloads OpenCode. Attach-only connections refuse `all`. Settings are **Expired prompt cache warning** (default 250,000, `package.json`'s default), **Keep prompt caches warm** and **Warm for (minutes)**. The two warming settings are application-local and not shared. `PromptCacheWarmingTest` (13 cases), `GlobalWarmingConfigTest`, browser contract test. |
+| `prompt-cache-warming.ts`, `opencode-config-service.ts`, `extension-config.ts`, `package.json`; prompt cache warming and the expired-cache warning | `PromptCacheWarming` ports the scheduler: verbatim keep-alive prompt, 50 chosen sessions, cache-miss/failed/expired stops and OpenCode-warming detection. Pings use V2 `/api/session/:id/generate` on a pooled thread and only for root, visible, idle sessions. `warming/sync` and `warming/set` are handled and `warming/state` keeps explicit nulls on the wire. `all` mode writes or removes OpenCode's global `warming` through `GlobalWarmingConfig`, which preserves comments, refuses unsaved or concurrently edited files and reloads OpenCode. Attach-only connections refuse `all`. Settings are **Expired prompt cache warning** (default 300,000 after `1ba7b6e6`, `package.json`'s default), **Keep prompt caches warm** and **Warm for (minutes)**. The two warming settings are application-local and not shared. `GlobalWarmingConfigTest`, browser contract test. |
+| `1ba7b6e6`: `prompt-cache-lifetime.ts`, `prompt-cache-learning.ts`, `prompt-cache-warming.ts`, `webview-message.ts`, `protocol.ts`; cache estimates and warming adapt to model lifetimes | `PromptCacheLifetime` ports the provider/model lifetime rules, `cache.ttl` parsing, keep-alive intervals, idle-gap samples and histograms. `PromptCacheLearner` ports the learner with upstream's limits; one application-level instance backed by `PromptCacheLearningStore` serves every project, like upstream's global state, and is not shared across IDEs. `PromptCacheWarming` counts lifetimes from `session.next.step.started` dispatch (the turn end for multi-request Claude Agent steps), learns from `session.next.step.ended` tokens, skips compactions, reads each model's effective `cache.ttl` from `/config/providers` (cached 60 s per directory), schedules keep-alives per model, stops when the last request outlived the likely lifetime, and handles validated `warming/samples` history. `warming/state` drops `intervalMs` and adds per-session `ttlMs` and `learned`. The expired-cache warning default follows `package.json` to 300,000 tokens. `PromptCacheLifetimeTest`, `PromptCacheLearnerTest`, `PromptCacheWarmingTest` (52 cases together), browser contract test. |
 | `walkthrough.ts`, `walkthrough-service.ts`, `commands.ts`, `package.json`; `varro.walkThroughChanges` and `varro.review.model` | `WalkThroughChangesAction` (**Walk Through Changes with Varro**) is in the Commit tool window toolbar and Tools > Varro. `WalkthroughGit` captures staged, unstaged and bounded untracked-file patches, and `Walkthrough`/`WalkthroughService` port parsing, digest budgeting, prompt, normalization and Markdown rendering. Generation uses V2 one-shot generation with trace purpose `walkthrough`. The review model comes from the new `reviewModel` setting (shared like the commit-message model), else the sidebar chat's `commands/state` selection including reasoning. `ModelRoutingService` accepts target `review` and reports `reviewModel`. `WalkthroughTest` (20 cases), `ModelRoutingServiceTest`, `SharedCoreSettingsTest`. |
 | `opencode-v2-adapter.ts`, `client.ts`, `webview-message.ts`; permission rejection feedback | V2 replies carry feedback only for `reject`, in V1's "rejected permission ... with the following feedback" wording; blank feedback and other replies send no message. `OpenCodeV2Test`. |
 | `opencode-v2-adapter.ts`, `webview-message.ts`; staged rewind Apply and turn-diff anchors | `revert-commit` is an allowlisted session action that commits the staged V2 revert and returns the projected session. Named-message diffs anchor on the user message that opened the turn within the newest 200 messages; a reply outside the page passes through, and one whose prompt is outside it returns no diff. `OpenCodeV2Test`, `ApiRoutesTest`. |
@@ -3934,18 +3935,20 @@ config (`true` or `{ duration }`). The user's OpenJet 0.14.0 version is preserve
 | `commit-message-service.ts` | Refactor only (shared Git helpers). No behavior change. |
 | Vendored browser changes: session rewind row, prompt cache warning, permission feedback UI, full-access reply retries, session goal indicators, session-list history navigation, usage-limit banner, Code Mode tray, merged edit rows, TPS filtering | Browser-only on existing host contracts (`/session/:id/goal`, `session.goal.updated`, `/permission/:id/reply`, `revert`/`unrevert`). |
 
-`scripts/check-opencode-compatibility.py --version 2.4.2 --full-check` passed a
-fresh `./gradlew check buildPlugin --rerun-tasks` with the exact published 2.4.2
-binary in isolated HOME/XDG/database/service-state roots. The V2 adapter suite
-and all three managed-service cases passed without skips. 1,043 Kotlin tests ran
-with no failures; the two skips are the opt-in local-database benchmark and the
-V1 released suite. The 127 browser host tests, TypeScript checking, vendor
-integrity and bundling passed too. Evidence is
-`build/opencode-compatibility/2.4.2/verification.json` and
-`build/sync-d2a84771-2.4.2.log`. The V1 SDK is unchanged, so the V1 released
-suite was not rerun. Plugin Verifier was not rerun. The package is
+After syncing `1ba7b6e6`, `scripts/check-opencode-compatibility.py --version 2.4.2
+--full-check` passed a fresh `./gradlew check buildPlugin --rerun-tasks` with the
+exact published 2.4.2 binary in isolated HOME/XDG/database/service-state roots.
+The V2 adapter suite and all three managed-service cases passed without skips.
+1,082 Kotlin tests ran with no failures; the two skips are the opt-in
+local-database benchmark and the V1 released suite. The 127 browser host tests,
+TypeScript checking, vendor integrity and bundling passed too. A local
+`verifyPlugin` against IU 2025.2.6.3 reports Compatible, with only the existing
+experimental `TerminalWidget.getText()` usage. Evidence is
+`build/opencode-compatibility/2.4.2/verification.json`,
+`build/sync-1ba7b6e6-2.4.2.log` and `build/verify-local-2025.2-1ba7b6e6.log`.
+The V1 SDK is unchanged, so the V1 released suite was not rerun. The package is
 `build/distributions/varro-openjet-0.14.0.zip`, SHA-256
-`65eadb86b027cbf048daa6ac88a398caa67388c6e4724391ee92072339cd621a`.
+`71bbb092307056a56ef61eb863052bb9cd67ca76244689a3718ea02e66f1cd8c`.
 
 Remaining differences and verification limits:
 
@@ -3957,6 +3960,8 @@ Remaining differences and verification limits:
 | JetBrains difference | `diagnostics.ts` `diagnosticRoute` segment list | OpenJet has no route-normalizing diagnostics; its request log omits query strings as before. |
 | JetBrains difference | `walkthrough-service.ts` `editorLink` | Walkthrough reports have no file or line links, because the JetBrains Markdown preview cannot open upstream's `vscode://file` links. File paths and hunk start lines are shown as text. |
 | JetBrains difference | `walkthrough-service.ts` Git API repository selection | The commit panel's roots, then the project's Git roots, then the project directory; a chooser appears for several roots. |
+| JetBrains difference | `prompt-cache-learning.ts` in VS Code global state | Learned lifetimes are stored per IDE installation in `varro-openjet-prompt-cache.xml`, not synchronized across JetBrains IDEs. |
+| Release verification | `WalkThroughChangesAction` | The first `v0.14.0` release run failed Plugin Verifier on 2025.2.6.3 because `ProjectLevelVcsManager`'s Kotlin accessors compiled against 2026.2 are absent there. Repository discovery now walks content roots to the nearest `.git`; a local 2025.2.6.3 verification reports Compatible. |
 | Interactive/platform coverage | Walkthrough action and scope popup, Manage Skills/MCPs actions, warming settings UI and global config writes, ToDo marks | Unit tests, browser host tests and released-server fixtures only, not an interactive sandbox IDE or Windows/Linux run. Warming pings against a live provider, and whether that provider reports cache usage, were not exercised. |
 
 ## Verification

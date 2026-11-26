@@ -30,19 +30,22 @@ it('accepts the host todo-mark and prompt-cache warming snapshots', () => {
       available: true,
       mode: 'chosen',
       durationMs: 1_800_000,
-      intervalMs: 240_000,
       openCodeWarming: false,
       sessions: {
-        ses_waiting: { warmUntil: null, sentAt: null, stopped: null },
-        ses_warm: { warmUntil: 1_900_000, sentAt: 100_000, stopped: null },
-        ses_expired: { warmUntil: 1_900_000, sentAt: 100_000, stopped: 'expired' },
+        ses_waiting: { warmUntil: null, sentAt: null, ttlMs: null, stopped: null },
+        ses_warm: { warmUntil: 1_900_000, sentAt: 100_000, ttlMs: 300_000, stopped: null },
+        ses_expired: { warmUntil: 1_900_000, sentAt: 100_000, ttlMs: 3_600_000, stopped: 'expired' },
       },
+      learned: { 'anthropic/claude-sonnet-5-5': { ms: 3_600_000, bounded: true } },
     },
   };
   expect(parseExtensionMessage(warming)).toEqual(warming);
   const missingNull = structuredClone(warming);
-  delete (missingNull.payload.sessions.ses_waiting as { warmUntil?: null }).warmUntil;
+  delete (missingNull.payload.sessions.ses_waiting as { ttlMs?: null }).ttlMs;
   expect(parseExtensionMessage(missingNull)).toBeNull();
+  const missingLearned = structuredClone(warming) as { payload: { learned?: unknown } };
+  delete missingLearned.payload.learned;
+  expect(parseExtensionMessage(missingLearned)).toBeNull();
   for (const command of ['command/open-skill-settings', 'command/open-mcp-settings']) {
     expect(parseExtensionMessage({ type: command })).toEqual({ type: command });
   }
