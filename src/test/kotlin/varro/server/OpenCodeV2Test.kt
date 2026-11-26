@@ -524,6 +524,60 @@ class OpenCodeV2Test {
         assertEquals(2, paths.size)
     }
 
+    @Test fun `permission rejection feedback uses v1 wording and other replies send no message`() {
+        val bodies = mutableListOf<JsonObject?>()
+        val native = adapter { _, _, body -> bodies.add(body.asObjectOrNull()); null }
+        for (id in listOf("perm_reject", "perm_blank", "perm_once")) native.events(Json.obj("type" to "permission.asked",
+            "data" to Json.obj("id" to id, "sessionID" to "ses_test", "action" to "shell", "resources" to listOf("pwd"))))
+        native.request("POST", "/permission/perm_reject/reply", Json.obj("reply" to "reject", "message" to "  Use rg instead  "), RequestOptions())
+        native.request("POST", "/permission/perm_blank/reply", Json.obj("reply" to "reject", "message" to "   "), RequestOptions())
+        native.request("POST", "/permission/perm_once/reply", Json.obj("reply" to "once", "message" to "ignored"), RequestOptions())
+        assertEquals("The user rejected permission to use this specific tool call with the following feedback: Use rg instead",
+            bodies[0].str("message"))
+        assertFalse(bodies[1]!!.has("message"))
+        assertFalse(bodies[2]!!.has("message"))
+        assertEquals(listOf("reject", "reject", "once"), bodies.map { it.str("decision") })
+    }
+
+    @Test fun `staged rewinds commit through the native revert route`() {
+        val calls = mutableListOf<String>()
+        val native = adapter { method, path, _ ->
+            calls.add("$method $path")
+            if (method == "GET" && path == "/api/session/ses_test") Json.obj("data" to Json.obj("id" to "ses_test", "title" to "Test",
+                "time" to Json.obj("created" to 1, "updated" to 2))) else Json.obj()
+        }
+        val session = native.request("POST", "/session/ses_test/revert-commit", null, RequestOptions()).data.asObjectOrNull()
+        assertEquals("ses_test", session.str("id"))
+        assertEquals("POST /api/session/ses_test/revert/commit", calls.first())
+        assertTrue("GET /api/session/ses_test" in calls)
+    }
+
+    @Test fun `turn diffs anchor a named reply on the user message that opened its turn`() {
+        val calls = mutableListOf<String>()
+        val page = Json.array(listOf(Json.obj("id" to "msg_reply", "type" to "assistant"), Json.obj("id" to "msg_tool", "type" to "assistant"),
+            Json.obj("id" to "msg_prompt", "type" to "user"), Json.obj("id" to "msg_old_reply", "type" to "assistant")))
+        val native = adapter { _, path, _ ->
+            calls.add(path)
+            when {
+                path.startsWith("/api/session/ses_test/message?") -> Json.obj("data" to page)
+                path.startsWith("/api/session/ses_test/diff") -> Json.obj("data" to Json.array(listOf(Json.obj("file" to path))))
+                else -> error("Unexpected request $path")
+            }
+        }
+        fun diff(query: String) = native.request("GET", "/session/ses_test/diff$query", null, RequestOptions()).data!!.asJsonArray
+        assertEquals("/api/session/ses_test/diff?from=msg_prompt", diff("?messageID=msg_reply").single().asJsonObject.str("file"))
+        assertEquals("/api/session/ses_test/message?limit=200&order=desc", calls[0])
+        // A user message names its own turn.
+        assertEquals("/api/session/ses_test/diff?from=msg_prompt", diff("?messageID=msg_prompt").single().asJsonObject.str("file"))
+        // The opening prompt is outside the page, so no diff can be named.
+        assertEquals(0, diff("?messageID=msg_old_reply").size())
+        // A message outside the page is passed through unchanged.
+        assertEquals("/api/session/ses_test/diff?from=msg_unknown", diff("?messageID=msg_unknown").single().asJsonObject.str("file"))
+        calls.clear()
+        assertEquals("/api/session/ses_test/diff", diff("").single().asJsonObject.str("file"))
+        assertEquals(listOf("/api/session/ses_test/diff"), calls)
+    }
+
     @Test fun `prompt admission commits staged edits and preserves system context`() {
         val calls = mutableListOf<Pair<String, JsonElement?>>()
         val native = adapter { _, path, body ->

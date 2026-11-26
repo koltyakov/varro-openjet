@@ -8,7 +8,7 @@ internal object SharedCoreSettings {
     private val gson = Gson()
     private val names = setOf(
         "serverPort", "serverCommand", "serverAutoUpdate", "serverAutoStart",
-        "chatDefaultPermissionMode", "chatAutoApproveModel", "chatPromptCompletionModel", "commitMessageModel",
+        "chatDefaultPermissionMode", "chatAutoApproveModel", "chatPromptCompletionModel", "commitMessageModel", "reviewModel",
         "chatAutoApproveDecisionModel",
         "chatFollowupsEnabled", "chatFollowupModel",
         "chatAutoRenameUntitledSessions", "chatEnableAskAgent",

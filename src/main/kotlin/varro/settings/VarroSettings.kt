@@ -81,6 +81,23 @@ class VarroSettings : PersistentStateComponent<VarroSettings> {
     var chatPromptTrace: Boolean = false
 
     /**
+     * Mirrors `varro.chat.promptCacheWarningTokens`: warn above the composer when an idle
+     * session's prompt cache has likely expired and its context holds at least this many
+     * tokens. `0` turns the warning off.
+     */
+    var chatPromptCacheWarningTokens: Int = DEFAULT_PROMPT_CACHE_WARNING_TOKENS
+
+    /**
+     * Mirrors `varro.chat.promptCacheWarming`: `off`, `chosen` (Varro keeps sessions the
+     * user turns on warm while the IDE runs) or `all` (OpenCode's own global `warming`
+     * config). Every keep-alive spends tokens, so only these application settings enable it.
+     */
+    var chatPromptCacheWarming: String = "off"
+
+    /** Mirrors `varro.chat.promptCacheWarmingMinutes`: 30, 60, 120 or 180. */
+    var chatPromptCacheWarmingMinutes: Int = 30
+
+    /**
      * Mirrors `varro.decisions.jev.autoApprove`: let TypeSafe's Jev judge Auto-mode
      * permission requests before the model judge. The API key lives in the password safe.
      */
@@ -120,6 +137,12 @@ class VarroSettings : PersistentStateComponent<VarroSettings> {
     var commitMessageModel: String = ""
     var commitMessageRules: String = ""
 
+    /**
+     * Mirrors `varro.review.model`: `provider/model` or `provider/model#variant` for change
+     * walkthroughs. Empty uses the active chat's selected model and reasoning.
+     */
+    var reviewModel: String = ""
+
     // --- JetBrains-specific ---------------------------------------------------
 
     /**
@@ -142,11 +165,21 @@ class VarroSettings : PersistentStateComponent<VarroSettings> {
     fun permissionMode(): String =
         chatDefaultPermissionMode.takeIf { it in PERMISSION_MODES } ?: "default"
 
-    fun sessionPaneSide(): String =
+    fun promptCacheWarningTokens(): Int = chatPromptCacheWarningTokens.takeIf { it >= 0 } ?: DEFAULT_PROMPT_CACHE_WARNING_TOKENS
+
+    fun promptCacheWarmingMode(): String = chatPromptCacheWarming.takeIf { it == "chosen" || it == "all" } ?: "off"
+
+    fun promptCacheWarmingDurationMs(): Long =
+        (chatPromptCacheWarmingMinutes.takeIf { it in PROMPT_CACHE_WARMING_MINUTES } ?: 30) * 60_000L
+
+        fun sessionPaneSide(): String =
         chatDesktopSessionPaneSide.takeIf { it == "left" || it == "right" } ?: "right"
 
     companion object {
         const val DEFAULT_SERVER_PORT = 4096
+        /** `package.json` default for `varro.chat.promptCacheWarningTokens`. */
+        const val DEFAULT_PROMPT_CACHE_WARNING_TOKENS = 250_000
+        val PROMPT_CACHE_WARMING_MINUTES = listOf(30, 60, 120, 180)
         private val PERMISSION_MODES = setOf("default", "auto", "full")
 
         /** Fires after any settings change so open tool windows can re-push config. */

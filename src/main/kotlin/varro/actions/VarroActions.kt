@@ -190,6 +190,16 @@ class UsageAction : VarroAction() {
 }
 
 /** `varro.chat.openOpenCodeConfig` */
+/** Port of `varro.chat.openSkillSettings`. */
+class OpenSkillSettingsAction : VarroAction() {
+    override fun perform(project: Project, service: VarroProjectService, event: AnActionEvent) = service.openSkillSettings()
+}
+
+/** Port of `varro.chat.openMcpSettings`. */
+class OpenMcpSettingsAction : VarroAction() {
+    override fun perform(project: Project, service: VarroProjectService, event: AnActionEvent) = service.openMcpSettings()
+}
+
 class OpenOpenCodeConfigAction : VarroAction() {
     override fun perform(project: Project, service: VarroProjectService, event: AnActionEvent) =
         service.openGlobalOpenCodeConfig()

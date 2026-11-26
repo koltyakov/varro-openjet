@@ -68,7 +68,8 @@ class LocalImagesTest {
         Files.writeString(outside, "<svg onload='bad()'></svg>")
         val link = root.resolve("escape.png")
         Files.createSymbolicLink(link, outside)
-        LocalImages().use { images ->
+        // The JUnit folder is itself under the temp folder; keep this test about workspace containment.
+        LocalImages(temporaryDirectories = emptyList()).use { images ->
             fun load(path: String, extra: com.google.gson.JsonObject = Json.obj()) = images.load(extra.apply { addProperty("path", path) },
                 root.toString(), listOf(root.toString()), { _, _ -> true })
             for (path in listOf(outside.toString(), link.toString(), "../outside.png")) {
@@ -92,6 +93,36 @@ class LocalImagesTest {
             images.close()
             assertThrows(CancellationException::class.java) { load("pretend.png") }
         }
+    }
+
+    @Test fun `own images in a temp folder load outside the workspace but escaping links relative paths and other owners do not`() {
+        val root = temporary.newFolder("workspace-root").toPath()
+        val temp = temporary.newFolder("scratch").toPath().toRealPath()
+        val outside = temporary.newFolder("outside-temp").toPath().toRealPath()
+        val shot = temp.resolve("shot.png")
+        ImageIO.write(BufferedImage(8, 8, BufferedImage.TYPE_INT_ARGB), "png", shot.toFile())
+        val secret = outside.resolve("secret.png")
+        Files.copy(shot, secret)
+        Files.createSymbolicLink(temp.resolve("link.png"), secret)
+        fun load(images: LocalImages, path: String) = images.load(Json.obj("path" to path, "original" to true),
+            root.toString(), listOf(root.toString()), { _, _ -> true })
+        LocalImages(temporaryDirectories = listOf(temp.toString())).use { images ->
+            val loaded = load(images, shot.toString())
+            assertEquals(shot.toString(), loaded.str("path"))
+            assertEquals("data:image/png;base64," + Base64.getEncoder().encodeToString(Files.readAllBytes(shot)), loaded.str("url"))
+            for (path in listOf(temp.resolve("link.png").toString(), "shot.png", temp.toString(), secret.toString())) {
+                val failure = assertThrows(path, Exception::class.java) { load(images, path) }
+                assertTrue(path, failure.message.orEmpty().contains("not in an open workspace") || failure is java.nio.file.NoSuchFileException)
+            }
+        }
+        LocalImages(temporaryDirectories = listOf(temp.toString()), isOwnFile = { false }).use { images ->
+            assertThrows(IllegalArgumentException::class.java) { load(images, shot.toString()) }
+        }
+        // A filesystem root never counts as a temp folder.
+        LocalImages(temporaryDirectories = listOf(temp.root.toString())).use { images ->
+            assertThrows(IllegalArgumentException::class.java) { load(images, shot.toString()) }
+        }
+        assertTrue(LocalImages.ownedByCurrentUser(shot))
     }
 
     @Test(timeout = 5000) fun `a final symlink or FIFO replacement cannot follow links or block the file open`() {

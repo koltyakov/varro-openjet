@@ -43,6 +43,7 @@ import type {
   McpDefaults,
   McpStatus,
   PermissionMode,
+  PromptCacheWarmingState,
   ProviderLimitStatus,
   RecycleBinEntry,
   RestartBlockedState,
@@ -53,6 +54,7 @@ import type {
   WorkspaceStatusEventSummary,
 } from '../../shared/protocol';
 import { isPermissionMode } from '../../shared/protocol';
+import { DEFAULT_PROMPT_CACHE_WARNING_TOKENS } from '../../shared/provider-limit-config';
 import { parseRemoteImageMode } from '../../shared/remote-images';
 import type { RemoteImageMode } from '../../shared/remote-images';
 import { isInlineProblem } from './editor-problems';
@@ -148,6 +150,9 @@ export interface AppState {
   remoteImages: RemoteImageMode;
   debugShowQuotaWarning: boolean;
   debugResetWarningDays?: number;
+  promptCacheWarningTokens: number;
+  /** Host-owned keep-alive state; `null` until the host first reports it. */
+  promptCacheWarming: PromptCacheWarmingState | null;
   draftCurrentDocumentEnabled: boolean | null;
   droppedFiles: DroppedFile[];
   clipboardImages: ClipboardImage[];
@@ -162,6 +167,8 @@ export interface AppState {
   messagesLoading: boolean;
   pendingSessionSelectionId: string | null;
   pinnedSessionIds: string[];
+  /** Sessions marked to come back to; the host clears a marker on the session's next prompt. */
+  todoSessionIds: string[];
   recycleBinEntries: RecycleBinEntry[];
   activeSessionId: string | null;
   transferredSessions: Record<string, string>;
@@ -303,6 +310,8 @@ export interface AppStateInstance {
   setShowModels: Setter<boolean>;
   showPermissionSettings: Accessor<boolean>;
   setShowPermissionSettings: Setter<boolean>;
+  showSkillSettings: Accessor<boolean>;
+  setShowSkillSettings: Setter<boolean>;
   showMcpSettings: Accessor<boolean>;
   setShowMcpSettings: Setter<boolean>;
   composerFocusKey: Accessor<number>;
@@ -453,6 +462,9 @@ export function createAppState(): AppStateInstance {
     remoteImages: parseRemoteImageMode(initialWebviewState.remoteImages),
     debugShowQuotaWarning: initialWebviewState.debugShowQuotaWarning ?? false,
     debugResetWarningDays: initialWebviewState.debugResetWarningDays,
+    promptCacheWarningTokens:
+      initialWebviewState.promptCacheWarningTokens ?? DEFAULT_PROMPT_CACHE_WARNING_TOKENS,
+    promptCacheWarming: null,
     emptyStateLogoUri: initialWebviewState.emptyStateLogoUri ?? '',
     currentDocumentEnabled: currentDocumentWorkspace
       ? (projectCurrentDocumentEnabled[currentDocumentWorkspace] ?? true)
@@ -476,6 +488,7 @@ export function createAppState(): AppStateInstance {
     transferredSessions: {},
     pendingSessionSelectionId: null,
     pinnedSessionIds: initialWebviewState.pinnedSessionIds ?? [],
+    todoSessionIds: initialWebviewState.todoSessionIds ?? [],
     recycleBinEntries: initialWebviewState.recycleBinEntries ?? [],
     activeSessionId: null,
     editorTabsOpen: initialWebviewState.editorTabsOpen ?? false,
@@ -754,6 +767,7 @@ export function createAppState(): AppStateInstance {
   const [showModelPicker, setShowModelPicker] = createSignal(false);
   const [showModels, setShowModels] = createSignal(false);
   const [showPermissionSettings, setShowPermissionSettings] = createSignal(false);
+  const [showSkillSettings, setShowSkillSettings] = createSignal(false);
   const [showMcpSettings, setShowMcpSettings] = createSignal(false);
   const [composerFocusKey, setComposerFocusKey] = createSignal(0);
   const [openAttentionSessionsKey, setOpenAttentionSessionsKey] = createSignal(0);
@@ -864,6 +878,8 @@ export function createAppState(): AppStateInstance {
     setShowModels,
     showPermissionSettings,
     setShowPermissionSettings,
+    showSkillSettings,
+    setShowSkillSettings,
     showMcpSettings,
     setShowMcpSettings,
     composerFocusKey,
@@ -996,6 +1012,8 @@ export const showModels = defaultAppState.showModels;
 export const setShowModels = defaultAppState.setShowModels;
 export const showPermissionSettings = defaultAppState.showPermissionSettings;
 export const setShowPermissionSettings = defaultAppState.setShowPermissionSettings;
+export const showSkillSettings = defaultAppState.showSkillSettings;
+export const setShowSkillSettings = defaultAppState.setShowSkillSettings;
 export const showMcpSettings = defaultAppState.showMcpSettings;
 export const setShowMcpSettings = defaultAppState.setShowMcpSettings;
 export const composerFocusKey = defaultAppState.composerFocusKey;
@@ -1055,6 +1073,7 @@ export function resetDefaultAppState() {
   setShowModelPicker(next.showModelPicker());
   setShowModels(next.showModels());
   setShowPermissionSettings(next.showPermissionSettings());
+  setShowSkillSettings(next.showSkillSettings());
   setShowMcpSettings(next.showMcpSettings());
   setComposerFocusKey(next.composerFocusKey());
   setOpenAttentionSessionsKey(next.openAttentionSessionsKey());

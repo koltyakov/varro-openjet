@@ -55,6 +55,22 @@ class FollowupsTest {
         assertEquals("Inspect parser", Followups.title(" Inspect parser "))
     }
 
+    @Test fun `combinable is kept only as true for two or more actions and must be boolean`() {
+        val summary = "Two independent fixes remain."
+        val two = listOf(Json.obj("title" to "Fix parser", "prompt" to "Fix the parser."), Json.obj("title" to "Add tests", "prompt" to "Add parser tests."))
+        val combined = Json.obj("summary" to summary, "actions" to two, "combinable" to true)
+        assertEquals(combined, Followups.suggestions(combined.toString()))
+        assertEquals(Json.obj("summary" to summary, "actions" to two),
+            Followups.suggestions(Json.obj("summary" to summary, "actions" to two, "combinable" to false).toString()))
+        val one = listOf(two[0])
+        assertEquals(Json.obj("summary" to summary, "actions" to one),
+            Followups.suggestions(Json.obj("summary" to summary, "actions" to one, "combinable" to true).toString()))
+        assertThrows(Exception::class.java) {
+            Followups.suggestions(Json.obj("summary" to summary, "actions" to one, "combinable" to "yes").toString())
+        }
+        assertThrows(Exception::class.java) { Followups.suggestions(Json.obj("summary" to summary, "combinable" to true).toString()) }
+    }
+
     @Test fun `source is bounded and hidden context never contributes visible text`() {
         val source = Json.obj("assistantMessageId" to "a", "userMessageId" to "u", "userPrompt" to "Fix it", "answer" to "One issue remains")
         assertEquals(source, Followups.source(source))

@@ -16,6 +16,7 @@ class ModelRoutingServiceTest {
         for ((target, field) in listOf(
             "small_model" to "smallModel",
             "commit_message" to "commitMessageModel",
+            "review" to "reviewModel",
             "auto_approve" to "autoApproveModel",
             "prompt_completion" to "promptCompletionModel",
             "followups" to "followupModel",
@@ -35,6 +36,15 @@ class ModelRoutingServiceTest {
             assertEquals(cleared, fixture.service().read())
             assertEquals(2, fixture.changes)
         }
+    }
+
+    @Test
+    fun `review routes ignore a reasoning variant suffix when matching chips`() {
+        val fixture = Fixture()
+        fixture.settings.reviewModel = "openai/gpt-6#high"
+        val route = fixture.service().read().obj("reviewModel")
+        assertEquals("openai", route.str("providerID"))
+        assertEquals("gpt-6", route.str("modelID"))
     }
 
     @Test

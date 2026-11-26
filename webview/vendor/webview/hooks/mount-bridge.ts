@@ -151,6 +151,11 @@ export function createMountBridgeOperations(deps: {
           if (payload.debugResetWarningDays !== undefined) {
             appStore.setState(storePath('debugResetWarningDays', payload.debugResetWarningDays));
           }
+          if (payload.promptCacheWarningTokens !== undefined) {
+            appStore.setState(
+              storePath('promptCacheWarningTokens', payload.promptCacheWarningTokens)
+            );
+          }
           uiStore.setDesktopSessionPaneSide(payload.desktopSessionPaneSide);
           permissionsStore.setDefaultPermissionModePreference(payload.defaultPermissionMode);
         },
@@ -303,6 +308,8 @@ export function handleExtensionMessageWithDependencies(
       }
       if (msg.payload.state === 'running') {
         deps.ensureConnectionInitialized();
+        // Warming needs a running v2 server, so its availability follows the server state.
+        if (previousServerState !== 'running') postMessage({ type: 'warming/sync' });
       } else {
         if (previousServerState === 'running') deps.invalidateConnection();
         deps.clearProvidersState();
@@ -455,6 +462,9 @@ export function handleExtensionMessageWithDependencies(
     case 'pinned-sessions/sync':
       appStore.applyPinnedSessionsSync(msg.payload.sessionIds);
       break;
+    case 'todo-sessions/sync':
+      appStore.setState(storePath('todoSessionIds', [...msg.payload.sessionIds]));
+      break;
     case 'queued-messages/sync':
       applyQueuedMessagesSnapshot(msg.payload.messages, msg.payload.mutationId);
       break;
@@ -515,6 +525,9 @@ export function handleExtensionMessageWithDependencies(
       break;
     case 'ralph/state':
       ralphStore.applyHostState(msg.payload.runs, msg.payload.activeIds);
+      break;
+    case 'warming/state':
+      appStore.setState(storePath('promptCacheWarming', msg.payload));
       break;
   }
 }

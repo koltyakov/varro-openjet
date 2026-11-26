@@ -35,6 +35,8 @@ Chat in the tool window, an editor tab or a detached window. **Open in Window** 
 - Queue follow-ups while a task runs. On v2, use `/btw` for a side question without interrupting it.
 - Choose models and agents in chat. Set session or project permission rules in Permissions.
 - Generate commit messages from the commit toolbar. Generation does not stage files or commit changes.
+- Choose **Walk Through Changes with Varro** in the Commit tool window toolbar or **Tools > Varro** for an AI-guided Markdown reading order through staged, unstaged or all uncommitted Git changes. It requires v2 and uses the review model (**Use for reviews** in Models) or the sidebar chat's selected model and reasoning. Nothing runs automatically, and oversized diffs are refused before any request.
+- Use **Mark as ToDo** in the session menu for sessions to come back to. The mark clears when the next prompt reaches the session or the session is deleted.
 - Restore deleted sessions from the recycle bin for up to seven days.
 
 ### Settings
@@ -52,7 +54,9 @@ With Database Tools installed, Varro can attach loaded table metadata, SQL and s
 
 ### MCP servers
 
-Use `/mcp` or `/mcps` to select MCP servers for a chat. The management screen can add servers from JSON or JSONC snippets to global or project configuration and open the config file for editing. Existing servers, comments and unrelated settings are preserved. For OAuth-enabled remote servers, separate controls handle sign-in, sign-out and switching accounts. Attached servers cannot open or edit local configuration.
+Use `/mcp` or `/mcps` to select MCP servers for a chat, or **Manage Varro MCPs** in the tool-window menu. The management screen can add servers from JSON or JSONC snippets to global or project configuration and open the config file for editing. Existing servers, comments and unrelated settings are preserved. For OAuth-enabled remote servers, separate controls handle sign-in, sign-out and switching accounts. Attached servers cannot open or edit local configuration.
+
+Use **Manage Varro Skills** in the tool-window menu to see the skills OpenCode discovered and turn them on or off for **Global** or **This project**. Turning a skill off adds a `skill` deny rule to OpenCode permission configuration; **Use global** removes the project rule.
 
 ### Dictation
 
@@ -82,7 +86,9 @@ Remote Markdown images ask before loading by default. Loading one contacts the i
 
 Enable prompt completion with **Use for prompt completion** in the Models menu. It requires v2 and an API-key model, not an OAuth subscription, and sends your unfinished draft and recent chat directly to the provider. Tab accepts a suggestion; Escape dismisses it.
 
-Follow-up suggestions are enabled by default after completed Build responses when V2 supports stateless generation. They send the current request and final answer for extra inference, which may consume paid tokens or subscription quota. Disable **Suggest follow-up actions after Build responses** under **Settings > Tools > Varro > Models** to opt out. The session's model and reasoning are used unless you assign **Use for follow-ups** in Models. Hover an action to preview its prompt; clicking sends it without changing your permissions, draft or attachments. The action menu can copy a suggestion, queue it paused for review, or run it in a background fork. Started actions retain a link to that chat after reload.
+Follow-up suggestions are enabled by default after completed Build responses when V2 supports stateless generation. They send the current request and final answer for extra inference, which may consume paid tokens or subscription quota. Disable **Suggest follow-up actions after Build responses** under **Settings > Tools > Varro > Models** to opt out. The session's model and reasoning are used unless you assign **Use for follow-ups** in Models. Hover an action to preview its prompt; clicking sends it without changing your permissions, draft or attachments. The action menu can copy a suggestion, queue it paused for review, or run it in a background fork. Started actions retain a link to that chat after reload. When two or more suggestions are compatible, **All** sends them as one combined request.
+
+The composer warns when an idle session's prompt cache has likely expired and its context holds at least 250,000 tokens; change the threshold or set it to 0 under **Expired prompt cache warning**. **Keep prompt caches warm** is off by default because every keep-alive re-sends the session context and costs tokens or subscription quota. **Chosen** keeps sessions you turn on with **Keep warm** in the context popup warm while the IDE runs; **All** writes OpenCode's own `warming` setting to the global OpenCode config and removes it when you switch away. Both require v2; **All** is unavailable for attached servers.
 
 **Trace auxiliary inference prompts** in the same settings group is off by default. It adds a `VARRO_TRACE_V1` line with purpose and session identifiers, or a workspace hash, for compatible accounting proxies. The proxy must strip the line before inference; otherwise the model receives it. It does not enable inference or change permissions.
 

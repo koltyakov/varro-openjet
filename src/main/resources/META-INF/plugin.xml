@@ -263,6 +263,12 @@
                     text="Varro Settings" icon="AllIcons.General.Settings"/>
             <action id="Varro.Usage" class="varro.actions.UsageAction"
                     text="OpenCode Usage Report"/>
+            <action id="Varro.OpenSkillSettings" class="varro.actions.OpenSkillSettingsAction"
+                    text="Manage Varro Skills"
+                    description="List discovered skills and manage their global and project permissions"/>
+            <action id="Varro.OpenMcpSettings" class="varro.actions.OpenMcpSettingsAction"
+                    text="Manage Varro MCPs"
+                    description="Open Varro's MCP settings"/>
             <action id="Varro.OpenOpenCodeConfig" class="varro.actions.OpenOpenCodeConfigAction"
                     text="Open Global OpenCode Config"
                     description="Open the global opencode.json, creating it if none exists"/>

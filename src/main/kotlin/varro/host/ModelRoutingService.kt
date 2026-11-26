@@ -22,7 +22,7 @@ internal class ModelRoutingService(
     fun update(body: JsonElement?): JsonObject {
         val request = requireNotNull(body.asObjectOrNull()) { "Model routing request must be an object" }
         val target = request.str("target")
-        require(target in setOf("small_model", "agent", "commit_message", "auto_approve", "prompt_completion", "followups")) {
+        require(target in setOf("small_model", "agent", "commit_message", "review", "auto_approve", "prompt_completion", "followups")) {
             "Unsupported model routing target: $target"
         }
         val provider = request.str("providerID")?.trim().orEmpty()
@@ -62,6 +62,7 @@ internal class ModelRoutingService(
                 val current = readGlobalConfig()
                 when (target) {
                     "commit_message" -> settings.commitMessageModel = modelRef
+                    "review" -> settings.reviewModel = modelRef
                     "prompt_completion" -> settings.chatPromptCompletionModel = modelRef
                     "followups" -> settings.chatFollowupModel = modelRef
                     else -> settings.chatAutoApproveModel = modelRef
@@ -83,6 +84,7 @@ internal class ModelRoutingService(
             "agentModels" to agents,
             "globalVisionModel" to agents.get("vision"),
             "commitMessageModel" to modelRoute(settings.commitMessageModel),
+            "reviewModel" to modelRoute(settings.reviewModel),
             "autoApproveModel" to modelRoute(settings.chatAutoApproveModel),
             "promptCompletionModel" to modelRoute(settings.chatPromptCompletionModel),
             "followupModel" to modelRoute(settings.chatFollowupModel),
@@ -92,7 +94,8 @@ internal class ModelRoutingService(
     private fun modelRoute(value: String?): JsonObject? {
         val text = value?.trim().orEmpty()
         val provider = text.substringBefore('/', "")
-        val model = text.substringAfter('/', "")
+        // A `#variant` suffix selects reasoning, not a different model.
+        val model = text.substringAfter('/', "").substringBefore('#')
         if (provider.isEmpty() || model.isEmpty()) return null
         return Json.obj("providerID" to provider, "modelID" to model)
     }

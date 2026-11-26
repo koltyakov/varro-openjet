@@ -55,6 +55,8 @@ export type OpenCodeModelRouting = {
   agentModels: Record<string, OpenCodeModelRoute>;
   globalVisionModel?: OpenCodeModelRoute | null;
   commitMessageModel: OpenCodeModelRoute | null;
+  /** `varro.review.model`: walkthroughs use it instead of the chat's selected model. */
+  reviewModel?: OpenCodeModelRoute | null;
   autoApproveModel: OpenCodeModelRoute | null;
   promptCompletionModel?: OpenCodeModelRoute | null;
   followupModel?: OpenCodeModelRoute | null;
@@ -461,7 +463,14 @@ export type Session = {
   metadata?: UnknownRecord;
   time: { created: number; updated: number; compacting?: number; archived?: number };
   permission?: PermissionRule[];
-  revert?: { messageID: string; partID?: string; snapshot?: string; diff?: string };
+  /** `diff` is V1's rolled-back patch; `files` lists V2's rolled-back file diffs. */
+  revert?: {
+    messageID: string;
+    partID?: string;
+    snapshot?: string;
+    diff?: string;
+    files?: unknown[];
+  };
 };
 
 export type Command = {

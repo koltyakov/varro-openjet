@@ -80,7 +80,12 @@ internal object Followups {
         val record = strictJson.fromJson(text, JsonElement::class.java).asObjectOrNull()
         val summary = record.str("summary")
         val actions = record.arr("actions")
-        require(record?.keySet() == setOf("summary", "actions") && summary != null && summary.trim().length <= 400 &&
+        // `combinable` marks actions that are compatible and can be requested together.
+        val combinable = record?.get("combinable")
+        require(record != null && record.keySet().containsAll(setOf("summary", "actions")) &&
+            record.keySet().all { it in setOf("summary", "actions", "combinable") } &&
+            (combinable == null || combinable.isJsonPrimitive && combinable.asJsonPrimitive.isBoolean) &&
+            summary != null && summary.trim().length <= 400 &&
             !unsafe.containsMatchIn(summary) && actions != null && actions.size() <= 3 &&
             (actions.isEmpty || summary.isNotBlank())) { "Invalid follow-ups output" }
         val titles = mutableSetOf<String>()
@@ -95,6 +100,6 @@ internal object Followups {
                 prompt.isNotEmpty() && prompt.length <= 600 && !prompt.startsWith('/') && !unsafe.containsMatchIn(prompt) &&
                 titles.add(title.lowercase(Locale.ROOT)) && prompts.add(prompt.lowercase(Locale.ROOT))) { "Invalid follow-up action" }
             Json.obj("title" to title, "prompt" to prompt).apply { sessionId?.let { addProperty("sessionId", it) } }
-        })
+        }).apply { if (combinable?.asBoolean == true && actions.size() > 1) addProperty("combinable", true) }
     }
 }

@@ -243,6 +243,33 @@ class OpenCodeHostServices(
         return true
     }
 
+    /**
+     * Port of `updateGlobalWarming`: `true`/`{ duration }` turns OpenCode's own warming on for
+     * every root session, `null` removes it from every global config file.
+     */
+    @Synchronized fun updateGlobalWarming(value: JsonElement?) {
+        require(!server.isAttachOnly()) {
+            "Keeping all sessions warm edits the global OpenCode config, which is unavailable in attach-only mode."
+        }
+        val environment = server.cli.serverEnvironment()
+        val global = Path.of(environment["XDG_CONFIG_HOME"] ?: Path.of(System.getProperty("user.home"), ".config").toString(), "opencode")
+        val changed = GlobalWarmingConfig(global) { path ->
+            var dirty = false
+            // Settings apply from a modal dialog; this read-only check must not wait for it to close.
+            ApplicationManager.getApplication().invokeAndWait({
+                val documents = com.intellij.openapi.fileEditor.FileDocumentManager.getInstance()
+                dirty = documents.unsavedDocuments.any { document -> documents.getFile(document)?.path?.let {
+                    varro.server.WorkspacePaths.isSame(it, path.toString()) || runCatching { Path.of(it).toRealPath() == path }.getOrDefault(false)
+                } == true }
+            }, ModalityState.any())
+            require(!dirty) { "$path has unsaved changes; save before changing session warming" }
+        }.update(value)
+        if (changed && server.currentStatus() is varro.server.ServerStatus.Running) {
+            runCatching { server.transport.request("POST", "/global/dispose") }
+                .onFailure { com.intellij.openapi.diagnostic.logger<OpenCodeHostServices>().warn("Could not reload OpenCode after changing warming", it) }
+        }
+    }
+
     private fun mcpDefaultsService(): McpDefaults {
         val environment = server.cli.serverEnvironment()
         val global = Path.of(environment["XDG_CONFIG_HOME"] ?: Path.of(System.getProperty("user.home"), ".config").toString(), "opencode")

@@ -15,11 +15,18 @@ import java.security.MessageDigest
 import java.util.Base64
 import java.util.concurrent.CancellationException
 
-/** Workspace-authorized raster images. No browser file URLs or ambient network requests. */
+/**
+ * Workspace-authorized raster images, plus the user's own files in temporary folders where agents
+ * save screenshots and scratch output. No browser file URLs or ambient network requests.
+ */
 internal class LocalImages(
     private val thumbnails: ImageThumbnails = ImageThumbnails(),
     /** False for the shared application service, which outlives any one view. */
     private val ownsThumbnails: Boolean = true,
+    private val temporaryDirectories: List<String> = listOfNotNull(System.getProperty("java.io.tmpdir"),
+        "/tmp".takeUnless { com.sun.jna.Platform.isWindows() }),
+    /** Shared temp folders accept files from any account; only the user's own are shown. Null skips the check. */
+    private val isOwnFile: (Path) -> Boolean = ::ownedByCurrentUser,
 ) : AutoCloseable {
     @Volatile private var closed = false
 
@@ -37,7 +44,7 @@ internal class LocalImages(
         require(!record.has("sessionID") || session?.matches(Regex("[A-Za-z0-9_-]{1,512}")) == true) { "Invalid local image session" }
         require(authorize(session, directory)) { "Session workspace folder is not open" }
         require(roots.any { varro.server.WorkspacePaths.isSame(it, directory) }) { "Local image is not in an open workspace" }
-        require(source.replace('\\', '/').split('/').none { it == ".." }) { "Local image is not in an open workspace" }
+        require(source.replace('\\', '/').split('/').none { it == ".." }) { OUTSIDE_ALLOWED_ROOTS }
         check()
         // Resolve symlinks before checking containment. Sibling content roots are allowed,
         // but an absolute path or a symlink cannot escape all authorized roots.
@@ -46,8 +53,11 @@ internal class LocalImages(
         val input = Path.of(source)
         val path = if (input.isAbsolute) input.toRealPath() else allowed.firstNotNullOfOrNull { root ->
             runCatching { root.resolve(input).toRealPath().takeIf { it.startsWith(root) && Files.isRegularFile(it) } }.getOrNull()
-        } ?: error("Local image is not in an open workspace")
-        require(allowed.any(path::startsWith)) { "Local image is not in an open workspace" }
+        } ?: error(OUTSIDE_ALLOWED_ROOTS)
+        if (!allowed.any(path::startsWith)) {
+            // Only an absolute path whose canonical location stays strictly inside a temp root.
+            require(input.isAbsolute && temporaryRoots().any { path != it && path.startsWith(it) } && isOwnFile(path)) { OUTSIDE_ALLOWED_ROOTS }
+        }
         val attributes = Files.readAttributes(path, BasicFileAttributes::class.java, NOFOLLOW_LINKS)
         require(attributes.isRegularFile && attributes.size() in 1..ImageThumbnails.MAX_INPUT_BYTES.toLong()) {
             "Local image exceeds the image size limit or is not a regular file"
@@ -67,8 +77,23 @@ internal class LocalImages(
 
     override fun close() { closed = true; if (ownsThumbnails) thumbnails.dispose() }
 
+    /** Canonical temp roots; a filesystem root never counts as a temp folder. */
+    private fun temporaryRoots(): List<Path> = temporaryDirectories.mapNotNull { directory ->
+        runCatching { Path.of(directory).toRealPath() }.getOrNull()?.takeIf { it.parent != null }
+    }.distinct()
+
     companion object {
+        private const val OUTSIDE_ALLOWED_ROOTS = "Local image is not in an open workspace or temporary folder"
+
+        /** Windows has no POSIX owner IDs, and its temp folder is already per-user. */
+        internal fun ownedByCurrentUser(path: Path): Boolean {
+            if (!com.sun.jna.Platform.isMac() && !com.sun.jna.Platform.isLinux()) return true
+            val owner = runCatching { Files.getAttribute(path, "unix:uid", NOFOLLOW_LINKS) as? Int }.getOrNull() ?: return false
+            return owner == libc.getuid()
+        }
+
         private interface LibC : com.sun.jna.Library {
+            fun getuid(): Int
             fun open(path: String, flags: Int): Int
             fun lseek(fd: Int, offset: Long, whence: Int): Long
             fun read(fd: Int, buffer: ByteArray, size: Long): Long

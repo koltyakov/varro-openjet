@@ -592,6 +592,7 @@ export type VarroSessionEndpointAction =
   | 'permission-mode'
   | 'pin'
   | 'reorder-pin'
+  | 'todo'
   | 'rename-if-untitled';
 
 export function buildVarroSessionEndpoint(
@@ -979,6 +980,7 @@ export type InitialWebviewState = {
   followupModel?: string;
   debugShowQuotaWarning?: boolean;
   debugResetWarningDays?: number;
+  promptCacheWarningTokens?: number;
   autoAttachProblems?: boolean;
   autoAttachActiveFile?: boolean;
   desktopSessionPaneSide?: DesktopSessionPaneSide;
@@ -1006,6 +1008,8 @@ export type InitialWebviewState = {
   pendingQuestions?: UnknownRecord[];
   recycleBinEntries?: RecycleBinEntry[];
   pinnedSessionIds?: string[];
+  /** Sessions the user marked to come back to. */
+  todoSessionIds?: string[];
   queuedMessages?: QueuedMessageSnapshot[];
 };
 
@@ -1121,6 +1125,7 @@ export type ExtensionMessage =
       };
     }
   | { type: 'pinned-sessions/sync'; payload: { sessionIds: string[] } }
+  | { type: 'todo-sessions/sync'; payload: { sessionIds: string[] } }
   | {
       type: 'permission-modes/sync';
       payload: { modes: Record<string, PermissionMode>; recoveringSessionIds?: string[] };
@@ -1169,10 +1174,37 @@ export type ExtensionMessage =
   | { type: 'command/search-sessions' }
   | { type: 'command/open-attention-sessions' }
   | { type: 'command/open-completed-sessions' }
+  | { type: 'command/open-skill-settings' }
+  | { type: 'command/open-mcp-settings' }
   | { type: 'command/switch-session'; payload: { direction: 'previous' | 'next' } }
   | { type: 'command/navigate-history'; payload: { direction: 'back' | 'forward' } }
   | { type: 'command/abort' }
-  | { type: 'ralph/state'; payload: RalphStatePayload };
+  | { type: 'ralph/state'; payload: RalphStatePayload }
+  | { type: 'warming/state'; payload: PromptCacheWarmingState };
+
+/** `varro.chat.promptCacheWarming`: chosen sessions are warmed by Varro, all by OpenCode's config. */
+export type PromptCacheWarmingMode = 'off' | 'chosen' | 'all';
+
+export type PromptCacheWarmingSession = {
+  /** End of the current warming window, or `null` until the next reply finishes. */
+  warmUntil: number | null;
+  /** When the latest reply or keep-alive sent the context; the cache lifetime counts from here. */
+  sentAt: number | null;
+  /** Why warming stopped before the next reply: the window ended, the cache was gone, or a ping failed. */
+  stopped: 'expired' | 'cache-miss' | 'failed' | null;
+};
+
+export type PromptCacheWarmingState = {
+  /** OpenCode v2 with a running server; v1 has no transient generate route. */
+  available: boolean;
+  mode: PromptCacheWarmingMode;
+  durationMs: number;
+  intervalMs: number;
+  /** OpenCode's own `warming` config is on, so it warms every session itself. */
+  openCodeWarming: boolean;
+  /** Chosen sessions, keyed by session ID. */
+  sessions: Record<string, PromptCacheWarmingSession>;
+};
 
 export type WebviewMessage =
   | {
@@ -1384,6 +1416,8 @@ export type WebviewMessage =
       type: 'ralph/sync';
       payload: { legacyRuns?: Record<string, RalphRun> };
     }
+  | { type: 'warming/sync' }
+  | { type: 'warming/set'; payload: { sessionId: string; enabled: boolean } }
   | {
       type: 'log';
       payload: { msg: string; data?: string; error?: string; level?: 'info' | 'warn' | 'error' };

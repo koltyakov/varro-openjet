@@ -180,10 +180,26 @@ class VarroConfigurable : BoundConfigurable("Varro") {
                     .comment("`providerID/modelID`. Empty disables autocomplete. Requires OpenCode V2 and an API key. Drafts and recent chat context are sent directly to the provider. Tab accepts; Escape dismisses.")
                     .columns(40)
             }
+            row("Expired prompt cache warning:") {
+                intTextField(0..100_000_000)
+                    .bindIntText(settings::chatPromptCacheWarningTokens)
+                    .comment("Warn above the composer when an idle session's prompt cache has likely expired and its context holds at least this many tokens, so the next message re-sends it at the uncached rate. 0 turns the warning off.")
+            }
+            row("Keep prompt caches warm:") {
+                comboBox(listOf("off", "chosen", "all"))
+                    .bindItem(settings::chatPromptCacheWarming.toNullableProperty())
+                    .comment("Off never sends keep-alives. Chosen keeps sessions you turn on with Keep warm in the context popup warm while the IDE runs. All writes OpenCode's own <code>warming</code> setting to the global OpenCode config, which keeps every root session warm, also in the TUI, and removes it when you switch away. Each keep-alive re-sends the session context and costs money or subscription quota. Requires OpenCode V2.")
+            }
+            row("Warm for (minutes):") {
+                comboBox(VarroSettings.PROMPT_CACHE_WARMING_MINUTES)
+                    .bindItem({ settings.chatPromptCacheWarmingMinutes.takeIf { it in VarroSettings.PROMPT_CACHE_WARMING_MINUTES } ?: 30 },
+                        { settings.chatPromptCacheWarmingMinutes = it ?: 30 })
+                    .comment("How long a session stays warm after each reply.")
+            }
             row {
                 checkBox("Trace auxiliary inference prompts")
                     .bindSelected(settings::chatPromptTrace)
-                    .comment("Opt-in VARRO_TRACE_V1 attribution for follow-ups, judges, commit messages, side questions, and completion. Sends session IDs or a workspace hash as prompt text. Requires a compatible proxy to strip the line; otherwise the model receives it. Does not enable inference.")
+                    .comment("Opt-in VARRO_TRACE_V1 attribution for follow-ups, judges, commit messages, side questions, walkthroughs, and completion. Sends session IDs or a workspace hash as prompt text. Requires a compatible proxy to strip the line; otherwise the model receives it. Does not enable inference.")
             }
             row("Auto-approve judge model:") {
                 textField()
@@ -214,6 +230,12 @@ class VarroConfigurable : BoundConfigurable("Varro") {
             row("Commit message rules:") {
                 textArea().bindText(settings::commitMessageRules)
                     .comment("Style and format preferences, for example Conventional Commits with a scope. Cannot enable tools or commits.")
+            }
+            row("Review model:") {
+                textField()
+                    .bindText(settings::reviewModel)
+                    .comment("`providerID/modelID` or `providerID/modelID#variant` for change walkthroughs. Leave empty to use the active chat's selected model and reasoning. Set it from the Models view with <b>Use for reviews</b>.")
+                    .columns(40)
             }
         }
 

@@ -250,6 +250,20 @@ class ApiRoutesTest {
     }
 
     @Test
+    fun `skills, staged rewind commits and todo marks use their narrow upstream routes`() {
+        assertTrue(ApiRoutes.isAllowed("GET", "/skill"))
+        assertFalse(ApiRoutes.isAllowed("POST", "/skill"))
+        assertFalse(ApiRoutes.isAllowed("GET", "/skill?directory=/tmp"))
+        assertTrue(ApiRoutes.isAllowed("POST", "/session/ses_1/revert-commit"))
+        assertTrue(ApiRoutes.isAllowed("POST", "/session/ses_1/revert-commit?directory=/workspace"))
+        assertFalse(ApiRoutes.isAllowed("GET", "/session/ses_1/revert-commit"))
+        assertTrue(ApiRoutes.isAllowed("POST", "/varro/session/ses_1/todo"))
+        assertTrue(ApiRoutes.isAllowed("POST", "/varro/session/ses_1/todo?directory=/workspace"))
+        assertFalse(ApiRoutes.isAllowed("GET", "/varro/session/ses_1/todo"))
+        assertFalse(ApiRoutes.isAllowed("POST", "/varro/session/ses_1/todo?other=1"))
+    }
+
+    @Test
     fun `model pricing requires both identifiers and only allows GET`() {
         val path = "/varro/model-pricing?providerID=openai&modelID=gpt-5"
         assertTrue(ApiRoutes.isAllowed("GET", path))

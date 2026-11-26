@@ -67,6 +67,12 @@ class VarroStore : PersistentStateComponent<VarroStore.StoreState> {
         /** `string[]` of pinned root session ids, in display order. */
         @JvmField var pinnedSessionIds: String = "[]"
 
+        /** `Record<sessionId, markedAt>` of sessions the user marked to come back to. */
+        @JvmField var todoSessions: String = "{}"
+
+        /** `string[]` of root sessions chosen for prompt cache warming, oldest first. */
+        @JvmField var promptCacheWarmingSessions: String = "[]"
+
         /** `string[]` of sessions hidden from the user-visible catalog (helper sessions). */
         @JvmField var hiddenSessionIds: String = "[]"
 
@@ -118,6 +124,56 @@ class VarroStore : PersistentStateComponent<VarroStore.StoreState> {
     @Synchronized fun updatePins(update: (List<String>) -> List<String>): List<String> {
         pinnedSessionIds = update(pinnedSessionIds)
         return pinnedSessionIds
+    }
+
+    private val todoListeners = CopyOnWriteArrayList<(List<String>) -> Unit>()
+
+    fun addTodoListener(listener: (List<String>) -> Unit): () -> Unit {
+        todoListeners.add(listener)
+        return { todoListeners.remove(listener) }
+    }
+
+    /**
+     * Sessions the user marked to come back to. Port of `TodoSessionManager`: each
+     * marker remembers when it was set so only prompts sent afterwards clear it.
+     */
+    val todoSessionIds: List<String>
+        @Synchronized get() = todoMarks().keySet().toList()
+
+    @Synchronized fun setTodoSession(sessionId: String, todo: Boolean, now: Long = System.currentTimeMillis()): List<String> {
+        val marks = todoMarks()
+        if (todo) marks.addProperty(sessionId, now) else if (marks.remove(sessionId) == null) return todoSessionIds
+        return writeTodoMarks(marks)
+    }
+
+    /** Clears the marker when a prompt created after it was set reaches the session. */
+    @Synchronized fun clearTodoSessionForPrompt(sessionId: String, createdAt: Long): List<String> {
+        val marks = todoMarks()
+        val markedAt = marks.get(sessionId)?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isNumber }?.asLong
+            ?: return todoSessionIds
+        if (createdAt < markedAt) return todoSessionIds
+        marks.remove(sessionId)
+        return writeTodoMarks(marks)
+    }
+
+    @Synchronized fun removeTodoSession(sessionId: String): List<String> {
+        val marks = todoMarks()
+        if (marks.remove(sessionId) == null) return todoSessionIds
+        return writeTodoMarks(marks)
+    }
+
+    private fun todoMarks(): JsonObject = JsonObject().apply {
+        readObject(state.todoSessions).entrySet().forEach { (id, value) ->
+            if (id.isNotEmpty() && value.isJsonPrimitive && value.asJsonPrimitive.isNumber &&
+                value.asDouble.isFinite()) add(id, value)
+        }
+    }
+
+    private fun writeTodoMarks(marks: JsonObject): List<String> {
+        state.todoSessions = Json.stringify(marks)
+        val ids = marks.keySet().toList()
+        todoListeners.forEach { it(ids) }
+        return ids
     }
 
     override fun getState(): StoreState = state
@@ -244,6 +300,10 @@ class VarroStore : PersistentStateComponent<VarroStore.StoreState> {
         set(value) { state.editorRoutes = Json.stringify(value) }
 
     // --- Array-valued entries -------------------------------------------------
+
+    var promptCacheWarmingSessions: List<String>
+        @Synchronized get() = readArray(state.promptCacheWarmingSessions).strings()
+        @Synchronized set(value) { state.promptCacheWarmingSessions = Json.stringify(Json.array(value.distinct())) }
 
     var pinnedSessionIds: List<String>
         @Synchronized get() = readArray(state.pinnedSessionIds).strings()

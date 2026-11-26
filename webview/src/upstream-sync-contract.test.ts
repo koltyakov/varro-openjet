@@ -19,3 +19,31 @@ it('accepts local file image targets but rejects network and executable paths', 
     expect(parseLocalImagePath(path)).toBeNull();
   }
 });
+
+it('accepts the host todo-mark and prompt-cache warming snapshots', () => {
+  const todo = { type: 'todo-sessions/sync', payload: { sessionIds: ['ses_one'] } };
+  expect(parseExtensionMessage(todo)).toEqual(todo);
+  // PromptCacheWarming.snapshot serializes explicit nulls through Json.stringifyMessage.
+  const warming = {
+    type: 'warming/state',
+    payload: {
+      available: true,
+      mode: 'chosen',
+      durationMs: 1_800_000,
+      intervalMs: 240_000,
+      openCodeWarming: false,
+      sessions: {
+        ses_waiting: { warmUntil: null, sentAt: null, stopped: null },
+        ses_warm: { warmUntil: 1_900_000, sentAt: 100_000, stopped: null },
+        ses_expired: { warmUntil: 1_900_000, sentAt: 100_000, stopped: 'expired' },
+      },
+    },
+  };
+  expect(parseExtensionMessage(warming)).toEqual(warming);
+  const missingNull = structuredClone(warming);
+  delete (missingNull.payload.sessions.ses_waiting as { warmUntil?: null }).warmUntil;
+  expect(parseExtensionMessage(missingNull)).toBeNull();
+  for (const command of ['command/open-skill-settings', 'command/open-mcp-settings']) {
+    expect(parseExtensionMessage({ type: command })).toEqual({ type: command });
+  }
+});

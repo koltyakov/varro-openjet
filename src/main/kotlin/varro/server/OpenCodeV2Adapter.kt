@@ -264,7 +264,9 @@ internal class OpenCodeV2Adapter(
             if (match.groupValues[1] == "permission") {
                 if (!permissions.containsKey(id)) request("GET", "/permission", null, options)
                 val owner = permissions[id] ?: error("OpenCode permission request is no longer pending")
-                raw("POST", "/api/session/${encode(owner)}/permission/${encode(id)}/reply", Json.obj("decision" to input.get("reply"), "message" to input.get("message")))
+                raw("POST", "/api/session/${encode(owner)}/permission/${encode(id)}/reply", Json.obj("decision" to input.get("reply")).apply {
+                    permissionReplyMessage(input.str("reply"), input.get("message"))?.let { addProperty("message", it) }
+                })
                 permissions.remove(id)
             } else {
                 if (!forms.containsKey(id)) request("GET", "/question", null, options)
@@ -411,7 +413,23 @@ internal class OpenCodeV2Adapter(
                 "fork" -> return result(session(data("POST", "$endpoint/fork", Json.obj("before" to input.get("messageID"))).asJsonObject, options))
                 "revert" -> { raw("POST", "$endpoint/revert/stage", Json.obj("messageID" to input.get("messageID"), "files" to true)); return result(session(data("GET", endpoint).asJsonObject, options)) }
                 "unrevert" -> { raw("DELETE", "$endpoint/revert"); return result(session(data("GET", endpoint).asJsonObject, options)) }
-                "diff" -> return result(data("GET", endpoint + "/diff" + (query["messageID"]?.let { "?from=${encode(it)}" } ?: "")))
+                "revert-commit" -> { raw("POST", "$endpoint/revert/commit", Json.obj()); return result(session(data("GET", endpoint).asJsonObject, options)) }
+                "diff" -> {
+                    // V2 anchors a turn diff on one of its user messages, while callers usually
+                    // name the assistant reply. Only an unspecified message means the newest turn.
+                    val messageID = query["messageID"]
+                    var from = messageID
+                    if (messageID != null) {
+                        val messages = objects(data("GET", "$endpoint/message?limit=$DIFF_ANCHOR_SCAN_LIMIT&order=desc"))
+                        val index = messages.indexOfFirst { it.str("id") == messageID }
+                        // An older message outside the scanned page is passed through unchanged.
+                        if (index >= 0) {
+                            // A reply whose opening prompt is outside the page has no diff we can name.
+                            from = messages.drop(index).firstOrNull { it.str("type") == "user" }?.str("id") ?: return result(JsonArray())
+                        }
+                    }
+                    return result(data("GET", endpoint + "/diff" + (from?.let { "?from=${encode(it)}" } ?: "")))
+                }
                 "todo" -> {
                     objects(data("GET", "$endpoint/message?limit=100&order=desc")).forEach { message ->
                         if (message.str("type") == "assistant") message.arr("content").orEmpty().reversed().forEach { content ->
@@ -834,6 +852,20 @@ internal class OpenCodeV2Adapter(
     }
 
     companion object {
+        /** Recent messages scanned for the user prompt that opens a requested reply's turn. */
+        private const val DIFF_ANCHOR_SCAN_LIMIT = 200
+
+        /**
+         * V2 passes rejection feedback to the model verbatim as the tool error. Use V1's wording so
+         * the model reads it as a rejection with instructions, and Varro still labels the tool as
+         * rejected after reloads. Other replies never carry a message.
+         */
+        internal fun permissionReplyMessage(reply: String?, message: JsonElement?): String? {
+            val text = message?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isString }?.asString?.trim()
+            if (reply != "reject" || text.isNullOrEmpty()) return null
+            return "The user rejected permission to use this specific tool call with the following feedback: $text"
+        }
+
         internal fun objects(value: JsonElement?): List<JsonObject> = value.asArrayOrNull()?.map { it.asObjectOrNull() ?: error("Invalid OpenCode v2 record") } ?: error("Invalid OpenCode v2 list")
         internal fun encode(value: String) = URLEncoder.encode(value, Charsets.UTF_8).replace("+", "%20")
         private fun decode(value: String) = URLDecoder.decode(value, Charsets.UTF_8)

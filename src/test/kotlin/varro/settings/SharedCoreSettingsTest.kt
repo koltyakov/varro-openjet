@@ -8,6 +8,8 @@ class SharedCoreSettingsTest {
     @Test fun `shares model and core choices while preserving destination appearance`() {
         val source = VarroSettings().apply {
             commitMessageModel = "provider/commit"
+            reviewModel = "provider/review#high"
+            chatPromptCacheWarming = "all"
             chatAutoApproveModel = "provider/judge"
             chatPromptCompletionModel = "provider/completion"
             chatFollowupModel = "provider/followups"
@@ -23,6 +25,10 @@ class SharedCoreSettingsTest {
         assertFalse(shared.has("webviewOffscreenRendering"))
         SharedCoreSettings.apply(shared, destination)
         assertEquals("provider/commit", destination.commitMessageModel)
+        assertEquals("provider/review#high", destination.reviewModel)
+        // Warming spends tokens and can edit global OpenCode config, so it stays per IDE.
+        assertFalse(shared.has("chatPromptCacheWarming"))
+        assertEquals("off", destination.chatPromptCacheWarming)
         assertEquals("provider/judge", destination.chatAutoApproveModel)
         assertEquals("provider/completion", destination.chatPromptCompletionModel)
         assertEquals("provider/followups", destination.chatFollowupModel)

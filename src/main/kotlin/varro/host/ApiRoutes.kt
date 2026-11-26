@@ -66,7 +66,7 @@ object ApiRoutes {
 
     /** Session sub-resources that accept a POST action. */
     private val SESSION_ACTIONS = setOf(
-        "abort", "interrupt-child", "background-parent", "fork", "prompt_async", "resume-steering", "revert", "summarize", "unrevert", "init", "command", "side-question",
+        "abort", "interrupt-child", "background-parent", "fork", "prompt_async", "resume-steering", "revert", "revert-commit", "summarize", "unrevert", "init", "command", "side-question",
     )
 
     /**
@@ -222,6 +222,7 @@ object ApiRoutes {
         route("/provider/auth", methodsNoQuery("GET")),
         route("/auth/:id", methodsNoQuery("PUT", "DELETE")),
         route("/command", methodsNoQuery("GET")),
+        route("/skill", methodsNoQuery("GET")),
         route("/mcp", methodsNoQuery("GET")),
         route(Endpoints.MCP_DEFAULTS, methodsNoQuery("GET", "POST")),
         route(Endpoints.MCP_CONFIG, methodsNoQuery("POST")),
@@ -337,6 +338,9 @@ object ApiRoutes {
             request.method == "GET" && request.optionalDirectory()
         },
         route("${Endpoints.SESSION}/:id/pin") { request, _ ->
+            request.method == "POST" && request.optionalDirectory()
+        },
+        route("${Endpoints.SESSION}/:id/todo") { request, _ ->
             request.method == "POST" && request.optionalDirectory()
         },
         route("${Endpoints.SESSION}/:id/reorder-pin") { request, _ ->

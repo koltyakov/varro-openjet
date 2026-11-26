@@ -659,6 +659,13 @@ class RestProxy(
                 })
             }
 
+            "todo" -> {
+                require(sessionId !in store.hiddenSessionIds) { "404 Session not found" }
+                val todo = body.asObjectOrNull()?.get("todo")?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isBoolean }?.asBoolean
+                    ?: throw IllegalArgumentException("Invalid todo request")
+                Json.array(store.setTodoSession(sessionId, todo))
+            }
+
             "reorder-pin" -> {
                 // The client sends the session this one was dropped onto; the move
                 // is "put source where target currently is".

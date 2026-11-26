@@ -172,6 +172,7 @@ type EventHandlerDependencies = {
   judgePermission?(permission: Permission): Promise<void | boolean | object>;
   permissionReplied?(permissionId: string): void;
   permissionVisible?(permissionId: string): void;
+  fullAccessReplyFailed?(permission: Permission, cause: unknown): void;
   syncPendingPermissions?(): Promise<void | boolean | object>;
   reconcileServerState?(): Promise<void | boolean | object>;
   invalidateMessageSync?(sessionId: string): void;
@@ -222,6 +223,7 @@ type EventHandlerOperationDependencies = {
     | 'judgePermission'
     | 'permissionReplied'
     | 'permissionVisible'
+    | 'fullAccessReplyFailed'
     | 'isPermissionSessionKnown'
     | 'syncPermissionSession'
   > & {
@@ -301,6 +303,7 @@ export class SessionEventHandlerOperations {
       judgePermission: this.deps.sessionApprovalOperations.judgePermission,
       permissionReplied: this.deps.sessionApprovalOperations.permissionReplied,
       permissionVisible: this.deps.sessionApprovalOperations.permissionVisible,
+      fullAccessReplyFailed: this.deps.sessionApprovalOperations.fullAccessReplyFailed,
       syncPendingPermissions: this.deps.syncPendingPermissions,
       reconcileServerState: this.deps.reconcileServerState,
       invalidateMessageSync: this.deps.invalidateMessageSync,
@@ -1832,9 +1835,34 @@ export function registerSessionEventHandlers(deps: EventHandlerDependencies) {
       const sessionId = data.properties?.sessionID as string | undefined;
       if (!sessionId) return;
       invalidateMessageLoads(sessionId, true);
-      if (isSessionInActiveTree(sessionId)) scheduleMessageSync(sessionId, true);
+      if (!isSessionInActiveTree(sessionId)) return;
+      scheduleMessageSync(sessionId, true);
+      deps
+        .syncSession(sessionId)
+        .catch((err) => logWarn('session-event syncSession after revert commit', err));
     })
   );
+
+  // A staged rewind only marks the boundary on the session; OpenCode keeps the messages until
+  // it is committed or cleared. Refresh the session so the transcript hides or restores them.
+  for (const type of ['session.next.revert.staged', 'session.next.revert.cleared'] as const) {
+    cleanups.push(
+      serverEvents.on(type, (data) => {
+        const properties = data.properties;
+        if (!properties) return;
+        const sessionId = properties.sessionID;
+        if (!isString(sessionId) || !isSessionInActiveTree(sessionId)) return;
+        // Varro's own V2 message deletion stages and commits immediately while edit flows defer
+        // those removals; do not hide the rows they still own.
+        const revert = 'revert' in properties ? asRecord(properties.revert) : undefined;
+        const boundary = revert ? getEventString(revert, 'messageID') : undefined;
+        if (boundary && deps.isMessageRemovalDeferred?.(sessionId, boundary)) return;
+        deps
+          .syncSession(sessionId)
+          .catch((err) => logWarn(`session-event syncSession after ${type}`, err));
+      })
+    );
+  }
 
   cleanups.push(
     ...registerReasoningEventHandlers({

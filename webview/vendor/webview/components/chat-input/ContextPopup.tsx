@@ -9,7 +9,7 @@ import {
   squareIcon,
   reportsIcon,
 } from '../../lib/ui-icons';
-import { formatCost, formatNumber } from '../../lib/message-metrics';
+import { formatCost, formatNumber, formatTokenCount } from '../../lib/message-metrics';
 import {
   alignPopupToBoundary,
   clampPopupToViewport,
@@ -23,12 +23,19 @@ import type {
 import { Tooltip } from '../Tooltip';
 import { UiIcon } from '../UiIcon';
 import { isFunction } from '../../lib/runtime-values';
+import { useSecondClock } from '../../lib/clock';
+import { formatDuration } from '../../lib/time-format';
+import type { PromptCacheWarmingSession } from '../../../shared/protocol';
 
 const CONTEXT_USAGE_WARNING_PERCENT = 70;
 const CONTEXT_USAGE_ERROR_PERCENT = 90;
 const CONTEXT_COMPACT_ACTION_PERCENT = 30;
 const CACHE_READ_TOOLTIP =
   "Tokens reused from the provider's prompt cache. They count toward the context window but are excluded from session totals.";
+/** Common provider default; Anthropic and OpenAI both keep an idle prompt cache about this long. */
+export const PROMPT_CACHE_TTL_ESTIMATE_MS = 5 * 60_000;
+const PROMPT_CACHE_TOOLTIP =
+  "Estimated from the last response that read or wrote the provider's prompt cache. Most providers keep it about 5 minutes after the last request, some longer. Sending while it is warm is usually cheaper and faster.";
 const CACHE_WRITE_TOOLTIP =
   "Tokens stored in the provider's prompt cache for reuse by later requests. They count toward session input and totals.";
 
@@ -53,6 +60,23 @@ type ContextTokens = {
 };
 
 export type ContextPopupModel = { providerName: string; modelName: string };
+
+/** When the session's latest completed response last used the prompt cache. */
+export type PromptCacheActivity = { lastUsedAt: number; inUse: boolean };
+
+/** Keep-alive state for the composer's root session; absent when warming is off or unavailable. */
+export type PromptCacheWarmingView =
+  | { kind: 'opencode' }
+  | {
+      kind: 'chosen';
+      enabled: boolean;
+      session: PromptCacheWarmingSession | null;
+      intervalMs: number;
+      durationMs: number;
+    };
+
+const PROMPT_CACHE_WARMING_TOOLTIP =
+  "Sends a short keep-alive with the whole session context just before the provider's cache would expire, for a while after each reply. Each keep-alive re-reads the context from the cache, which costs money or subscription quota. With typical pricing, about twelve keep-alives cost as much as re-sending the context once uncached, so long windows only pay off if you come back soon.";
 
 type ContextTokenRow = {
   key: 'input' | 'output' | 'reasoning' | 'cacheRead' | 'cacheWrite';
@@ -87,6 +111,130 @@ function getTokenRows(tokens: ContextTokens): ContextTokenRow[] {
     items.push({ key: 'cacheWrite', label: 'Cache write', value: tokens.cacheWrite });
   }
   return items;
+}
+
+function formatCountdown(ms: number) {
+  const seconds = Math.ceil(ms / 1000);
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
+}
+
+function PromptCacheRow(props: { activity: PromptCacheActivity }) {
+  const now = useSecondClock(() => !props.activity.inUse);
+  const remaining = () => props.activity.lastUsedAt + PROMPT_CACHE_TTL_ESTIMATE_MS - now();
+  const status = () => {
+    if (props.activity.inUse) return { tone: 'warm', text: 'In use', countdown: '' };
+    const left = remaining();
+    return left > 0
+      ? { tone: 'warm', text: 'Warm', countdown: formatCountdown(left) }
+      : { tone: 'cold', text: 'Likely expired', countdown: '' };
+  };
+
+  return (
+    <div class="context-popup-row context-popup-prompt-cache" data-tone={status().tone}>
+      <span class="context-popup-row-label">
+        Prompt cache
+        <Tooltip content={PROMPT_CACHE_TOOLTIP}>
+          <span class="context-popup-cost-info" tabindex="0" aria-label="Prompt cache estimate">
+            <UiIcon source={infoCircleIcon} width="11" height="11" />
+          </span>
+        </Tooltip>
+      </span>
+      <span class="context-popup-row-value">
+        {status().text}
+        <Show when={status().countdown}>
+          {(countdown) => <span class="context-popup-prompt-cache-countdown">{countdown()}</span>}
+        </Show>
+      </span>
+    </div>
+  );
+}
+
+type WarmingDescription = { status: string; detail: string | null };
+
+function describeWarming(
+  view: Extract<PromptCacheWarmingView, { kind: 'chosen' }>,
+  contextTokens: number,
+  now: number
+): WarmingDescription {
+  const session = view.session;
+  if (!view.enabled || !session) {
+    const tokens = contextTokens > 0 ? `~${formatTokenCount(contextTokens)}` : 'the';
+    return {
+      status: 'Off',
+      detail: `Re-reads ${tokens} cached tokens every ${Math.round(view.intervalMs / 60_000)} min while on`,
+    };
+  }
+  if (session.stopped === 'cache-miss') {
+    return { status: 'Stopped', detail: 'The cache had already expired' };
+  }
+  if (session.stopped === 'failed') return { status: 'Stopped', detail: 'A keep-alive failed' };
+  if (session.warmUntil === null) return { status: 'After reply', detail: null };
+  if (session.stopped === 'expired' || session.warmUntil <= now) {
+    return { status: 'Ended', detail: 'Restarts after the next reply' };
+  }
+  return {
+    status: `${formatDuration(Math.ceil((session.warmUntil - now) / 60_000) * 60_000)} left`,
+    detail: null,
+  };
+}
+
+function PromptCacheWarmingRow(props: {
+  view: PromptCacheWarmingView;
+  contextTokens: number;
+  onToggle?: (enabled: boolean) => void;
+}) {
+  const chosen = () => (props.view.kind === 'chosen' ? props.view : null);
+  const now = useSecondClock(() => !!chosen()?.session?.warmUntil);
+  return (
+    <div class="context-popup-row context-popup-prompt-cache-warming">
+      <span class="context-popup-row-label">
+        <Show when={chosen()} fallback={<span>Kept warm by OpenCode</span>}>
+          {(view) => (
+            <label class="context-breakdown-nested context-popup-warming-toggle">
+              <input
+                type="checkbox"
+                checked={view().enabled}
+                onChange={(event) => props.onToggle?.(event.currentTarget.checked)}
+              />
+              <UiIcon
+                source={view().enabled ? checkSquareIcon : squareIcon}
+                class="context-breakdown-checkbox"
+                width="16"
+                height="16"
+              />
+              <span>Keep warm</span>
+            </label>
+          )}
+        </Show>
+        <Tooltip
+          content={
+            chosen()
+              ? PROMPT_CACHE_WARMING_TOOLTIP
+              : "OpenCode's warming setting keeps every session's cache alive after each reply."
+          }
+        >
+          <span class="context-popup-cost-info" tabindex="0" aria-label="Keep warm details">
+            <UiIcon source={infoCircleIcon} width="11" height="11" />
+          </span>
+        </Tooltip>
+      </span>
+      <Show when={chosen()}>
+        {(view) => {
+          const description = () => describeWarming(view(), props.contextTokens, now());
+          return (
+            <>
+              <span class="context-popup-row-value context-popup-warming-status">
+                {description().status}
+              </span>
+              <Show when={description().detail}>
+                {(detail) => <span class="context-popup-warming-detail">{detail()}</span>}
+              </Show>
+            </>
+          );
+        }}
+      </Show>
+    </div>
+  );
 }
 
 function formatModelName(model: ContextPopupModel) {
@@ -127,6 +275,9 @@ export function ContextPopup(props: {
   model: { providerName: string; modelName: string };
   /** Models with recorded usage across the session tree; more than one marks mixed usage. */
   models?: ContextPopupModel[];
+  promptCache?: PromptCacheActivity | null;
+  warming?: PromptCacheWarmingView | null;
+  onToggleWarming?: (enabled: boolean) => void;
   compactDisabled: boolean;
   showCompactAction?: boolean;
   onClose: () => void;
@@ -259,6 +410,18 @@ export function ContextPopup(props: {
               </span>
               <span class="context-popup-row-value">{cost()}</span>
             </div>
+          )}
+        </Show>
+        <Show when={props.promptCache}>
+          {(activity) => <PromptCacheRow activity={activity()} />}
+        </Show>
+        <Show when={props.promptCache && props.warming}>
+          {(view) => (
+            <PromptCacheWarmingRow
+              view={view()}
+              contextTokens={props.usage.used}
+              onToggle={props.onToggleWarming}
+            />
           )}
         </Show>
       </div>

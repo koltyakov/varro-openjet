@@ -475,10 +475,11 @@ export const client = {
       sessionId: string,
       permissionId: string,
       response: 'once' | 'always' | 'reject',
-      options?: { permissionAutomationLease?: number }
+      options?: { permissionAutomationLease?: number; message?: string }
     ): Promise<boolean> {
       const path = `/permission/${encodeURIComponent(permissionId)}/reply`;
-      const body = { reply: response };
+      const message = response === 'reject' ? options?.message?.trim() : undefined;
+      const body = message ? { reply: response, message } : { reply: response };
       return options?.permissionAutomationLease === undefined
         ? apiCall('POST', path, body)
         : apiCall('POST', path, body, {
@@ -568,6 +569,13 @@ export const client = {
       return apiCall(
         'POST',
         withDirectory(`/session/${encodeURIComponent(id)}/unrevert`, options?.directory)
+      );
+    },
+    /** V2 only: permanently removes the messages hidden by a staged rewind. */
+    async commitRevert(id: string, options?: { directory?: string }): Promise<Session> {
+      return apiCall(
+        'POST',
+        withDirectory(`/session/${encodeURIComponent(id)}/revert-commit`, options?.directory)
       );
     },
     async compact(
@@ -868,6 +876,17 @@ export const client = {
           { pinned }
         );
       },
+      async setTodo(
+        sessionID: string,
+        todo: boolean,
+        options?: { directory?: string }
+      ): Promise<string[]> {
+        return apiCall(
+          'POST',
+          withDirectory(buildVarroSessionEndpoint(sessionID, 'todo'), options?.directory),
+          { todo }
+        );
+      },
       async reorderPinned(
         sourceSessionID: string,
         targetSessionID: string,
@@ -1103,6 +1122,7 @@ export const client = {
         | 'small_model'
         | 'agent'
         | 'commit_message'
+        | 'review'
         | 'auto_approve'
         | 'prompt_completion'
         | 'followups';
@@ -1250,6 +1270,14 @@ export const client = {
     },
   },
 
+  skill: {
+    async list(): Promise<SkillSummary[]> {
+      return requireArray<unknown>(await apiCall('GET', '/skill'), '/skill').flatMap(
+        parseSkillSummary
+      );
+    },
+  },
+
   question: {
     async list(): Promise<QuestionRequest[]> {
       // Each reconciliation captures its own baseline and needs a fresh snapshot.
@@ -1298,6 +1326,33 @@ function requireArray<T, V = unknown>(value: V, path: string): T[] {
   // SAFETY: The surrounding shape or discriminator check establishes the T contract used below.
   return value as T[];
 }
+
+export type SkillSummary = {
+  id: string;
+  name: string;
+  description: string;
+  /** SKILL.md location; absent for skills served on demand, such as MCP skills. */
+  path?: string;
+};
+
+/* oxlint-disable anti-slop/no-unknown-parameters -- Validate untrusted skill entries at the client boundary. */
+function parseSkillSummary(value: unknown): SkillSummary[] {
+  const record = asRecord(value);
+  if (!record) return [];
+  // V2 skills have an invocable ID; V1 skills are invoked by name.
+  const id = isString(record.id) && record.id ? record.id : record.name;
+  if (!isString(id) || !id) return [];
+  const location = isString(record.path) ? record.path : record.location;
+  const skill: SkillSummary = {
+    id,
+    name: isString(record.name) && record.name ? record.name : id,
+    description: isString(record.description) ? record.description : '',
+  };
+  // Built-in skills report virtual locations: V2 uses skill:// URIs and V1 uses "<built-in>".
+  if (isString(location) && /^(?:\/|[A-Za-z]:[\\/]|\\\\)/.test(location)) skill.path = location;
+  return [skill];
+}
+/* oxlint-enable anti-slop/no-unknown-parameters */
 
 /* oxlint-disable anti-slop/no-unknown-parameters -- Validate the untrusted MCP defaults REST response at the client boundary. */
 function parseMcpDefaults(value: unknown): McpDefaults {

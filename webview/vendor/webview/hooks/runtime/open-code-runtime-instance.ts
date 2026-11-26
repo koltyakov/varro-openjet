@@ -164,6 +164,9 @@ function invalidateClientWorkspaceState() {
   clientModule.invalidateClientWorkspaceCaches();
 }
 
+/** `message` is optional rejection feedback the agent receives instead of the denied action. */
+export type ManualPermissionResponseOptions = { rethrow?: boolean; message?: string };
+
 export type SendMessageOptions = {
   messageId?: string;
   agent?: string;
@@ -241,7 +244,7 @@ export interface OpenCodeRuntime {
     sessionId: string,
     permissionId: string,
     response: 'once' | 'always' | 'reject',
-    options?: { rethrow?: boolean }
+    options?: ManualPermissionResponseOptions
   ): Promise<void>;
   alwaysAllowPermissionForProject(
     sessionId: string,
@@ -406,6 +409,9 @@ function clearReviewingAutoApproveActivity(permission: Pick<Permission, 'id' | '
     )
   );
 }
+
+const FULL_ACCESS_REPLY_RETRY_DELAYS_MS = [1_000, 4_000, 15_000] as const;
+const RESOLVED_FULL_ACCESS_REPLY_LIMIT = 500;
 
 function showPermissionAfterJudge(
   attempt: PermissionJudgeAttempt,
@@ -1223,6 +1229,14 @@ export function createOpenCodeRuntime(): OpenCodeRuntime {
   }
   const permissionJudgeAttempts = new Map<string, PermissionJudgeAttempt>();
   const pendingPermissionSnapshot = new Map<string, Permission>();
+  // Full access keeps a failed automatic reply hidden while its rules settle, then retries it
+  // through fresh pending snapshots and reveals it after the final retry.
+  const fullAccessReplyRetries = new Map<
+    string,
+    { attempts: number; exhausted?: boolean; timer?: ReturnType<typeof setTimeout> }
+  >();
+  /** Requests whose reply event arrived; a late failed automatic reply must not retry them. */
+  const resolvedFullAccessReplies = new Set<string>();
   let permissionSynchronization: { ready: Promise<void>; complete: Promise<void> } | null = null;
   let initializationOperation: Promise<void> | null = null;
   let startupStatusSnapshot: { workspace: number; snapshot: SessionStatusSnapshot } | null = null;
@@ -1395,6 +1409,7 @@ export function createOpenCodeRuntime(): OpenCodeRuntime {
         permissionVisible: (permissionId) => {
           postMessage({ type: 'permission/reveal', payload: { permissionId } });
         },
+        fullAccessReplyFailed: recoverFullAccessReply,
         isPermissionSessionKnown,
         syncPermissionSession: ensurePermissionSessionKnown,
       },
@@ -1477,10 +1492,12 @@ export function createOpenCodeRuntime(): OpenCodeRuntime {
         setPermissionAutomation: (owner, lease) => {
           const nextOwner = owner && lease !== undefined;
           const becameOwner = nextOwner && !permissionAutomationOwner;
+          // A new lease rejects replies started under the old one, so reconcile them again.
+          const leaseRotated = nextOwner && !becameOwner && lease !== permissionAutomationLease;
           permissionAutomationOwner = nextOwner;
           permissionAutomationLease = lease;
           if (owner) hideAutomaticallyHandledRestoredPermissions();
-          if (becameOwner) {
+          if (becameOwner || leaseRotated) {
             void syncPendingPermissions().catch((err) => logError('permission.ownership', err));
           }
         },
@@ -1823,6 +1840,10 @@ export function createOpenCodeRuntime(): OpenCodeRuntime {
         if (!pendingPermissionIds.has(id) && !reconciliation.changedPermissionIds.has(id))
           pendingPermissionSnapshot.delete(id);
       }
+      for (const id of fullAccessReplyRetries.keys()) {
+        if (!pendingPermissionIds.has(id) && !reconciliation.changedPermissionIds.has(id))
+          clearFullAccessReplyRetry(id);
+      }
       for (const permission of normalizedPendingPermissions) {
         if (!reconciliation.changedPermissionIds.has(permission.id))
           pendingPermissionSnapshot.set(permission.id, permission);
@@ -1853,14 +1874,15 @@ export function createOpenCodeRuntime(): OpenCodeRuntime {
             permissionAutomationLease,
           })
           .then(() => {
+            clearFullAccessReplyRetry(permission.id);
             if (pendingPermissionSnapshot.get(permission.id) === permission)
               pendingPermissionSnapshot.delete(permission.id);
           })
-          .catch(() => {
-            if (
-              isCurrent() &&
-              permissionsStore.getPermissionModeForSession(permission.sessionID) !== 'full'
-            ) {
+          // oxlint-disable-next-line anti-slop/no-unknown-parameters -- Reply transports may reject with arbitrary thrown values.
+          .catch((error: unknown) => {
+            if (permissionsStore.getPermissionModeForSession(permission.sessionID) === 'full') {
+              recoverFullAccessReply(permission, error);
+            } else if (isCurrent()) {
               permissionsStore.addPermission(permission);
               postMessage({ type: 'permission/reveal', payload: { permissionId: permission.id } });
             }
@@ -1902,6 +1924,11 @@ export function createOpenCodeRuntime(): OpenCodeRuntime {
           permission.sessionID
         );
         if (permissionAutomationOwner && !modePending && !modeRecovering && mode === 'full') {
+          // After its retries ran out, a full-access request stays a visible prompt.
+          if (fullAccessReplyRetries.get(permission.id)?.exhausted) {
+            visiblePermissions.push(permission);
+            continue;
+          }
           pendingPermissionHandlers.push(respondFull(permission));
           continue;
         }
@@ -2117,6 +2144,12 @@ export function createOpenCodeRuntime(): OpenCodeRuntime {
           'auto-review-failed',
           `Could not apply the automatic decision: ${getPermissionJudgeErrorMessage(err)}`
         );
+      } else if (permissionAutomationOwner) {
+        // The hidden attempt was superseded before its reply failed. A fresh snapshot
+        // re-judges the request if it is still pending and drops it if it resolved.
+        void syncPendingPermissions({ fresh: true }).catch((error) =>
+          logError('autoApproveJudge', error)
+        );
       }
     } finally {
       finishPermissionJudgeAttempt(attempt);
@@ -2216,7 +2249,51 @@ export function createOpenCodeRuntime(): OpenCodeRuntime {
     }
   }
 
+  function clearFullAccessReplyRetry(permissionId: string) {
+    const retry = fullAccessReplyRetries.get(permissionId);
+    if (retry?.timer) clearTimeout(retry.timer);
+    fullAccessReplyRetries.delete(permissionId);
+  }
+
+  function recoverFullAccessReply(permission: Permission, cause: unknown) {
+    logError('permission.full-access', cause);
+    // A view that lost ownership leaves the request to the current owner, which
+    // reconciles it from a fresh pending snapshot when it receives its lease. A late
+    // failure for an already answered request must not start a new retry.
+    if (!permissionAutomationOwner || resolvedFullAccessReplies.has(permission.id)) return;
+    const retry = fullAccessReplyRetries.get(permission.id) ?? { attempts: 0 };
+    fullAccessReplyRetries.set(permission.id, retry);
+    // Concurrent failures of the same request share the already scheduled retry.
+    if (retry.timer) return;
+    const delay = retry.exhausted ? undefined : FULL_ACCESS_REPLY_RETRY_DELAYS_MS[retry.attempts];
+    if (delay === undefined) {
+      // Stay visible until a reply or an authoritative omission; later snapshots keep it.
+      retry.exhausted = true;
+      permissionsStore.addPermission(permission);
+      postMessage({ type: 'permission/reveal', payload: { permissionId: permission.id } });
+      return;
+    }
+    retry.attempts += 1;
+    retry.timer = setTimeout(() => {
+      retry.timer = undefined;
+      if (fullAccessReplyRetries.get(permission.id) !== retry) return;
+      // A failed snapshot read counts as a failed attempt and schedules the next one, unless
+      // a reply or omission resolved the request while the read was in flight.
+      void syncPendingPermissions({ fresh: true }).catch((err) => {
+        if (fullAccessReplyRetries.get(permission.id) === retry) {
+          recoverFullAccessReply(permission, err);
+        }
+      });
+    }, delay);
+  }
+
   function markPermissionJudgeResponded(permissionId: string) {
+    clearFullAccessReplyRetry(permissionId);
+    resolvedFullAccessReplies.add(permissionId);
+    if (resolvedFullAccessReplies.size > RESOLVED_FULL_ACCESS_REPLY_LIMIT) {
+      const oldest = resolvedFullAccessReplies.values().next().value;
+      if (oldest !== undefined) resolvedFullAccessReplies.delete(oldest);
+    }
     pendingPermissionSnapshot.delete(permissionId);
     const attempt = permissionJudgeAttempts.get(permissionId);
     if (!attempt) return;
@@ -2426,6 +2503,9 @@ export function createOpenCodeRuntime(): OpenCodeRuntime {
     }
     permissionJudgeAttempts.clear();
     pendingPermissionSnapshot.clear();
+    for (const permissionId of fullAccessReplyRetries.keys()) {
+      clearFullAccessReplyRetry(permissionId);
+    }
     permissionSynchronization = null;
     permissionSessionSyncs.clear();
   }
@@ -2961,8 +3041,12 @@ export function createOpenCodeRuntime(): OpenCodeRuntime {
   });
 
   const sessionApprovalOperations = new SessionApprovalOperations({
-    respondRemotePermission: (sessionId, permissionId, response) =>
-      client.session.respondPermission(sessionId, permissionId, response),
+    respondRemotePermission: (sessionId, permissionId, response, options) =>
+      options?.message
+        ? client.session.respondPermission(sessionId, permissionId, response, {
+            message: options.message,
+          })
+        : client.session.respondPermission(sessionId, permissionId, response),
     respondAutomaticPermission: (sessionId, permissionId, response, lease) => {
       const currentLease = lease ?? permissionAutomationLease;
       return currentLease === undefined
@@ -3489,7 +3573,7 @@ export function createOpenCodeRuntime(): OpenCodeRuntime {
     sessionId: string,
     permissionId: string,
     response: 'once' | 'always' | 'reject',
-    options?: { rethrow?: boolean }
+    options?: ManualPermissionResponseOptions
   ) {
     const permission = appStore.state.permissions.find((item) => item.id === permissionId);
     const groupMembers = permission ? permissionsStore.getPermissionGroupMembers(permission) : [];
@@ -3540,7 +3624,9 @@ export function createOpenCodeRuntime(): OpenCodeRuntime {
           member,
           response === 'reject' ? 'manually-rejected' : 'manually-approved',
           response === 'reject'
-            ? 'Rejected manually.'
+            ? options?.message?.trim()
+              ? 'Rejected manually with instructions.'
+              : 'Rejected manually.'
             : response === 'always'
               ? 'Approved manually for matching future requests.'
               : 'Approved manually once.'
