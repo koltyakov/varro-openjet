@@ -21,7 +21,7 @@ import com.intellij.openapi.ui.popup.JBPopupFactory
 import com.intellij.openapi.ui.popup.JBPopupListener
 import com.intellij.openapi.ui.popup.LightweightWindowEvent
 import com.intellij.openapi.vcs.CheckinProjectPanel
-import com.intellij.openapi.vcs.ProjectLevelVcsManager
+import com.intellij.openapi.roots.ProjectRootManager
 import com.intellij.openapi.vcs.ui.Refreshable
 import varro.host.VarroProjectService
 import varro.host.Walkthrough
@@ -222,11 +222,23 @@ class WalkThroughChangesAction : AnAction(), DumbAware {
     private fun repositoryRoots(event: AnActionEvent, project: Project): List<String> {
         val panel = Refreshable.PANEL_KEY.getData(event.dataContext) as? CheckinProjectPanel
         panel?.roots?.map { it.path }?.takeIf { it.isNotEmpty() }?.let { return it.distinct().sorted() }
-        val git = ProjectLevelVcsManager.getInstance(project).allVcsRoots
-            .filter { it.vcs?.name == "Git" }
-            .map { it.path.path }
+        // Content roots and their nearest Git working tree. ProjectLevelVcsManager's Kotlin
+        // accessors differ across supported IDE versions, so stable root APIs are used instead.
+        val contentRoots = listOfNotNull(project.guessProjectDir()?.path ?: project.basePath) +
+            ProjectRootManager.getInstance(project).contentRoots.map { it.path }
+        val git = contentRoots.mapNotNull(::gitWorkingTree)
         if (git.isNotEmpty()) return git.distinct().sorted()
-        return listOfNotNull(project.guessProjectDir()?.path ?: project.basePath)
+        return contentRoots.take(1)
+    }
+
+    /** Walks up to the nearest `.git` entry, a directory in clones and a file in worktrees. */
+    private fun gitWorkingTree(path: String): String? {
+        var current: java.nio.file.Path? = runCatching { java.nio.file.Path.of(path) }.getOrNull()
+        while (current != null) {
+            if (java.nio.file.Files.exists(current.resolve(".git"))) return current.toString()
+            current = current.parent
+        }
+        return null
     }
 
     private fun chooseRepository(event: AnActionEvent, project: Project): String? {
