@@ -72,6 +72,7 @@ import { DiffView } from './DiffView';
 import type { DiffViewFile } from './DiffView';
 import { ClampedToolText } from './ClampedToolText';
 import { CopyIconButton } from './CopyIconButton';
+import { OpenTextIconButton } from './OpenTextIconButton';
 import { FileTypeIcon } from './FileTypeIcon';
 import { FolderTypeIcon, hasRecognizedFolderType } from './FolderTypeIcon';
 import { isBoolean, isNumber, isString } from '../lib/runtime-values';
@@ -92,12 +93,14 @@ import {
 } from '../lib/ui-icons';
 import { createAltKeyTracker } from './alt-key-tracker';
 import { UiIcon } from './UiIcon';
+import { getAgentIcon } from '../lib/agent-icons';
 import { ChildTaskControls } from './chat/ChildTaskControls';
 
 export { resetToolCallExpansionState } from '../lib/tool-call-expansion-state';
 
 const isPathKey = (key: string) => key === 'file_path' || key === 'path';
 const MIN_VISIBLE_TOOL_DURATION_MS = 1000;
+const DEFAULT_TASK_AGENT = 'general';
 const { pressed: taskActivityAltPressed, retain: retainTaskActivityAltListener } =
   createAltKeyTracker();
 
@@ -1548,6 +1551,15 @@ function GenericToolCall(props: {
     const label = type.trim();
     return `${label.charAt(0).toUpperCase()}${label.slice(1)} subagent`;
   };
+  // The default `general` subagent stays unlabeled; any other type is named in the header.
+  const taskAgentBadge = createMemo(() => {
+    if (!isTask()) return null;
+    const type = taskAgent();
+    const name = isString(type) ? type.trim() : '';
+    if (!name || name.toLowerCase() === DEFAULT_TASK_AGENT) return null;
+    const agent = appState.allAgents.find((candidate) => candidate.name === name);
+    return { name, icon: getAgentIcon(agent ?? { name, options: {} }) };
+  });
   const taskSessionId = createMemo(() => {
     if (!isTask()) return null;
     if (
@@ -2157,6 +2169,20 @@ function GenericToolCall(props: {
             class={`tool-invocation-title${statusClass() === 'tool-status-running' && !isTask() ? ' shimmer-progress' : ''}`}
           >
             {props.title}
+            {/* Inline in the title so both truncate as one run with a single ellipsis. */}
+            <Show when={taskAgentBadge()}>
+              {(badge) => (
+                <span class="tool-invocation-agent" title={taskAgentLabel()}>
+                  <UiIcon
+                    source={badge().icon}
+                    class="tool-invocation-agent-icon"
+                    width={12}
+                    height={12}
+                  />
+                  {badge().name}
+                </span>
+              )}
+            </Show>
           </span>
           <Show when={isBackgroundLaunch() && waitingForPermission() && !taskRetryStatus()}>
             <span class="tool-invocation-task-status" role="status">
@@ -2240,6 +2266,12 @@ function GenericToolCall(props: {
           </Show>
         </button>
         <Show when={showHeaderCommandCopy()}>
+          <OpenTextIconButton
+            content={bashCommand()}
+            title={`${props.title} (command)`}
+            label="command"
+            language="shellscript"
+          />
           <CopyIconButton text={bashCommand()} label="command" />
         </Show>
       </div>
@@ -2292,7 +2324,7 @@ function GenericToolCall(props: {
             >
               <div class="terminal-command-card">
                 <Show when={showBashCommandRow()}>
-                  <TerminalCommandRow command={bashCommand()} />
+                  <TerminalCommandRow command={bashCommand()} title={props.title} />
                 </Show>
                 <Show when={props.state.status === 'completed'}>
                   <div class="terminal-command-row terminal-command-row-output">
@@ -2396,13 +2428,19 @@ function GenericToolCall(props: {
  * below it, not something to read in full here. Copy is the escape hatch, so
  * an ellipsized command is still recoverable in one click.
  */
-function TerminalCommandRow(props: { command: string }) {
+function TerminalCommandRow(props: { command: string; title: string }) {
   return (
     <div class="terminal-command-row terminal-command-row-input">
       <span class="terminal-command-prompt" aria-hidden="true">
         $
       </span>
       <pre class="terminal-command-text terminal-command-single-line">{props.command}</pre>
+      <OpenTextIconButton
+        content={props.command}
+        title={`${props.title} (command)`}
+        label="command"
+        language="shellscript"
+      />
       <CopyIconButton text={props.command} label="command" />
     </div>
   );
@@ -2534,6 +2572,12 @@ function StructuredToolCard(props: {
                   <pre class="structured-tool-value structured-tool-value-single">
                     {formatExpandedValue(key, value)}
                   </pre>
+                  <OpenTextIconButton
+                    content={formatExpandedValue(key, value)}
+                    title={`${props.toolTitle} (${key})`}
+                    label={key}
+                    language="plaintext"
+                  />
                   <CopyIconButton text={formatExpandedValue(key, value)} label={key} />
                 </div>
               )}

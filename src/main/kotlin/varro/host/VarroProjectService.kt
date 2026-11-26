@@ -63,6 +63,7 @@ class VarroProjectService(private val project: Project) : Disposable {
     private val proxies = java.util.concurrent.ConcurrentHashMap<WebviewHost, RestProxy>()
     @Volatile private var focusedHost: WebviewHost? = null
     private val chatProviders = java.util.concurrent.ConcurrentHashMap<WebviewHost, String>()
+    private val commandHistory = java.util.concurrent.ConcurrentHashMap<WebviewHost, CommandHistoryState>()
 
     /**
      * The one surface that runs Full/Auto permission automation. Without an owner
@@ -313,6 +314,7 @@ class VarroProjectService(private val project: Project) : Disposable {
         Disposer.register(host) {
             panels.remove(host)
             chatProviders.remove(host)
+            commandHistory.remove(host)
             proxies.remove(host)?.dispose()
             if (focusedHost === host) focusedHost = null
             queue.detach(viewId)
@@ -738,7 +740,8 @@ class VarroProjectService(private val project: Project) : Disposable {
                 "vscode/open-text" -> editor.openText(
                     content = payload.str("content").orEmpty(),
                     title = payload.str("title") ?: "Varro",
-                    language = payload.str("language"),
+                    language = EditorIntegration.openTextLanguage(payload),
+                    previewOnly = payload.str("view") == "markdown-preview",
                 )
 
                 "vscode/open-external" -> payload.str("url")?.let(::openExternal)
@@ -907,8 +910,10 @@ class VarroProjectService(private val project: Project) : Disposable {
                 }
                 "webview/focus" -> if (payload.bool("focused") == true) focusedHost = host
                 "commands/state" -> host?.let {
-                    if (payload.bool("canAbort") == null || payload.bool("canSwitchSessions") == null ||
+                    val history = CommandHistoryState.parse(payload)
+                    if (payload.bool("canAbort") == null || payload.bool("canSwitchSessions") == null || history == null ||
                         (payload?.has("modelVisible") == true && payload.bool("modelVisible") == null)) return
+                    commandHistory[it] = history
                     val provider = payload.obj("model").text("providerID")?.takeIf { payload.bool("modelVisible") != false }
                     if (provider == null) chatProviders.remove(it) else chatProviders[it] = provider
                 }
@@ -1108,8 +1113,21 @@ class VarroProjectService(private val project: Project) : Disposable {
     fun abort() { focusedHost?.post("command/abort") ?: sidebarCommand("command/abort") }
 
     fun switchSession(direction: String) {
-        (focusedHost ?: panels.firstOrNull { it.surface == WebviewHost.Surface.SIDEBAR })
-            ?.post("command/switch-session", Json.obj("direction" to direction))
+        commandTarget()?.post("command/switch-session", Json.obj("direction" to direction))
+    }
+
+    private fun commandTarget() = focusedHost ?: panels.firstOrNull { it.surface == WebviewHost.Surface.SIDEBAR }
+
+    /** Whether [host], or the focused chat by default, reported a Back/Forward entry. */
+    fun canNavigateHistory(direction: SessionHistoryDirection, host: WebviewHost? = null): Boolean {
+        val target = host ?: commandTarget() ?: return false
+        return commandHistory[target]?.allows(direction) == true
+    }
+
+    /** Port of `varro.chat.navigateBack` / `navigateForward`; the webview owns the history. */
+    fun navigateHistory(direction: SessionHistoryDirection, host: WebviewHost? = null) {
+        val target = host ?: commandTarget() ?: return
+        target.post("command/navigate-history", Json.obj("direction" to direction.wire))
     }
 
     fun addProblems(diagnostics: JsonArray) {

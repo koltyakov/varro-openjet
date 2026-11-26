@@ -4,10 +4,17 @@ import com.intellij.openapi.actionSystem.ActionUpdateThread
 import com.intellij.openapi.actionSystem.AnAction
 import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.actionSystem.CommonDataKeys
+import com.intellij.openapi.actionSystem.IdeActions
+import com.intellij.openapi.actionSystem.KeyboardShortcut
+import com.intellij.openapi.actionSystem.Shortcut
+import com.intellij.openapi.actionSystem.ShortcutSet
+import com.intellij.openapi.keymap.KeymapManager
 import com.intellij.openapi.project.DumbAware
 import com.intellij.openapi.project.Project
 import varro.host.VarroProjectService
 import varro.host.DatabaseContextSource
+import varro.host.SessionHistoryDirection
+import varro.host.WebviewHost
 
 /**
  * IDE commands around the chat surface.
@@ -65,6 +72,65 @@ class PreviousSessionAction : VarroAction() {
 class NextSessionAction : VarroAction() {
     override fun perform(project: Project, service: VarroProjectService, event: AnActionEvent) =
         service.switchSession("next")
+}
+
+/** `varro.chat.navigateBack` / `varro.chat.navigateForward` - browser-style session history. */
+abstract class NavigateSessionHistoryAction(private val direction: SessionHistoryDirection) : VarroAction() {
+    override fun perform(project: Project, service: VarroProjectService, event: AnActionEvent) =
+        service.navigateHistory(direction)
+
+    override fun update(event: AnActionEvent) {
+        // Without a chat surface there is no history, so do not create the service here.
+        event.presentation.isEnabled = event.project
+            ?.getServiceIfCreated(VarroProjectService::class.java)
+            ?.canNavigateHistory(direction) == true
+    }
+}
+
+class NavigateBackAction : NavigateSessionHistoryAction(SessionHistoryDirection.BACK)
+
+class NavigateForwardAction : NavigateSessionHistoryAction(SessionHistoryDirection.FORWARD)
+
+/**
+ * The IDE's Back and Forward keyboard shortcuts move through session history
+ * while the tool window chat has focus. Upstream binds VS Code's Go Back keys
+ * to the sidebar the same way. A disabled binding leaves the key to the IDE's
+ * own navigation, as upstream's `varro:canNavigateBack` context does.
+ */
+class ChatHistoryShortcut private constructor(
+    private val service: VarroProjectService,
+    private val host: WebviewHost,
+    private val direction: SessionHistoryDirection,
+) : AnAction(), DumbAware {
+
+    override fun actionPerformed(event: AnActionEvent) = service.navigateHistory(direction, host)
+
+    override fun update(event: AnActionEvent) {
+        event.presentation.isEnabled = service.canNavigateHistory(direction, host)
+    }
+
+    override fun getActionUpdateThread(): ActionUpdateThread = ActionUpdateThread.BGT
+
+    /** Reads the active keymap on each lookup so keymap edits apply without reopening the tool window. */
+    private class KeyboardShortcutsOf(private val actionId: String) : ShortcutSet {
+        override fun getShortcuts(): Array<Shortcut> =
+            KeymapManager.getInstance()?.activeKeymap?.getShortcuts(actionId)
+                ?.filterIsInstance<KeyboardShortcut>()?.toTypedArray<Shortcut>()
+                ?: Shortcut.EMPTY_ARRAY
+    }
+
+    companion object {
+        /** Mouse shortcuts are excluded: the webview handles its side buttons itself. */
+        fun install(service: VarroProjectService, host: WebviewHost) {
+            for ((direction, actionId) in listOf(
+                SessionHistoryDirection.BACK to IdeActions.ACTION_GOTO_BACK,
+                SessionHistoryDirection.FORWARD to IdeActions.ACTION_GOTO_FORWARD,
+            )) {
+                ChatHistoryShortcut(service, host, direction)
+                    .registerCustomShortcutSet(KeyboardShortcutsOf(actionId), host.component, host)
+            }
+        }
+    }
 }
 
 /** `varro.server.restart` */

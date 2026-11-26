@@ -4,6 +4,27 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class EditorIntegrationTest {
+    private fun language(json: String) =
+        EditorIntegration.openTextLanguage(com.google.gson.JsonParser.parseString(json).asJsonObject)
+
+    @Test fun `open text accepts any language id shape and degrades bad hints to plaintext`() {
+        assertEquals("shellscript", language("""{"language":"shellscript"}"""))
+        assertEquals("kotlin", language("""{"language":"kotlin"}"""))
+        assertEquals("objective-c", language("""{"language":"objective-c"}"""))
+        assertEquals("c++", language("""{"language":"c++"}"""))
+        assertNull(language("""{}"""))
+        assertNull(language("""{"language":null}"""))
+        for (bad in listOf("\"\"", "\"-lead\"", "\"has space\"", "42", "\"${"a".repeat(41)}\"")) {
+            assertEquals("plaintext", language("""{"language":$bad}"""))
+        }
+    }
+
+    @Test fun `vs code language ids resolve to intellij file type extensions`() {
+        assertEquals("md", EditorIntegration.openTextExtension("markdown"))
+        assertEquals("sh", EditorIntegration.openTextExtension("shellscript"))
+        assertEquals("tsx", EditorIntegration.openTextExtension("TypeScriptReact"))
+        assertNull(EditorIntegration.openTextExtension("kotlin"))
+    }
     @Test fun `response files without a line use registered editors rather than forcing text`() {
         for (line in listOf(null, 0, -1)) {
             var opened = 0

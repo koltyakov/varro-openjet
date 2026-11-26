@@ -291,6 +291,18 @@
                     text="Next Varro Session"
                     description="Open the next session"/>
 
+            <action id="Varro.NavigateBack"
+                    class="varro.actions.NavigateBackAction"
+                    icon="AllIcons.Actions.Back"
+                    text="Go Back in Varro Session History"
+                    description="Return to the previously opened session"/>
+
+            <action id="Varro.NavigateForward"
+                    class="varro.actions.NavigateForwardAction"
+                    icon="AllIcons.Actions.Forward"
+                    text="Go Forward in Varro Session History"
+                    description="Reopen the session you went back from"/>
+
             <action id="Varro.Abort"
                     class="varro.actions.AbortAction"
                     icon="AllIcons.Actions.Suspend"

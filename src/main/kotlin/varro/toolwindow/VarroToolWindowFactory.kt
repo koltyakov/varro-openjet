@@ -53,6 +53,7 @@ class VarroToolWindowFactory : ToolWindowFactory, DumbAware {
         // tool window releases it. The OpenCode server behind it is owned by the
         // project service and keeps running.
         Disposer.register(parent, host)
+        varro.actions.ChatHistoryShortcut.install(service, host)
         return JPanel(BorderLayout()).apply {
             add(host.component, BorderLayout.CENTER)
         }

@@ -1,6 +1,6 @@
 # OpenCode V2 support
 
-OpenJet supports V1 from 1.16.0 and V2 from 2.0.6. The webview and shared sources were synced from Varro's `main` branch at `abc0e6933e88`, version 0.36.9. Tested baselines are V1 1.19.6 and V2 2.4.1. The Kotlin adapter handles released-server contracts, including generated skill, shell and synthetic transcript records. Synthetic text appears as automatic-action notices, except goal kickoffs, which appear as user prompts. Canonical subagent completion metadata produces linked subagent activities. Pending and running V2 patch calls render as active edits. Assistant history preserves automatic retry metadata for recovery notices. History attachments use deferred references with Kotlin-generated thumbnails and on-demand original reads. Chat annotations retain bounded display context before deferral. [Session cleanup and usage export](session-cleanup.md) preserve statistics and optional parent transcripts before confirmed deletions.
+OpenJet supports V1 from 1.16.0 and V2 from 2.0.6. The webview and shared sources were synced from Varro's `main` branch at `3c30e79ae310`, version 0.36.11. Tested baselines are V1 1.19.6 and V2 2.4.2. The Kotlin adapter handles released-server contracts, including generated skill, shell and synthetic transcript records. Synthetic text appears as automatic-action notices, except goal kickoffs, which appear as user prompts. Canonical subagent completion metadata produces linked subagent activities. Pending and running V2 patch calls render as active edits. Assistant history preserves automatic retry metadata for recovery notices. History attachments use deferred references with Kotlin-generated thumbnails and on-demand original reads. Chat annotations retain bounded display context before deferral. [Session cleanup and usage export](session-cleanup.md) preserve statistics and optional parent transcripts before confirmed deletions.
 
 V2 sessions support `/pause` and a Resume action in the transcript. Pausing parks queued messages and interrupts with `resume=false`. Pause markers persist in the shared Varro session annotations, and session summaries and usage reports exclude paused time. Commit-message generation uses the stateless endpoint when the server advertises it, falling back to a helper session when the endpoint or selected model is unavailable before generation starts.
 
@@ -3796,6 +3796,72 @@ Remaining differences and verification limits:
 No missing, partial or uncertain Kotlin host or consumed-contract gap remains
 in the reviewed changes.
 
+## Upstream sync review, 2026-11-25, 3c30e79a
+
+Reviewed Varro `abc0e6933e88068ad87f9400d6142acdce158823` through
+`3c30e79ae310e20b1fe09092eadf65ead1800981`, versions 0.36.9 to 0.36.11. The
+comparison covers changed extension sources and tests, shared protocol,
+contributed commands and keybindings, dependency declarations and browser
+sources. Vendored sources remain unmodified. `@opencode/client` 2.4.2 and
+`@types/node` 26.6.11 updated the lockfile with the pinned Node 24.22.3 and npm
+12.2.3 toolchain. No new browser package or install script is required. The
+user's OpenJet 0.12.6 version is preserved.
+
+| Upstream change | OpenJet alignment and regression coverage |
+| --- | --- |
+| `commands.ts`, `sidebar-provider.ts`, `webview-session.ts`, `package.json`; `varro.chat.navigateBack`/`navigateForward` and `command/navigate-history` | `NavigateBackAction` and `NavigateForwardAction` (**Go Back/Forward in Varro Session History**) post `command/navigate-history` to the focused chat, or the tool window, as session switching does. They are enabled only when that view reported an entry. |
+| `package.json` keybindings; Alt+Left / Ctrl+- while the sidebar is focused and history is available | `ChatHistoryShortcut` binds the active keymap's keyboard shortcuts for the IDE's Back and Forward actions to the tool window browser. When the chat has no entry, the binding is disabled and the IDE's own navigation handles the key, matching upstream's `varro:canNavigateBack` condition. Editor-tab chats keep IDE navigation, as upstream limits the keys to the sidebar. Mouse shortcuts are not bound because the webview handles side buttons itself. |
+| `message-router.ts`, `webview-message.ts`, `protocol.ts`; `canNavigateBack`/`canNavigateForward` in `commands/state` | `CommandHistoryState.parse` treats missing flags as false and rejects the whole message for a present non-boolean flag, as upstream does. `VarroProjectService` keeps the state per view and drops it when the view closes. `SessionHistoryCommandsTest` covers both flags, older payloads, invalid values and wire directions. |
+| `webview-message.ts`, `tool-output-document-provider.ts`; `vscode/open-text` accepts any language-ID shape, degrades bad hints to plain text, and truncates long titles | OpenJet already opened unknown hints as plain text and shortened titles. `EditorIntegration.openTextLanguage` now applies upstream's ID shape check, and `openText` resolves VS Code IDs, IntelliJ file-type names (sent with editor text) and extensions to a registered file type. Before this, only four languages were highlighted. The handler also honours `view: "markdown-preview"` from clamped Markdown output, which it previously ignored. `EditorIntegrationTest` covers the shape check and ID-to-extension map. |
+| `OpenTextIconButton.tsx`, `ToolCall.tsx`, `session-history.ts`, `subagent-list-view.ts`, `SessionListView.tsx`, `ChatHeader.tsx`, styles | Browser-only. History, mouse side buttons, the nested subagent tree and agent badges use the existing `vscode/open-text`, session and catalog routes. |
+| `opencode-v2.integration.test.ts`; `vscode` mock gains `workspace.getConfiguration` | Test-only upstream fix. OpenJet's usage report reads `VarroSettings`, not VS Code configuration. |
+
+The released OpenCode review covers V2 `6f0514052a` through `fc31a48531`,
+2.4.1 to 2.4.2, using the published `@opencode/client` generated types and the
+`protocol`, `schema` and `server` sources. Existing HTTP paths, SSE events and
+consumed session, message, part, permission and form shapes are unchanged; most
+protocol edits are OpenAPI descriptions. Experimental push-notification routes
+and the `experimental.push.updated` event, `GET
+/api/experimental/skill/:skillID/file/*`, and the optional `Agent.Info.instructions`
+are additive, and OpenJet consumes none of them. Prompt, command and skill
+activation can now fail with a 502 `SkillLoadError`. `OpenCodeTransport` already
+reports a non-2xx body's `message`, so the failure surfaces like other prompt
+errors. Archived sessions are unarchived by prompt, command, skill and shell
+requests and emit `session.unarchived`, which OpenJet already handles. The
+experimental session `cwd` is stored as `$opencode_experimental_cwd` inside
+`session_v2.metadata` and stripped from public records; OpenJet's direct database
+reads only use `varroLegacyImport`, so they are unaffected. A web-fetch "always
+allow" now saves a per-site pattern chosen by the server; OpenJet's reply is
+unchanged. V1 1.19.6 and both support floors are unchanged. No adapter change was
+required.
+
+`scripts/check-opencode-compatibility.py --version 2.4.2 --full-check` passed a
+fresh `./gradlew check buildPlugin --rerun-tasks` with the exact published 2.4.2
+binary in isolated HOME/XDG/database/service-state roots. The V2 adapter suite
+and all three managed-service cases passed without skips. 996 Kotlin tests ran
+with no failures; the two skips are the opt-in local-database benchmark and the
+V1 released suite. The 126 browser host tests, TypeScript checking, vendor
+integrity and bundling passed too. Evidence is
+`build/opencode-compatibility/2.4.2/verification.json` and
+`build/opencode-compat-2.4.2-full.log`. The V1 SDK is unchanged, so the V1
+released suite was not rerun. Plugin Verifier was not rerun. The rebuilt package
+is `build/distributions/varro-openjet-0.12.6.zip`, SHA-256
+`8f0055ea264ce4703d0edd48c8445722763f9a9390ae945eb46a03195bd216c5`.
+
+Remaining differences and verification limits:
+
+| Status | Upstream files/endpoints and OpenJet code | User-visible impact |
+| --- | --- | --- |
+| JetBrains difference | `package.json` Alt+Left / Ctrl+- bindings; `ChatHistoryShortcut` | The tool window uses the IDE's Back/Forward keys (by default Ctrl+Alt+Left/Right, or Cmd+[ / Cmd+] on macOS) instead of VS Code's. The global actions have no default shortcut and can be assigned in the keymap. |
+| JetBrains difference | `commands.ts` reveals the sidebar after navigating | OpenJet navigates the focused chat in place, as its session-switch actions already do. |
+| Unverified in an IDE | JCEF key and mouse dispatch for history navigation | Component shortcuts and the webview's mouse side-button handling are not yet exercised in a sandbox IDE. If the IDE also maps the mouse side buttons to its own Back, one click may navigate both the chat and the editor. |
+| Accepted older differences, unchanged | See the preceding sync reviews | Unchanged by this sync. |
+| Dependency advisories | `webview/package-lock.json` | `npm audit` reports no vulnerabilities after this lockfile update; the earlier Seroval findings no longer appear. |
+| Interactive/platform coverage | Open-text highlighting, Markdown preview layout, history actions | Unit tests, browser host tests and released-server fixtures only, not an interactive sandbox IDE or Windows/Linux run. |
+
+No missing, partial or uncertain Kotlin host or consumed-contract gap remains
+in the reviewed changes, apart from the IDE verification noted above.
+
 ## Verification
 
 The opt-in integration test launches a released CLI with isolated HOME, XDG directories and database. Its provider is a local deterministic HTTP fixture. It checks authenticated health and SSE, catalogs, pending input, prompt streaming, reopened history, helper and stateless generation, archive/restore, saved-permission editing when supported, permission and form acknowledgement, fork, tail deletion, session deletion, and read-only V1 import. Steering checks interrupt a stalled turn, resume pending steering, and verify after completion and 0, 75 and 250 ms sampling delays that queued input stays parked. It has been run against OpenCode 2.0.6, 2.0.25, 2.0.26, 2.0.28, 2.0.29, 2.0.32, 2.1.1, 2.1.2, 2.1.3, 2.1.4, 2.2.0, 2.2.1 and 2.2.3; the steering regression has been run against 2.0.26, 2.0.28, 2.0.29, 2.0.32, 2.1.1, 2.1.2, 2.1.3, 2.1.4, 2.2.0, 2.2.1 and 2.2.3. From 2.1.2, the fixture also verifies that native free-model exclusions survive both projected provider catalogs. From 2.2.0, it verifies decision endpoint discovery, signed-out server-owned limits, non-chat model filtering and the renamed text-generation route and selected-model admission error. From 2.2.3, it verifies confirmed cleanup with usage and parent-transcript preservation.
@@ -3805,14 +3871,14 @@ VARRO_OPENCODE_TEST_BINARY=/absolute/path/to/opencode2 \
   ./gradlew test --tests 'varro.server.OpenCodeV2IntegrationTest'
 ```
 
-The adapter, steering and managed-service checks also passed on published 2.2.5, 2.2.6, 2.2.7, 2.3.0, 2.3.2 and 2.4.1,
+The adapter, steering and managed-service checks also passed on published 2.2.5, 2.2.6, 2.2.7, 2.3.0, 2.3.2, 2.4.1 and 2.4.2,
 including the offline-maintenance restoration case, as recorded in the latest
 sync review above.
 
 For a sync or version bump, use the pinned-release helper instead:
 
 ```sh
-python3 scripts/check-opencode-compatibility.py --version 2.4.1
+python3 scripts/check-opencode-compatibility.py --version 2.4.2
 ```
 
 It runs both released suites, verifies the installed and served version, rejects
@@ -3848,7 +3914,7 @@ publication ordering and cancellation. Ownership fixtures cover retired-process 
 recovery, unknown and foreign accounts, credential and HTTP PID mismatches, conflicting claims,
 changed records and listener reinspection. These are not released V1 or V2-floor CLI runs, nor
 Windows/Linux or real-IDE verification. Status update hints track upstream's tested SDK/client
-baselines, V1 1.19.6 and V2 2.4.1; that does not claim every Kotlin flow was tested on both releases.
+baselines, V1 1.19.6 and V2 2.4.2; that does not claim every Kotlin flow was tested on both releases.
 
 ```sh
 VARRO_OPENCODE_TEST_BINARY=/absolute/path/to/opencode2 \

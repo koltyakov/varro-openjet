@@ -29,9 +29,9 @@
     "solid-js": "2.0.4"
   },
   "devDependencies": {
-    "@opencode/client": "^2.4.1",
+    "@opencode/client": "^2.4.2",
     "@solidjs/vite-plugin": "3.0.1",
-    "@types/node": "26.6.10",
+    "@types/node": "26.6.11",
     "@tailwindcss/vite": "4.3.5",
     "iconoir": "7.12.2",
     "material-icon-theme": "5.40.0",

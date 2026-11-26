@@ -11,7 +11,9 @@ import com.intellij.openapi.fileEditor.FileEditorManager
 import com.intellij.openapi.fileEditor.FileEditorStateLevel
 import com.intellij.openapi.fileEditor.OpenFileDescriptor
 import com.intellij.openapi.fileEditor.TextEditorWithPreview
+import com.intellij.openapi.fileTypes.FileType
 import com.intellij.openapi.fileTypes.FileTypeManager
+import com.intellij.openapi.fileTypes.FileTypes
 import com.intellij.openapi.fileTypes.PlainTextFileType
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.project.guessProjectDir
@@ -27,6 +29,7 @@ import com.intellij.openapi.diagnostic.logger
 import com.intellij.openapi.ui.Messages
 import com.intellij.openapi.vfs.VirtualFileManager
 import varro.protocol.Json
+import varro.protocol.str
 import varro.server.WorkspacePaths
 import java.nio.file.Files
 import java.nio.file.Path
@@ -153,13 +156,7 @@ class EditorIntegration(private val project: Project) {
      */
     fun openText(content: String, title: String, language: String?, previewOnly: Boolean = false) {
         ApplicationManager.getApplication().invokeLater {
-            val fileType = when (language) {
-                "json" -> FileTypeManager.getInstance().getFileTypeByExtension("json")
-                "markdown" -> FileTypeManager.getInstance().getFileTypeByExtension("md")
-                "shellscript" -> FileTypeManager.getInstance().getFileTypeByExtension("sh")
-                "xml" -> FileTypeManager.getInstance().getFileTypeByExtension("xml")
-                else -> PlainTextFileType.INSTANCE
-            }
+            val fileType = openTextFileType(language)
             val file = LightVirtualFile(sanitizeTitle(title), fileType, content).apply {
                 isWritable = false
             }
@@ -343,11 +340,49 @@ class EditorIntegration(private val project: Project) {
             .fileList
             .filter { it.isValid && !it.isDirectory && it.isInLocalFileSystem }
 
+    /**
+     * Highlighting for a language hint: a VS Code language ID, a code-fence tag, or
+     * the lowercase IntelliJ file type name sent with editor text. Unregistered
+     * hints open as plain text, matching upstream's `tool-output-document-provider.ts`.
+     */
+    private fun openTextFileType(language: String?): FileType {
+        if (language == null || language.equals("plaintext", ignoreCase = true)) return PlainTextFileType.INSTANCE
+        val manager = FileTypeManager.getInstance()
+        val usable = { type: FileType -> type.takeUnless { it == FileTypes.UNKNOWN || it.isBinary } }
+        return openTextExtension(language)?.let { usable(manager.getFileTypeByExtension(it)) }
+            ?: manager.registeredFileTypes.firstOrNull { it.name.equals(language, ignoreCase = true) }?.let(usable)
+            ?: usable(manager.getFileTypeByExtension(language.lowercase()))
+            ?: PlainTextFileType.INSTANCE
+    }
+
     private fun sanitizeTitle(title: String): String =
         title.replace(Regex("""[\\/:*?"<>|]"""), "-").take(120).ifBlank { "varro" }
 
     companion object {
         private const val MAX_READ_BYTES = 2L * 1024 * 1024
+
+        /** Shape of a VS Code language ID, from upstream `webview-message.ts`. */
+        private val OPEN_TEXT_LANGUAGE_ID = Regex("^[A-Za-z0-9][\\w.+#-]{0,39}$")
+
+        /** VS Code language IDs whose IntelliJ file type is found by extension rather than name. */
+        private val OPEN_TEXT_EXTENSIONS = mapOf(
+            "markdown" to "md", "shellscript" to "sh", "bash" to "sh", "zsh" to "sh",
+            "javascript" to "js", "javascriptreact" to "jsx", "typescript" to "ts", "typescriptreact" to "tsx",
+            "python" to "py", "ruby" to "rb", "rust" to "rs", "csharp" to "cs", "powershell" to "ps1",
+        )
+
+        /**
+         * Language hint for `vscode/open-text`. A bad hint costs highlighting, not the
+         * click that asked to open the text, so a malformed one becomes `plaintext`.
+         */
+        internal fun openTextLanguage(payload: JsonObject?): String? {
+            val raw = payload?.get("language")
+            if (raw == null || raw.isJsonNull) return null
+            val value = payload.str("language")
+            return if (value != null && OPEN_TEXT_LANGUAGE_ID.matches(value)) value else "plaintext"
+        }
+
+        internal fun openTextExtension(language: String): String? = OPEN_TEXT_EXTENSIONS[language.lowercase()]
 
         /**
          * Canonical path of [input] when it lies inside one of [roots] after
