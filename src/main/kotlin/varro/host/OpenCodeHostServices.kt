@@ -232,6 +232,17 @@ class OpenCodeHostServices(
         return Json.toElement(true)
     }
 
+    /**
+     * Port of `varro.chat.openOpenCodeConfig`: opens the highest-precedence global
+     * config, creating a schema-only `opencode.json` when none exists. Returns
+     * false for attach-only connections, whose configuration lives on the server host.
+     */
+    fun openGlobalConfig(): Boolean {
+        if (server.isAttachOnly()) return false
+        mcpConfig(Json.obj("scope" to "global"), open = true)
+        return true
+    }
+
     private fun mcpDefaultsService(): McpDefaults {
         val environment = server.cli.serverEnvironment()
         val global = Path.of(environment["XDG_CONFIG_HOME"] ?: Path.of(System.getProperty("user.home"), ".config").toString(), "opencode")

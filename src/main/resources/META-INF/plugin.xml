@@ -263,6 +263,9 @@
                     text="Varro Settings" icon="AllIcons.General.Settings"/>
             <action id="Varro.Usage" class="varro.actions.UsageAction"
                     text="OpenCode Usage Report"/>
+            <action id="Varro.OpenOpenCodeConfig" class="varro.actions.OpenOpenCodeConfigAction"
+                    text="Open Global OpenCode Config"
+                    description="Open the global opencode.json, creating it if none exists"/>
             <action id="Varro.ExportUsageCsv" class="varro.actions.ExportUsageCsvAction"
                     text="Export All-Time Usage to CSV"/>
             <action id="Varro.DeleteOldSessions" class="varro.actions.DeleteOldSessionsAction"

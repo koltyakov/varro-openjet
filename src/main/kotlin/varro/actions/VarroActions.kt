@@ -189,6 +189,12 @@ class UsageAction : VarroAction() {
     override fun perform(project: Project, service: VarroProjectService, event: AnActionEvent) = service.generateUsageReport()
 }
 
+/** `varro.chat.openOpenCodeConfig` */
+class OpenOpenCodeConfigAction : VarroAction() {
+    override fun perform(project: Project, service: VarroProjectService, event: AnActionEvent) =
+        service.openGlobalOpenCodeConfig()
+}
+
 class ExportUsageCsvAction : VarroAction() {
     override fun perform(project: Project, service: VarroProjectService, event: AnActionEvent) = service.exportUsageCsv()
 }

@@ -102,7 +102,7 @@ class VarroToolWindowFactory : ToolWindowFactory, DumbAware {
         )
         if (actions.isNotEmpty()) toolWindow.setTitleActions(actions)
         toolWindow.setAdditionalGearActions(com.intellij.openapi.actionSystem.DefaultActionGroup().apply {
-            listOf("Varro.ToggleFileDiffs", "Varro.Settings", "Varro.Usage", "Varro.About")
+            listOf("Varro.ToggleFileDiffs", "Varro.Settings", "Varro.Usage", "Varro.OpenOpenCodeConfig", "Varro.About")
                 .mapNotNull { ActionManager.getInstance().getAction(it) }.forEach { add(it) }
         })
     }

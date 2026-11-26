@@ -143,6 +143,18 @@ class McpDefaultsTest {
         assertEquals(nested.toRealPath(), defaults.open("project"))
     }
 
+    @Test fun `opening the global config creates opencode json only when no global file exists`() {
+        val created = service().open("global")
+        assertEquals(global.toRealPath().resolve("opencode.json"), created)
+        assertEquals(Json.obj("\$schema" to "https://opencode.ai/config.json"), Json.parse(Files.readString(created)))
+        Files.delete(created)
+        val legacy = write(global.resolve("config.json"), "{}")
+        assertEquals(legacy.toRealPath(), service().open("global"))
+        assertFalse(Files.exists(global.resolve("opencode.json")))
+        val preferred = write(global.resolve("opencode.json"), "{}")
+        assertEquals(preferred.toRealPath(), service().open("global"))
+    }
+
     @Test fun `opening an unsaved new config never writes to disk and add routes are narrow`() {
         val selected = service().open("global") { true }
         assertEquals(global.toRealPath().resolve("opencode.json"), selected)

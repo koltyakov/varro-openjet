@@ -1302,6 +1302,21 @@ class VarroProjectService(private val project: Project) : Disposable {
         notify(message, if (error) NotificationType.ERROR else NotificationType.INFORMATION)
     } }
     fun exportUsageCsv() = historyMaintenance.exportCsv()
+
+    /** Port of `varro.chat.openOpenCodeConfig`; file work and the editor hop run off the EDT. */
+    fun openGlobalOpenCodeConfig() {
+        ApplicationManager.getApplication().executeOnPooledThread {
+            try {
+                if (!hostServices.openGlobalConfig()) notify(
+                    "Open the OpenCode configuration on the server host. This connection is managed elsewhere.",
+                    NotificationType.INFORMATION,
+                )
+            } catch (failure: Exception) {
+                log.warn("Failed to open OpenCode config", failure)
+                notify("Failed to open OpenCode config: ${failure.message ?: failure}", NotificationType.ERROR)
+            }
+        }
+    }
     fun deleteOldSessions() = historyMaintenance.cleanup()
     fun compactDatabase() = historyMaintenance.compact()
 

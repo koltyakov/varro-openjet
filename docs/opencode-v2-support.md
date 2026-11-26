@@ -1,6 +1,6 @@
 # OpenCode V2 support
 
-OpenJet supports V1 from 1.16.0 and V2 from 2.0.6. The webview and shared sources were synced from Varro's `main` branch at `3c30e79ae310`, version 0.36.11. Tested baselines are V1 1.19.6 and V2 2.4.2. The Kotlin adapter handles released-server contracts, including generated skill, shell and synthetic transcript records. Synthetic text appears as automatic-action notices, except goal kickoffs, which appear as user prompts. Canonical subagent completion metadata produces linked subagent activities. Pending and running V2 patch calls render as active edits. Assistant history preserves automatic retry metadata for recovery notices. History attachments use deferred references with Kotlin-generated thumbnails and on-demand original reads. Chat annotations retain bounded display context before deferral. [Session cleanup and usage export](session-cleanup.md) preserve statistics and optional parent transcripts before confirmed deletions.
+OpenJet supports V1 from 1.16.0 and V2 from 2.0.6. The webview and shared sources were synced from Varro's `main` branch at `0aa056cf5366`, version 0.36.12. Tested baselines are V1 1.19.6 and V2 2.4.2. The Kotlin adapter handles released-server contracts, including generated skill, shell and synthetic transcript records. Synthetic text appears as automatic-action notices, except goal kickoffs, which appear as user prompts. Canonical subagent completion metadata produces linked subagent activities. Pending and running V2 patch calls render as active edits. Assistant history preserves automatic retry metadata for recovery notices. History attachments use deferred references with Kotlin-generated thumbnails and on-demand original reads. Chat annotations retain bounded display context before deferral. [Session cleanup and usage export](session-cleanup.md) preserve statistics and optional parent transcripts before confirmed deletions.
 
 V2 sessions support `/pause` and a Resume action in the transcript. Pausing parks queued messages and interrupts with `resume=false`. Pause markers persist in the shared Varro session annotations, and session summaries and usage reports exclude paused time. Commit-message generation uses the stateless endpoint when the server advertises it, falling back to a helper session when the endpoint or selected model is unavailable before generation starts.
 
@@ -3861,6 +3861,48 @@ Remaining differences and verification limits:
 
 No missing, partial or uncertain Kotlin host or consumed-contract gap remains
 in the reviewed changes, apart from the IDE verification noted above.
+
+## Upstream sync review, 2026-11-26, 0aa056cf
+
+Reviewed Varro `3c30e79ae310e20b1fe09092eadf65ead1800981` through
+`0aa056cf536605cf699eb12a68dc9711ee37acbc`, versions 0.36.11 to 0.36.12. The
+comparison covers changed extension sources and tests, shared sources
+(unchanged), contributed commands and menus, dependency declarations
+(unchanged apart from the version) and browser sources. Vendored sources remain
+unmodified, and the lockfile and pinned toolchain are unchanged. SDK/client
+baselines remain V1 1.19.6 and V2 2.4.2, so there is no new released OpenCode
+range to review. The user's OpenJet 0.12.7 version is preserved.
+
+| Upstream change | OpenJet alignment and regression coverage |
+| --- | --- |
+| `commands.ts`, `opencode-config-service.ts`, `package.json`; `varro.chat.openOpenCodeConfig` in the view's More Actions menu | `OpenOpenCodeConfigAction` (**Open Global OpenCode Config**) is in the Varro menu and the tool window gear menu, after the usage report. `OpenCodeHostServices.openGlobalConfig` reuses `McpDefaults.open("global")`, which already matched upstream's file selection. It opens the highest-precedence existing global `config.json`, `opencode.json` or `opencode.jsonc`, or creates a schema-only `opencode.json`. It never overwrites an existing or unsaved file. Attach-only connections get upstream's "server host" notice, and failures show an error notification. `McpDefaultsTest` adds creation and `config.json` precedence cases. |
+| `opencode-config-service.ts`; project/global open refactored into shared helpers | Behavior unchanged. OpenJet's MCP config open route already uses one implementation for both scopes. |
+| `ToolCall.tsx`, `ClampedToolText.tsx`, styles; Code Mode call and result previews with JSON and JavaScript highlighting | Browser-only. Opening these values sends the existing `vscode/open-text` with `json` or `javascript`, which `EditorIntegration` maps to the IDE's JSON and JavaScript file types. |
+
+`scripts/check-opencode-compatibility.py --version 2.4.2 --full-check` passed a
+fresh `./gradlew check buildPlugin --rerun-tasks` with the exact published 2.4.2
+binary in isolated HOME/XDG/database/service-state roots. The V2 adapter suite
+and all three managed-service cases passed without skips. 997 Kotlin tests ran
+with no failures; the two skips are the opt-in local-database benchmark and the
+V1 released suite. The 126 browser host tests, TypeScript checking, vendor
+integrity and bundling passed too. Evidence is
+`build/opencode-compatibility/2.4.2/verification.json` and
+`build/sync-0aa056cf-2.4.2.log`. The V1 SDK is unchanged, so the V1 released
+suite was not rerun. Plugin Verifier was not rerun. The rebuilt package is
+`build/distributions/varro-openjet-0.12.7.zip`, SHA-256
+`b956b0163d71f5ab99ffbb1afa28f012a505c330b376ea345776e7461d7f7e6e`.
+
+Remaining differences and verification limits:
+
+| Status | Upstream files/endpoints and OpenJet code | User-visible impact |
+| --- | --- | --- |
+| JetBrains difference | Upstream opens the global config without a workspace; `OpenCodeHostServices.openGlobalConfig` | IDE actions always run in a project. The MCP config service it reuses still needs the project's base directory, which every normal project has. |
+| Accepted older differences, unchanged | See the preceding sync reviews | Unchanged by this sync. |
+| Dependency advisories | `webview/package-lock.json` | `npm audit` reports no vulnerabilities. |
+| Interactive/platform coverage | Global config action, Code Mode previews | Unit tests, browser host tests and released-server fixtures only, not an interactive sandbox IDE or Windows/Linux run. The previous sync's history-shortcut IDE check is still outstanding. |
+
+No missing, partial or uncertain Kotlin host or consumed-contract gap remains
+in the reviewed changes.
 
 ## Verification
 
