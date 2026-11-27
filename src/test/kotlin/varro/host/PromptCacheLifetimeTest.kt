@@ -49,9 +49,48 @@ class PromptCacheLifetimeTest {
     }
 
     @Test fun `does not treat Anthropic-compatible APIs of other models as Claude`() {
-        val lifetime = resolve("kimi-for-coding", "kimi-k3", npm = "@ai-sdk/anthropic")
+        val lifetime = resolve("my-gateway", "glm-5.3", npm = "@ai-sdk/anthropic")
         assertEquals(5 * minute, lifetime.ttlMs)
         assertEquals("fallback", lifetime.source)
+    }
+
+    @Test fun `follows other popular providers`() {
+        fun lifetime(providerID: String, modelID: String, ttl: String? = null): List<Long> {
+            val resolved = resolve(providerID, modelID, ttl = ttl)
+            return listOf(resolved.ttlMs / minute, (resolved.likelyMs ?: resolved.ttlMs) / minute)
+        }
+        assertEquals(listOf(5L, 15L), lifetime("google", "gemini-4-argon"))
+        assertEquals(listOf(5L, 15L), lifetime("google-vertex", "gemini-3.8-flash"))
+        assertEquals(listOf(5L, 15L), lifetime("openrouter", "google/gemini-4-argon"))
+        assertEquals(listOf(60L, 360L), lifetime("deepseek", "deepseek-v4-flash"))
+        assertEquals(listOf(5L, 30L), lifetime("xai", "grok-4.6"))
+        assertEquals(listOf(5L, 30L), lifetime("openrouter", "x-ai/grok-4.6"))
+        assertEquals(listOf(5L, 60L), lifetime("zai-coding-plan", "glm-5.3"))
+        assertEquals(listOf(5L, 5L), lifetime("kimi-for-coding", "k3"))
+        assertEquals(listOf(60L, 60L), lifetime("moonshotai", "kimi-k3.1-pro", "1h"))
+        assertEquals(listOf(5L, 5L), lifetime("alibaba", "qwen3.8-max", "1h"))
+        assertEquals(listOf(60L, 60L), lifetime("alibaba", "qwen4-max", "1h"))
+        assertEquals(listOf(5L, 120L), lifetime("groq", "openai/gpt-oss-120b"))
+        assertEquals(listOf(5L, 60L), lifetime("fireworks-ai", "accounts/fireworks/models/glm-5"))
+        assertEquals(listOf(5L, 15L), lifetime("meta", "muse-spark-1.3"))
+        assertEquals(listOf(5L, 60L), lifetime("meta", "muse-spark-1.3", "24h"))
+        assertEquals(listOf(5L, 5L), lifetime("amazon-bedrock", "amazon.nova-pro-v1:0"))
+        assertEquals(listOf(30L, 180L), lifetime("amazon-bedrock", "openai.gpt-6.1-sol", "12h"))
+        assertEquals(listOf(5L, 10L), lifetime("amazon-bedrock", "openai.gpt-5.4"))
+        assertEquals(listOf(5L, 5L), lifetime("kimi-code-plan-global", "kimi-k3"))
+        assertEquals(listOf(60L, 60L), lifetime("alibaba-token-plan-cn", "qwen4-max", "1h"))
+        assertEquals(listOf(3L, 5L), lifetime("mistral", "mistral-large-latest"))
+        // Open-weight models on OpenRouter can be served by any host, with its own cache.
+        assertEquals(listOf(5L, 15L), lifetime("openrouter", "deepseek/deepseek-v4"))
+        assertEquals(listOf(5L, 15L), lifetime("github-copilot", "mai-code-1.1-flash"))
+    }
+
+    @Test fun `strips Bedrock regional OpenAI prefixes and maps OpenRouter vendors without a slash like JavaScript`() {
+        // `us.openai.gpt-6.1-sol` names the same model as `openai.gpt-6.1-sol` on Bedrock.
+        assertEquals(30 * minute, ttlOf("amazon-bedrock", "us.openai.gpt-6.1-sol"))
+        // Upstream slices to `indexOf('/')`, so an ID without a slash drops its last character.
+        assertEquals(30 * minute, resolve("openrouter", "x-aiz").likelyMs)
+        assertEquals("fallback", resolve("openrouter", "google").source)
     }
 
     @Test fun `follows OpenAI retention by model generation`() {
@@ -76,14 +115,14 @@ class PromptCacheLifetimeTest {
     @Test fun `leaves GPT-named models on other hosts to the generic estimate`() {
         val oss = resolve("groq", "openai/gpt-oss-120b")
         assertEquals(5 * minute, oss.ttlMs)
-        assertEquals("fallback", oss.source)
+        assertEquals(2 * hour, oss.likelyMs)
         assertEquals("fallback", resolve("github-copilot", "gpt-6.2-sol").source)
         assertEquals(30 * minute, ttlOf("my-gateway", "gpt-6.2-sol", npm = "@ai-sdk/openai"))
         assertEquals(30 * minute, ttlOf("my-gateway", "gpt-6.2-sol", npm = "aisdk:@ai-sdk/openai"))
     }
 
     @Test fun `uses a configured ttl for other providers`() {
-        val lifetime = resolve("deepseek", "deepseek-v4", ttl = "1h")
+        val lifetime = resolve("my-gateway", "deepseek-v4", ttl = "1h")
         assertEquals(hour, lifetime.ttlMs)
         assertEquals("configured", lifetime.source)
         assertEquals("The model's cache.ttl keeps the cache 1 h after each request.", lifetime.description)

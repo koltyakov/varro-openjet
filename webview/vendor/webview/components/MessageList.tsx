@@ -73,6 +73,7 @@ import {
 } from '../lib/message-list-layout';
 import {
   getFinalAssistantTextPartId,
+  isPendingEditAwaitingMerge,
   isWorkspaceDirectoryText,
   shouldShowAssistantPartInline,
 } from '../lib/part-utils';
@@ -99,7 +100,6 @@ import {
   getPrefetchedSessionHistory,
   getSessionHistoryCursor,
   getSessionHistoryPromptCursor,
-  getSessionHistoryPrompts,
   getSessionHistoryPromptEntries,
   getSessionMessageWindowStateVersion,
   isSessionHistoryLoadFailed,
@@ -116,8 +116,15 @@ import { STORAGE_KEYS, readStored, writeStored } from '../lib/state-storage';
 import { formatLabelWithProvider, formatModelName, formatVariantLabel } from '../lib/format';
 import {
   collapseLeadingDuplicateFileEvents,
+  collapseLeadingFileEventsInOrder,
   getTrailingFileEventSignature,
 } from '../lib/message-event-collapse';
+import {
+  collectFileEditTotals,
+  publishFileEditTotals,
+  sameFileEditTotalsMap,
+  type FileEditTotals,
+} from '../lib/file-edit-totals';
 import {
   buildPermissionRequestLookup,
   buildQuestionRequestLookup,
@@ -264,6 +271,8 @@ const NEW_TURN_ALIGNMENT_FRAME_LIMIT = 64;
 const NEW_TURN_ALIGNMENT_MAX_STEP_PX = 24;
 const BOTTOM_FOLLOW_SETTLE_FRAME_COUNT = 2;
 const BOTTOM_FOLLOW_RESUME_GAP_MS = 1000;
+// Matches the follow-up cache probe bound that also holds the opening reveal.
+const INITIAL_DIFF_REVEAL_TIMEOUT_MS = 2_000;
 // Paced text may trail the viewport by at most this much before the follower catches up.
 const STREAMING_FOLLOW_MAX_LAG_PX = 64;
 const WIDTH_RESIZE_SETTLE_MS = 100;
@@ -606,7 +615,8 @@ export function MessageList() {
     return (
       promptNumberReadySessionIds().has(sessionId) &&
       promptNumberReadyWindowVersions.get(sessionId) ===
-        getSessionMessageWindowStateVersion(sessionId)
+        getSessionMessageWindowStateVersion(sessionId) &&
+      !getSessionHistoryPromptCursor(sessionId)
     );
   }
 
@@ -621,7 +631,7 @@ export function MessageList() {
     promptNumberHoldGeneration += 1;
     setShowPromptNumbers(true);
     const sessionId = state.activeSessionId;
-    if (sessionId) void ensurePromptNumbersReady(sessionId);
+    if (sessionId && !state.messagesLoading) void ensurePromptNumbersReady(sessionId);
   }
 
   function hidePromptNumbersForAlt() {
@@ -676,7 +686,12 @@ export function MessageList() {
       return {
         sessionId,
         windowVersion,
-        needsNumbers: showPromptNumbers() && !!sessionId && !promptNumbersReady(sessionId),
+        needsNumbers:
+          showPromptNumbers() &&
+          !!sessionId &&
+          !state.messagesLoading &&
+          !isSessionMessageWindowResetPending(sessionId) &&
+          !promptNumbersReady(sessionId),
       };
     },
     ({ sessionId, windowVersion, needsNumbers }) => {
@@ -705,9 +720,23 @@ export function MessageList() {
       void ensurePromptNumbersReady(sessionId);
     }
   );
+  const absolutePromptNumbersReady = createMemo(() => {
+    const sessionId = state.activeSessionId;
+    return (
+      !!sessionId &&
+      !state.messagesLoading &&
+      !isSessionMessageWindowResetPending(sessionId) &&
+      !getSessionHistoryPromptCursor(sessionId)
+    );
+  });
   const promptNumbersVisible = createMemo(() => {
     const sessionId = state.activeSessionId;
-    return !!sessionId && showPromptNumbers() && promptNumbersReady(sessionId);
+    return (
+      !!sessionId &&
+      showPromptNumbers() &&
+      absolutePromptNumbersReady() &&
+      promptNumbersReady(sessionId)
+    );
   });
   const handleWorkedSummaryHoverChange = (promptMessageId: string, hovering: boolean) => {
     setWorkedSummaryPromptMessageId((current) => {
@@ -720,6 +749,11 @@ export function MessageList() {
   let expectedScrollTop = -1;
   let ignoreScrollUntil = 0;
   let lastObservedScrollTop = 0;
+  // Direct-input epoch when lastObservedScrollTop last matched the live position.
+  let lastObservedScrollInputEpoch = 0;
+  // A layout clamp observed as a scroll event before the resize observer saw the growth.
+  let layoutClampedScroll: { from: number; to: number; at: number; inputEpoch: number } | null =
+    null;
   let pendingInitialScrollSessionId: string | null = null;
   let pendingInitialHistoryFillSessionId: string | null = null;
   const [initialPositioningSessionId, setInitialPositioningSessionId] = createSignal<string | null>(
@@ -728,6 +762,11 @@ export function MessageList() {
   const [initialFollowupRestore, setInitialFollowupRestore] = createSignal<{
     sessionId: string;
   } | null>(null);
+  // Change-summary requests that keep the opening transcript hidden. The settle loop parks on
+  // them, and the last release restarts it.
+  const initialDiffRevealHolds = new Set<{ sessionId: string }>();
+  let initialDiffRevealDeadline: number | undefined;
+  let followLoopParkedForDiffSessionId: string | null = null;
   let initialScrollRafId = 0;
   let appendScrollRafId = 0;
   let appendScrollSessionId: string | null = null;
@@ -875,6 +914,7 @@ export function MessageList() {
   let detachedAnchorRefreshRafId = 0;
   let keydownDestinationRafId = 0;
   let pendingThinkingLayoutAnchor: VisibleScrollAnchor | null = null;
+  let thinkingReadingAnchor: { anchor: VisibleScrollAnchor; inputEpoch: number } | null = null;
   const AUTO_SCROLL_THRESHOLD_PX = 60;
   const REATTACH_THRESHOLD_PX = 10;
   const PROGRAMMATIC_SCROLL_WINDOW_MS = 200;
@@ -1303,28 +1343,46 @@ export function MessageList() {
     const tail = liveTailMessages();
     return untrack(() => historyRunning.some(Boolean) || hasVisibleRunningToolPart(tail));
   });
-  const hasVisibleRunningInlineFileEdit = (entries: readonly MessageEntry[]) =>
-    entries.some((message) =>
-      message.parts.some(
-        (part) =>
-          part.type === 'tool' &&
-          (part.state.status === 'pending' || part.state.status === 'running') &&
-          shouldShowAssistantPartInline(part) &&
-          isAssistantEditActivityPart(part) &&
-          !shouldCompactAssistantActivityPart(part, {
-            keepEditInline: true,
-            keepReasoningInline: false,
-          })
-      )
-    );
-  const historyVisibleRunningInlineFileEdit = mapHistorySegments((segment) =>
-    createMemo(() => hasVisibleRunningInlineFileEdit(segment.entries()))
+  // Thinking hands off only to an edit the transcript renders, so scan the same collapsed parts.
+  const scanVisibleRunningInlineFileEdit = (
+    entries: readonly MessageEntry[],
+    initialSignature: string | null
+  ) => {
+    const collapsed = collapseLeadingFileEventsInOrder(entries, initialSignature);
+    return {
+      running: collapsed.parts.some((parts) =>
+        parts.some(
+          (part, index) =>
+            part.type === 'tool' &&
+            (part.state.status === 'pending' || part.state.status === 'running') &&
+            shouldShowAssistantPartInline(part) &&
+            !isPendingEditAwaitingMerge(parts, index) &&
+            isAssistantEditActivityPart(part) &&
+            !shouldCompactAssistantActivityPart(part, {
+              keepEditInline: true,
+              keepReasoningInline: false,
+            })
+        )
+      ),
+      trailingSignature: collapsed.trailingSignature,
+    };
+  };
+  const historyVisibleRunningInlineFileEdit = chainHistorySegments<
+    ReturnType<typeof scanVisibleRunningInlineFileEdit>
+  >((segment, previous) =>
+    createMemo(() =>
+      scanVisibleRunningInlineFileEdit(segment.entries(), previous?.().trailingSignature ?? null)
+    )
   );
   const visibleRunningInlineFileEdit = createMemo(() => {
     messageStructureVersion();
-    const historyRunning = historyVisibleRunningInlineFileEdit.map((running) => running());
+    const history = historyVisibleRunningInlineFileEdit.map((scan) => scan());
     const tail = liveTailMessages();
-    return untrack(() => historyRunning.some(Boolean) || hasVisibleRunningInlineFileEdit(tail));
+    return untrack(
+      () =>
+        history.some((scan) => scan.running) ||
+        scanVisibleRunningInlineFileEdit(tail, history.at(-1)?.trailingSignature ?? null).running
+    );
   });
   const committedTextBlockKey = createMemo(() => {
     messageStructureVersion();
@@ -1361,17 +1419,33 @@ export function MessageList() {
   );
   // Older prompt pages only change numbering and positions when they add prompts the loaded
   // transcript lacks; otherwise the transcript splits like the message list.
-  const olderPromptsOutsideTranscript = createMemo(() => {
-    const indexes = messageIndexById();
-    const visible = messages();
-    const olderPrompts = getSessionHistoryPromptEntries(state.activeSessionId);
-    return olderPrompts.some((prompt) => {
-      const index = indexes.get(prompt.info.id);
-      return index === undefined || visible[index]?.info.sessionID !== prompt.info.sessionID;
-    })
-      ? olderPrompts
-      : null;
-  });
+  const olderPromptsOutsideTranscript = createMemo(
+    () => {
+      const sessionId = state.activeSessionId;
+      const cachedPrompts = getSessionHistoryPromptEntries(sessionId);
+      if (!cachedPrompts.length) return null;
+      const olderPrompts = getVisibleThreadMessages(cachedPrompts, sessionId, state.sessions);
+      const indexes = messageIndexById();
+      const visible = messages();
+      if (
+        !olderPrompts.some((prompt) => {
+          const index = indexes.get(prompt.info.id);
+          return index === undefined || visible[index]?.info.sessionID !== prompt.info.sessionID;
+        })
+      ) {
+        return null;
+      }
+      return olderPrompts.length === cachedPrompts.length ? cachedPrompts : olderPrompts;
+    },
+    {
+      equals: (previous, next) =>
+        previous === next ||
+        (!!previous &&
+          !!next &&
+          previous.length === next.length &&
+          previous.every((entry, index) => entry === next[index])),
+    }
+  );
   const olderPromptSnapshots = createRecordSnapshots(() => olderPromptsOutsideTranscript() ?? []);
   const historyPromptNumbers = chainHistorySegments<ReturnType<typeof numberPrompts>>(
     (segment, previous) => createMemo(() => numberPrompts(segment.entries(), previous?.()))
@@ -1383,6 +1457,7 @@ export function MessageList() {
       ? [numberPrompts(mergeOlderHistory(messageSnapshots(), olderPromptSnapshots()))]
       : [...history, numberPrompts(tailMessages(), history.at(-1))];
     return {
+      total: segments.at(-1)?.lastNumber ?? 0,
       numbers: segments.reduce(
         (merged, segment) => mergeSegmentMaps(merged, segment.numbers),
         new Map<string, number>()
@@ -1649,6 +1724,9 @@ export function MessageList() {
     if (settledAnchor && widthResizeCanOwnScroll()) {
       restoreVisibleScrollAnchor(settledAnchor);
       rememberDetachedVisibleAnchor(settledAnchor);
+      if (thinkingReadingAnchor?.inputEpoch !== directScrollInputEpoch) {
+        rememberThinkingReadingAnchor(captureThinkingResponseAnchor(settledAnchor));
+      }
     }
     widthResizeAnchor = null;
     queueMicrotask(() => {
@@ -1662,15 +1740,18 @@ export function MessageList() {
     }
 
     if (!correctBottom) return;
+    const canCorrectBottom = () =>
+      epoch === widthResizeEpoch &&
+      autoScroll() &&
+      !stickyNavigationOwnsScroll() &&
+      !editingMessage();
+    // The settled publication can mount rows from this timer task. Re-pin after their mount
+    // measurement so no task observes the followed transcript above its new bottom.
+    queueMicrotask(() => {
+      if (!disposed && canCorrectBottom()) performScroll({ immediate: true });
+    });
     requestAnimationFrame(() => {
-      if (
-        epoch !== widthResizeEpoch ||
-        !autoScroll() ||
-        stickyNavigationOwnsScroll() ||
-        editingMessage()
-      ) {
-        return;
-      }
+      if (!canCorrectBottom()) return;
       performScroll({ immediate: true });
       const sessionId = state.activeSessionId;
       if (sessionId) startFollowLoop(sessionId);
@@ -2289,6 +2370,24 @@ export function MessageList() {
       };
     }, onInlineDiffMount)
   );
+  // A newer reply takes over the change summary. Removing it shortens the previous reply, which
+  // layout would clamp at the bottom for a painted frame before the reserve catches up. Hold the
+  // row at its painted height, retire the summary, then publish the lost space as reserve before
+  // releasing the hold, the same order as an inline diff height release.
+  function retireAssistantDiffSummary(messageId: string, retire: () => void) {
+    const row = mountedMessageRows.get(messageId);
+    // An inline diff hold already owns this row's min-height and its release.
+    if (!containerRef || !row || inlineDiffHeightHolds.has(messageId) || row.style.minHeight) {
+      retire();
+      return;
+    }
+    row.style.minHeight = `${row.getBoundingClientRect().height}px`;
+    retire();
+    flush();
+    reserveInlineDiffHeightRelease(row);
+    row.style.removeProperty('min-height');
+  }
+
   function reserveInlineDiffHeightRelease(row: HTMLElement) {
     if (
       !containerRef ||
@@ -2952,13 +3051,23 @@ export function MessageList() {
     const indexes = messageIndexById();
     return [...turn.assistantMessageIds].some((messageId) => {
       const index = indexes.get(messageId);
-      const message = index === undefined ? undefined : entries[index];
+      if (index === undefined) return false;
+      const message = entries[index];
       if (!message || message.info.role !== 'assistant' || message.info.error) return false;
-      return message.parts.some(
-        (part) =>
+      // Match the rendered projection: a leading call may collapse into the previous message.
+      const previous = entries[index - 1];
+      const parts = collapseLeadingDuplicateFileEvents(
+        message.parts,
+        previous && isAssistantMessage(previous.info)
+          ? getTrailingFileEventSignature(previous.parts)
+          : null
+      );
+      return parts.some(
+        (part, partIndex) =>
           part.type === 'tool' &&
           (part.state.status === 'pending' || part.state.status === 'running') &&
-          shouldShowAssistantPartInline(part)
+          shouldShowAssistantPartInline(part) &&
+          !isPendingEditAwaitingMerge(parts, partIndex)
       );
     });
   });
@@ -3612,8 +3721,8 @@ export function MessageList() {
       visibleMessages[firstVisibleMessageIndex]
     ) {
       const loadedMessageIds = messageIndexById();
-      const boundaryPrompts = getSessionHistoryPrompts(state.activeSessionId)
-        .filter((entry) => !loadedMessageIds.has(entry.info.id))
+      const boundaryPrompts = (olderPromptsOutsideTranscript() ?? [])
+        .filter((entry) => entry.info.role === 'user' && !loadedMessageIds.has(entry.info.id))
         .toSorted((left, right) => left.info.time.created - right.info.time.created);
       if (boundaryPrompts.length > 0) {
         const boundaryPreview = getStickyUserMessagePreview(
@@ -3721,6 +3830,43 @@ export function MessageList() {
       .join('|');
     return `${infoProjection}|${partProjection}`;
   }
+  // A completed reply's change summary loads after mount. Keep the hydration cover until it
+  // settles, bounded so a slow diff route cannot hold the transcript hidden.
+  function holdInitialRevealForAssistantDiff() {
+    const sessionId = untrack(() => state.activeSessionId);
+    if (!sessionId || untrack(initialPositioningSessionId) !== sessionId || !untrack(autoScroll)) {
+      return undefined;
+    }
+    const now = Date.now();
+    initialDiffRevealDeadline ??= now + INITIAL_DIFF_REVEAL_TIMEOUT_MS;
+    if (now >= initialDiffRevealDeadline) return undefined;
+    const hold = { sessionId };
+    initialDiffRevealHolds.add(hold);
+    // Runs from the row's effect cleanup too, so read list state untracked.
+    const release = () => {
+      clearTimeout(timer);
+      if (!initialDiffRevealHolds.delete(hold) || hasInitialDiffRevealHold(sessionId)) return;
+      if (followLoopParkedForDiffSessionId !== sessionId) return;
+      followLoopParkedForDiffSessionId = null;
+      untrack(() => {
+        if (
+          state.activeSessionId === sessionId &&
+          initialPositioningSessionId() === sessionId &&
+          autoScroll()
+        ) {
+          startFollowLoop(sessionId);
+        }
+      });
+    };
+    const timer = setTimeout(release, initialDiffRevealDeadline - now);
+    return release;
+  }
+
+  function hasInitialDiffRevealHold(sessionId: string) {
+    for (const hold of initialDiffRevealHolds) if (hold.sessionId === sessionId) return true;
+    return false;
+  }
+
   function handleAssistantDiffSettledEmpty(messageId: string) {
     if (
       !forcedVirtualContentMessageIds.has(messageId) ||
@@ -3800,7 +3946,8 @@ export function MessageList() {
 
   function measureMountedRows(
     rows: Array<{ element: HTMLDivElement; messageId: string }>,
-    publish = true
+    publish = true,
+    scrollDestination?: number
   ) {
     // Tests and no-layout environments may never deliver ResizeObserver entries, so virtualization
     // must not depend on observer callbacks alone.
@@ -3815,7 +3962,7 @@ export function MessageList() {
       if (!shouldAcceptRowHeight(element, messageId, height)) return [];
       return [{ messageId, height }];
     });
-    const result = applyRowHeightMeasurements(measurements);
+    const result = applyRowHeightMeasurements(measurements, { scrollDestination });
     if (!result.changed) return false;
     if (publish) scheduleMeasurementPublish('content', result.scrollAdjusted);
     return true;
@@ -3823,7 +3970,7 @@ export function MessageList() {
 
   function applyRowHeightMeasurements(
     measurements: Array<{ messageId: string; height: number }>,
-    options?: { widthReflow?: boolean }
+    options?: { widthReflow?: boolean; scrollDestination?: number }
   ) {
     // ResizeObserver reports after layout. Use the old prefix metrics to offset growth above the
     // viewport before paint, including while the user is actively scrolling.
@@ -3833,6 +3980,7 @@ export function MessageList() {
       activeSessionId && getCurrentPendingHistoryAnchor(activeSessionId)?.anchor
     );
     let firstVisibleIndex: number | null = null;
+    let measurementScrollTop = 0;
     let mountedDetachedAnchorAlreadyPreserved = false;
     // Chromium keeps its own thumb destination until release. Prefix compensation writes
     // fight that destination and the next native move reverses them. Touch and wheel
@@ -3844,6 +3992,15 @@ export function MessageList() {
       !historyOwnsAnchor &&
       !nativeScrollbarActive
     ) {
+      const top = containerRef.scrollTop;
+      const destination = options?.scrollDestination;
+      // Mounting estimated rows can shorten the range before the spacer is reconciled.
+      // Use the pre-clamp destination for both the prefix lookup and the scroll correction.
+      const clamped =
+        destination !== undefined &&
+        destination > top + 0.5 &&
+        getDistanceFromBottom(containerRef) <= 1;
+      measurementScrollTop = clamped ? destination : top;
       const detachedAnchorElement = lastDetachedVisibleAnchor
         ? getMountedScrollAnchorElement(lastDetachedVisibleAnchor)
         : null;
@@ -3856,7 +4013,7 @@ export function MessageList() {
         !options?.widthReflow &&
         lastDetachedVisibleAnchor &&
         detachedAnchorElement &&
-        Math.abs(containerRef.scrollTop - lastDetachedVisibleAnchorScrollTop) <= 1 &&
+        Math.abs(measurementScrollTop - lastDetachedVisibleAnchorScrollTop) <= 1 &&
         Math.abs(
           detachedAnchorElement.getBoundingClientRect().top -
             containerRef.getBoundingClientRect().top -
@@ -3866,11 +4023,11 @@ export function MessageList() {
       firstVisibleIndex =
         options?.widthReflow && widthResizeAnchor
           ? (messageIndexById().get(widthResizeAnchor.messageId) ?? null)
-          : lastDetachedVisibleAnchor && detachedAnchorElement
+          : !clamped && lastDetachedVisibleAnchor && detachedAnchorElement
             ? (messageIndexById().get(lastDetachedVisibleAnchor.messageId) ?? null)
             : getFirstVisibleMessageIndexFromVirtualMetrics({
                 metrics: metricsBefore,
-                scrollTop: getVirtualScrollTop(containerRef.scrollTop),
+                scrollTop: getVirtualScrollTop(measurementScrollTop),
               });
     }
     let scrollAdjustment = 0;
@@ -3905,7 +4062,7 @@ export function MessageList() {
 
     const resolvedScrollAdjustment = mountedDetachedAnchorAlreadyPreserved ? 0 : scrollAdjustment;
     if (containerRef && Math.abs(resolvedScrollAdjustment) > 0.5) {
-      setPreservedScrollTop(containerRef.scrollTop + resolvedScrollAdjustment);
+      setPreservedScrollTop(measurementScrollTop + resolvedScrollAdjustment);
     }
     if (widthResizeActive && widthResizeAnchor && widthResizeCanOwnScroll()) {
       restoreVisibleScrollAnchor(widthResizeAnchor);
@@ -4103,9 +4260,11 @@ export function MessageList() {
   function captureExactPaintedVisibleScrollAnchor(
     predictedMovement = 0,
     skipThinking = false,
-    belowStickyPrompt = false
+    belowStickyPrompt = false,
+    scope?: HTMLElement
   ): VisibleScrollAnchor | null {
     if (!containerRef) return null;
+    const root = scope ?? containerRef;
     const containerRect = containerRef.getBoundingClientRect();
     // A paragraph behind the sticky prompt is not a painted destination. Pinning it
     // during deferred hydration lets its growing diff push the visible prose below it.
@@ -4135,14 +4294,12 @@ export function MessageList() {
       }
     };
     // Preserve assistant-before-user ordering for ties without sorting or rereading rectangles.
-    for (const renderItem of containerRef.querySelectorAll<HTMLElement>(
-      '[data-assistant-render-key]'
-    )) {
+    for (const renderItem of root.querySelectorAll<HTMLElement>('[data-assistant-render-key]')) {
       for (const element of renderItem.querySelectorAll<HTMLElement>(selector)) {
         if (!skipThinking || !element.closest('.chat-thinking-box')) consider(element, renderItem);
       }
     }
-    for (const element of containerRef.querySelectorAll<HTMLElement>('.user-message-card')) {
+    for (const element of root.querySelectorAll<HTMLElement>('.user-message-card')) {
       consider(element, null);
     }
     const selected = selection.candidate;
@@ -4169,8 +4326,65 @@ export function MessageList() {
     };
   }
 
+  function rememberThinkingReadingAnchor(anchor: VisibleScrollAnchor | null) {
+    thinkingReadingAnchor = anchor?.elementTag
+      ? { anchor: { ...anchor, element: undefined }, inputEpoch: directScrollInputEpoch }
+      : null;
+  }
+
   function captureThinkingVisibleScrollAnchor() {
-    return captureExactPaintedVisibleScrollAnchor(0, true);
+    const viewport = containerRef?.getBoundingClientRect();
+    const saved =
+      thinkingReadingAnchor?.inputEpoch === directScrollInputEpoch
+        ? thinkingReadingAnchor.anchor
+        : null;
+    if (saved && viewport) {
+      const element = getMountedScrollAnchorElement(saved);
+      const bounds = element?.getBoundingClientRect();
+      // Toggling can expose earlier content. Keep the same reading block on the
+      // inverse toggle if it still paints at the saved position.
+      if (
+        element &&
+        element.tagName === saved.elementTag &&
+        !element.closest('.chat-thinking-box') &&
+        bounds &&
+        bounds.top >= viewport.top + 8 &&
+        bounds.bottom <= viewport.bottom - 8 &&
+        Math.abs(bounds.top - viewport.top - saved.top) <= 1
+      ) {
+        return saved;
+      }
+    }
+    const painted = captureExactPaintedVisibleScrollAnchor(0, true);
+    return captureThinkingResponseAnchor(painted) ?? painted;
+  }
+
+  function captureThinkingResponseAnchor(prompt: VisibleScrollAnchor | null) {
+    if (
+      !prompt?.element?.classList.contains('user-message-card') ||
+      prompt.top <= getMessageJumpTopInset() + 1
+    ) {
+      return null;
+    }
+    // Keep a prompt aligned for reading at the top. Farther down, if a Thinking box can
+    // shift that prompt's visible answer, keep the answer rather than the prompt above it.
+    const promptIndex = messageIndexById().get(prompt.messageId);
+    if (promptIndex === undefined) return null;
+    const entries = messages();
+    for (let index = promptIndex + 1; index < entries.length; index += 1) {
+      const response = entries[index]!;
+      const row = mountedMessageRows.get(response.info.id);
+      if (!row || response.info.role === 'user') break;
+      if (
+        response.info.parentID !== prompt.messageId ||
+        getThinkingLayoutSignatures([response], true).size === 0
+      ) {
+        continue;
+      }
+      const readingAnchor = captureExactPaintedVisibleScrollAnchor(0, true, false, row);
+      if (readingAnchor) return readingAnchor;
+    }
+    return null;
   }
 
   function replaceClippedRequestWidthResizeAnchor(anchor: VisibleScrollAnchor | null) {
@@ -4816,7 +5030,7 @@ export function MessageList() {
     }
   }
 
-  function flushPendingMountedRowMeasurements() {
+  function flushPendingMountedRowMeasurements(scrollDestination?: number) {
     const checkStickyPreview = mountedStickyPreviewCheckPending;
     mountedStickyPreviewCheckPending = false;
     if (disposed || !shouldMeasureRows()) {
@@ -4840,7 +5054,7 @@ export function MessageList() {
       // rather than forcing another layout immediately after those writes.
       reconcileMountedStickyPreview();
     }
-    measureMountedRows(rows);
+    measureMountedRows(rows, true, scrollDestination);
     restorePendingHistoryAnchorIfMounted();
   }
 
@@ -5298,6 +5512,7 @@ export function MessageList() {
       directMovementAnchor.scrollTop = containerRef.scrollTop;
     }
     lastObservedScrollTop = containerRef.scrollTop;
+    lastObservedScrollInputEpoch = directScrollInputEpoch;
     (() => {
       setScrollTop(containerRef!.scrollTop);
       setViewportHeight(containerRef!.clientHeight);
@@ -6294,7 +6509,80 @@ export function MessageList() {
 
     appendBottomReserveTarget = previousBottomTarget;
     setAppendBottomReserve((reserve) => reserve + previousBottomTarget - currentBottomTarget);
+    // Layout already clamped scrollTop when the scrollport grew. Commit the spacer before
+    // restoring it; writing against the uncommitted range keeps the clamp for a painted frame.
+    flush();
     setPreservedScrollTop(previousBottomTarget);
+  }
+
+  // A detached reader within the growth of the bottom is clamped by layout too. Keep only that
+  // shortfall reachable at the reader's own position, without arming bottom-follow. Returns
+  // whether it took ownership of this resize.
+  function reserveClampedDetachedSpace(growth: number) {
+    const sessionId = state.activeSessionId;
+    const clamp = layoutClampedScroll;
+    layoutClampedScroll = null;
+    if (
+      !containerRef ||
+      !trackRef ||
+      (autoScroll() && pinnedToBottom) ||
+      // Recent direct input may already have moved past the last observed position. Older input
+      // without a scroll event, such as a horizontal or at-limit wheel, moved nothing.
+      (lastObservedScrollInputEpoch !== directScrollInputEpoch &&
+        performance.now() - Math.max(lastWheelAt, lastScrollInputAt) <= USER_SCROLL_IDLE_MS) ||
+      pointerScrollOwnershipActive ||
+      stickyNavigationOwnsScroll() ||
+      widthResizeActive ||
+      !!editingMessage() ||
+      diffFocusPauseActive ||
+      !!pendingExpansionScrollAnchor ||
+      !!pendingStructuralScrollAnchor ||
+      !!(sessionId && getCurrentPendingHistoryAnchor(sessionId))
+    ) {
+      return false;
+    }
+    // If the clamp's scroll event already arrived, the last observed position is the clamped one.
+    const target =
+      clamp &&
+      clamp.inputEpoch === directScrollInputEpoch &&
+      Math.abs(clamp.to - lastObservedScrollTop) <= 0.5 &&
+      performance.now() - clamp.at <= USER_SCROLL_IDLE_MS
+        ? clamp.from
+        : lastObservedScrollTop;
+    const lost = target - containerRef.scrollTop;
+    const clientHeight = containerRef.clientHeight;
+    // scrollHeight and clientHeight round separately at fractional zoom; scrollTop does not.
+    if (
+      lost <= 0.5 ||
+      lost > growth + 1 ||
+      containerRef.scrollTop < containerRef.scrollHeight - clientHeight - 1
+    ) {
+      return false;
+    }
+    const reserve = untrack(appendBottomReserve);
+    // Track min-height hides unused room once content no longer overflows. Measure the
+    // in-flow content instead, so the reserve makes the reader's position reachable again.
+    const unreservedScrollHeight =
+      containerRef.scrollHeight > clientHeight + 0.5
+        ? containerRef.scrollHeight - reserve
+        : trackRef.getBoundingClientRect().top -
+          containerRef.getBoundingClientRect().top -
+          containerRef.clientTop +
+          containerRef.scrollTop +
+          heldTrackContentHeight() -
+          reserve;
+    // Keep another owner's reachable target; a target without any reserve is stale.
+    appendBottomReserveTarget =
+      reserve > 0.5 ? Math.max(appendBottomReserveTarget, target) : target;
+    const nextReserve = Math.ceil(
+      appendBottomReserveTarget - (unreservedScrollHeight - clientHeight)
+    );
+    if (nextReserve > reserve + 0.5) {
+      setAppendBottomReserve(nextReserve);
+      flush();
+    }
+    setPreservedScrollTop(target);
+    return true;
   }
 
   function releaseBottomReserveForViewportReset() {
@@ -6390,7 +6678,14 @@ export function MessageList() {
       return;
     const reserveElement = trackRef?.querySelector<HTMLElement>('.append-scroll-bottom-reserve');
     if (!reserveElement) return;
-    if (reserveElement.getBoundingClientRect().top < containerRef.getBoundingClientRect().bottom) {
+    // At the top of content that fits without it, the reserve is only blank scroll range.
+    const unneededAtTop =
+      containerRef.scrollTop <= 0.5 &&
+      containerRef.scrollHeight - untrack(appendBottomReserve) <= containerRef.clientHeight + 0.5;
+    if (
+      !unneededAtTop &&
+      reserveElement.getBoundingClientRect().top < containerRef.getBoundingClientRect().bottom
+    ) {
       return;
     }
 
@@ -6825,6 +7120,18 @@ export function MessageList() {
           : 1;
       if (
         bottomFollowSettleFrames >= settleFrameCount &&
+        initialFollowupRestore()?.sessionId !== sessionId &&
+        hasInitialDiffRevealHold(sessionId)
+      ) {
+        // The layout is settled except for a pending change summary. Stop polling; releasing
+        // the hold restarts this loop, which positions the grown tail before revealing it.
+        followLoopParkedForDiffSessionId = sessionId;
+        activeFollowLoopSessionId = null;
+        if (!activityExitSummarySettleRafId) lastBottomScrollFrameAt = null;
+        return;
+      }
+      if (
+        bottomFollowSettleFrames >= settleFrameCount &&
         initialFollowupRestore()?.sessionId !== sessionId
       ) {
         // The final cold-range rounding can add one pixel inside the normal follow tolerance.
@@ -7157,6 +7464,8 @@ export function MessageList() {
     if (!suppressSyncScrollTop) {
       // Mount the whole range before reading its geometry, but apply corrections
       // within this scroll event, before remembering the user's destination.
+      const scrollDestination =
+        actualScrollMovement && userScrollInputActive ? containerRef.scrollTop : undefined;
       batchingScrollMounts = true;
       try {
         setScrollTop(top);
@@ -7172,7 +7481,7 @@ export function MessageList() {
         mountedStickyPreviewCheckPending = false;
         reconcileMountedStickyPreview();
       }
-      flushPendingMountedRowMeasurements();
+      flushPendingMountedRowMeasurements(scrollDestination);
     }
     scheduleStickyPreviewViewportState(top, currentViewportHeight);
     const pendingStickyHandoff = upwardStickyHandoff;
@@ -7267,7 +7576,20 @@ export function MessageList() {
     ) {
       pinnedToBottom = true;
     }
+    // A forced layout before the frame can clamp the reader and dispatch this event before the
+    // resize observer sees the growth. Upward movement without new input that lands exactly on
+    // the maximum is that clamp; remember the reader's position for the observer pass.
+    layoutClampedScroll =
+      !suppressSyncScrollTop &&
+      scrollDelta < -0.5 &&
+      lastObservedScrollInputEpoch === directScrollInputEpoch &&
+      !pointerScrollOwnershipActive &&
+      currentViewportHeight > lastContainerClientHeight &&
+      top >= containerRef.scrollHeight - containerRef.clientHeight - 1
+        ? { from: lastObservedScrollTop, to: top, at: now, inputEpoch: directScrollInputEpoch }
+        : null;
     lastObservedScrollTop = decision.nextLastObservedScrollTop;
+    lastObservedScrollInputEpoch = directScrollInputEpoch;
     expectedScrollTop = decision.nextExpectedScrollTop;
     ignoreScrollUntil = decision.nextIgnoreScrollUntil;
     followModeLocked = decision.nextFollowModeLocked;
@@ -7386,6 +7708,8 @@ export function MessageList() {
 
   function onWheel(event: WheelEvent) {
     if (stickyNavigationOwnsScroll()) cancelStickyNavigation();
+    // A purely horizontal gesture cannot move the transcript's vertical scroll position.
+    if (event.deltaY === 0) return;
     if (nestedScrollerWillConsumeWheel(event)) return;
     if (widthResizeActive) {
       publishPendingWidthMeasurements({ preserveVisibleAnchor: false });
@@ -8451,7 +8775,7 @@ export function MessageList() {
             detachedAnchorTargetTop
         ) <= 1
       );
-      const anchor = canPreserveAnchor
+      const anchor: VisibleScrollAnchor | null = canPreserveAnchor
         ? (captureThinkingVisibleScrollAnchor() ??
           (widthAnchorElement && !widthAnchorElement.closest('.chat-thinking-box')
             ? widthResizeAnchor
@@ -8466,6 +8790,7 @@ export function MessageList() {
           }))
         : null;
       pendingThinkingLayoutAnchor = anchor;
+      rememberThinkingReadingAnchor(anchor);
       if (widthResizeActive) {
         publishPendingWidthMeasurements({ preserveVisibleAnchor: false });
         cancelWidthResize(anchor?.messageId ?? null);
@@ -8561,6 +8886,7 @@ export function MessageList() {
     }
 
     lastObservedScrollTop = containerRef.scrollTop ?? 0;
+    lastObservedScrollInputEpoch = directScrollInputEpoch;
     if (!trackRef)
       return () => {
         for (const cleanup of cleanups.toReversed()) cleanup();
@@ -8586,16 +8912,32 @@ export function MessageList() {
       const containerHeightDelta = currentContainerClientHeight - lastContainerClientHeight;
       const containerHeightChanged = currentContainerClientHeight !== lastContainerClientHeight;
       lastContainerClientHeight = currentContainerClientHeight;
+      const currentContainerFontSignature = containerChanged
+        ? getFontLayoutSignature(containerRef)
+        : lastContainerFontSignature;
+      const fontChanged =
+        containerChanged && currentContainerFontSignature !== lastContainerFontSignature;
+      const trackEntry = entries.find((entry) => entry.target === trackRef);
+      const currentTrackInlineSize =
+        trackEntry?.borderBoxSize?.[0]?.inlineSize ?? trackRef?.getBoundingClientRect().width ?? 0;
+      const trackInlineSizeChanged = Math.abs(currentTrackInlineSize - lastTrackInlineSize) > 0.5;
+      const widthChanged =
+        trackInlineSizeChanged ||
+        fontChanged ||
+        ((containerChanged || trackChanged) && widthResizeActive && widthResizeIncludesFontChange);
       if (hostViewportResizing) {
         clearActivityExitReserve();
         releaseBottomReserveForViewportReset();
       } else if (containerHeightDelta > 0.5) {
-        const reserve = untrack(appendBottomReserve);
-        if (containerRef.scrollHeight - reserve <= currentContainerClientHeight + 0.5) {
-          appendBottomReserveTarget = 0;
-          if (reserve > 0.5) setAppendBottomReserve(0);
-        } else {
-          reserveLostBottomSpace();
+        // Width reflow owns a combined resize through its painted anchor.
+        if (widthChanged || !reserveClampedDetachedSpace(containerHeightDelta)) {
+          const reserve = untrack(appendBottomReserve);
+          if (containerRef.scrollHeight - reserve <= currentContainerClientHeight + 0.5) {
+            appendBottomReserveTarget = 0;
+            if (reserve > 0.5) setAppendBottomReserve(0);
+          } else {
+            reserveLostBottomSpace();
+          }
         }
       } else if (containerHeightDelta < -0.5) {
         consumeBottomReserve(-containerHeightDelta);
@@ -8623,19 +8965,6 @@ export function MessageList() {
       if (trackChanged && shouldMeasureRows() && !autoScroll()) {
         setTrackLayoutVersion((version) => version + 1);
       }
-      const currentContainerFontSignature = containerChanged
-        ? getFontLayoutSignature(containerRef)
-        : lastContainerFontSignature;
-      const fontChanged =
-        containerChanged && currentContainerFontSignature !== lastContainerFontSignature;
-      const trackEntry = entries.find((entry) => entry.target === trackRef);
-      const currentTrackInlineSize =
-        trackEntry?.borderBoxSize?.[0]?.inlineSize ?? trackRef?.getBoundingClientRect().width ?? 0;
-      const trackInlineSizeChanged = Math.abs(currentTrackInlineSize - lastTrackInlineSize) > 0.5;
-      const widthChanged =
-        trackInlineSizeChanged ||
-        fontChanged ||
-        ((containerChanged || trackChanged) && widthResizeActive && widthResizeIncludesFontChange);
       if (widthChanged) {
         lastTrackInlineSize = currentTrackInlineSize;
         lastContainerFontSignature = currentContainerFontSignature;
@@ -8969,6 +9298,10 @@ export function MessageList() {
       pendingInitialScrollSessionId = editingAtSessionStart ? null : sessionId;
       pendingInitialHistoryFillSessionId = editingAtSessionStart ? null : sessionId;
       setInitialFollowupRestore(null);
+      initialDiffRevealHolds.clear();
+      initialDiffRevealDeadline = undefined;
+      thinkingReadingAnchor = null;
+      followLoopParkedForDiffSessionId = null;
       setInitialPositioningSessionId(
         !editingAtSessionStart && untrack(() => state.messagesLoading || messages().length > 0)
           ? sessionId
@@ -9424,6 +9757,33 @@ export function MessageList() {
       );
     });
   });
+  // Combined counts for edit cards. Settled history keeps its results while the tail updates, and a
+  // tail edit that collapses into a history card overrides that card's entry.
+  const historyFileEditTotals = chainHistorySegments<ReturnType<typeof collectFileEditTotals>>(
+    (segment, previous) =>
+      createMemo((prior?: ReturnType<typeof collectFileEditTotals>) =>
+        collectFileEditTotals(segment.entries(), previous?.().chain ?? null, prior?.totals)
+      )
+  );
+  const fileEditTotals = createMemo(
+    (previous?: ReadonlyMap<string, FileEditTotals>) => {
+      messageStructureVersion();
+      const history = historyFileEditTotals.map((segment) => segment());
+      const tail = tailMessages();
+      return untrack(() =>
+        mergeSegmentMaps(
+          history.reduce<ReadonlyMap<string, FileEditTotals>>(
+            (merged, segment) => mergeSegmentMaps(merged, segment.totals),
+            new Map()
+          ),
+          collectFileEditTotals(tail, history.at(-1)?.chain ?? null, previous).totals
+        )
+      );
+    },
+    { equals: sameFileEditTotalsMap }
+  );
+  createEffect(fileEditTotals, (totals) => publishFileEditTotals(totals));
+  onCleanup(() => publishFileEditTotals(null));
   const trailingTurnInlineEditRetention = createMemo<{
     sessionId: string | null;
     userMessageId: string | null;
@@ -11677,6 +12037,8 @@ export function MessageList() {
               questionRequestForTool={getQuestionRequestForTool}
               permissionMatchForTool={getPermissionMatchForTool}
               onAssistantDiffSettledEmpty={handleAssistantDiffSettledEmpty}
+              onAssistantDiffLoadStart={holdInitialRevealForAssistantDiff}
+              onAssistantDiffSummaryRetire={retireAssistantDiffSummary}
               onWorkedSummaryHoverChange={handleWorkedSummaryHoverChange}
               onUserMessageHoverChange={handleWorkedSummaryHoverChange}
             />
@@ -11784,6 +12146,7 @@ export function MessageList() {
       >
         <TurnNavigationRail
           turns={turnNavigationPreviews()}
+          numbering={absolutePromptNumbersReady() ? promptNumbers() : undefined}
           activeTurnId={activeTurnState().primary}
           visibleTurnIds={activeTurnState().visibleIds}
           hoveredTurnId={hoveredNavigationTurnId()}

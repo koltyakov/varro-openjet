@@ -348,6 +348,33 @@ class SessionTransfersTest {
         assertEquals(32, fixture.saved.single().asJsonObject.arr("hiddenOrigins")!!.size())
     }
 
+    @Test fun `location verification does not block catalog and routing reads`() {
+        val fixture = Fixture()
+        val entered = java.util.concurrent.CountDownLatch(1)
+        val release = java.util.concurrent.CountDownLatch(1)
+        val transfers = SessionTransfers(fixture.saved, { fixture.saved = it.deepCopy() }, { fixture.server }, { fixture.roots },
+            { fixture.session.deepCopy() }, {}, authorizeWorktree = {
+                entered.countDown()
+                release.await(5, java.util.concurrent.TimeUnit.SECONDS)
+                true
+            })
+        transfers.observe(fixture.session)
+        fixture.session = summary("/destination")
+        transfers.observe(fixture.session)
+        val executor = java.util.concurrent.Executors.newSingleThreadExecutor()
+        try {
+            val verification = executor.submit<JsonObject?> { transfers.get("ses_one") }
+            assertTrue(entered.await(5, java.util.concurrent.TimeUnit.SECONDS))
+            // Listing must not wait for the in-flight verification.
+            assertEquals("/destination", transfers.list().single().str("directory"))
+            release.countDown()
+            assertEquals(true, verification.get(5, java.util.concurrent.TimeUnit.SECONDS).obj("transfer").bool("available"))
+        } finally {
+            release.countDown()
+            executor.shutdownNow()
+        }
+    }
+
     companion object {
         private fun summary(directory: String) = Json.obj("id" to "ses_one", "projectID" to "project", "version" to "2", "title" to "Fixture conversation",
             "directory" to directory, "metadata" to Json.obj("private" to "not persisted"), "time" to Json.obj("created" to 1000, "updated" to 2000))

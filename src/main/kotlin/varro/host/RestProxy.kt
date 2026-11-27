@@ -19,6 +19,7 @@ import varro.protocol.str
 import varro.protocol.strings
 import varro.protocol.text
 import varro.server.OpenCodeRequestScope
+import varro.server.OpenCodeResponse
 import varro.server.OpenCodeServer
 import varro.server.RequestOptions
 import varro.server.WorkspacePaths
@@ -43,70 +44,169 @@ import java.util.concurrent.atomic.AtomicBoolean
  * removes most of upstream's cross-root authorization machinery while keeping
  * the same externally visible behaviour.
  */
-class RestProxy(
-    private val project: Project,
-    private val server: OpenCodeServer,
+class RestProxy internal constructor(
+    private val backend: Backend,
+    private val workspace: Workspace,
     private val store: VarroStore,
-    private val context: ContextProvider,
     private val services: HostServices,
     private val postResponse: (JsonObject) -> Unit,
     private val admitQueuedDispatch: (JsonObject) -> Boolean = { true },
     private val completeQueuedDispatch: (JsonObject, Boolean, Boolean) -> Unit = { _, _, _ -> },
     private val selections: SessionSelections = SessionSelections(store, request = { method, path, body, directory ->
-        server.transport.request(method, path, body, RequestOptions(directory = directory)).data
+        backend.request(method, path, body, RequestOptions(directory = directory)).data
     }),
     private val isPermissionAutomationLeaseCurrent: (Long) -> Boolean = { false },
     private val transfers: SessionTransfers? = null,
+    private val grants: SessionGrants? = null,
+    private val catalog: SessionCatalog? = null,
+    /** Server-wide sessions per scoped catalog page; tests page through small released lists. */
+    private val scopedCatalogPage: Int = SCOPED_CATALOG_PAGE,
 ) {
+    constructor(
+        project: Project,
+        server: OpenCodeServer,
+        store: VarroStore,
+        context: ContextProvider,
+        services: HostServices,
+        postResponse: (JsonObject) -> Unit,
+        admitQueuedDispatch: (JsonObject) -> Boolean = { true },
+        completeQueuedDispatch: (JsonObject, Boolean, Boolean) -> Unit = { _, _, _ -> },
+        selections: SessionSelections = SessionSelections(store, request = { method, path, body, directory ->
+            server.transport.request(method, path, body, RequestOptions(directory = directory)).data
+        }),
+        isPermissionAutomationLeaseCurrent: (Long) -> Boolean = { false },
+        transfers: SessionTransfers? = null,
+        grants: SessionGrants? = null,
+        catalog: SessionCatalog? = null,
+    ) : this(ServerBackend(server), ProjectWorkspace(project, context), store, services, postResponse, admitQueuedDispatch,
+        completeQueuedDispatch, selections, isPermissionAutomationLeaseCurrent, transfers, grants, catalog)
+
+    /** The OpenCode server as the proxy uses it. Tests supply a recording fake. */
+    interface Backend {
+        val apiVersion: Int
+        fun request(method: String, path: String, body: JsonElement? = null, options: RequestOptions = RequestOptions()): OpenCodeResponse
+        fun workspaceDirectory(): String?
+        fun url(): String
+        fun requestGeneration(): Int
+        fun isRunning(): Boolean
+        fun isAttachOnly(): Boolean
+        fun observedSessionDirectories(): Map<String, String>
+        fun pendingAttentionSessionId(requestId: String): String?
+        /** Sessions this host knows have a pending permission or question. */
+        fun pendingAttentionSessionIds(): Collection<String>
+        fun savedPermissions(method: String, sessionID: String?, body: JsonElement?, options: RequestOptions): JsonObject
+        fun activateDirectory(directory: String?)
+    }
+
+    /** The IDE project the proxy serves. Tests supply fixed roots. */
+    interface Workspace {
+        val basePath: String?
+        /** Open content roots beyond [basePath]. */
+        fun folders(): List<String>
+        /** The persistent recycle-bin journal. */
+        fun trashJournal(): java.nio.file.Path
+        fun citationSymbols(body: JsonElement?, directory: String?, authorize: (String?, String) -> Boolean, isCancelled: () -> Boolean): JsonElement
+        fun matchCopiedSelection(text: String, plainTextOnly: Boolean): JsonElement?
+        fun problems(): JsonElement
+    }
+
+    private class ServerBackend(private val server: OpenCodeServer) : Backend {
+        override val apiVersion get() = server.transport.apiVersion
+        override fun request(method: String, path: String, body: JsonElement?, options: RequestOptions) =
+            server.transport.request(method, path, body, options)
+        override fun workspaceDirectory() = server.workspaceDirectory()
+        override fun url() = server.url()
+        override fun requestGeneration() = server.requestGeneration()
+        override fun isRunning() = server.currentStatus() is varro.server.ServerStatus.Running
+        override fun isAttachOnly() = server.isAttachOnly()
+        override fun observedSessionDirectories() = server.transport.observedSessionDirectories()
+        override fun pendingAttentionSessionId(requestId: String) = server.transport.pendingAttentionSessionId(requestId)
+        override fun pendingAttentionSessionIds(): Collection<String> = server.transport.pendingAttentionSessionIds()
+        override fun savedPermissions(method: String, sessionID: String?, body: JsonElement?, options: RequestOptions) =
+            server.transport.savedPermissions.handle(method, sessionID, body, options)
+        override fun activateDirectory(directory: String?) = server.activateDirectory(directory)
+    }
+
+    private class ProjectWorkspace(private val project: Project, private val context: ContextProvider) : Workspace {
+        override val basePath: String? get() = project.basePath
+        override fun folders() = context.context.arr("workspaceFolders")?.mapNotNull { it.asObjectOrNull().text("path") }.orEmpty()
+        override fun trashJournal(): java.nio.file.Path = java.nio.file.Path.of(
+            com.intellij.openapi.application.PathManager.getConfigPath(), "varro", project.locationHash, "trash.json")
+        override fun citationSymbols(body: JsonElement?, directory: String?, authorize: (String?, String) -> Boolean, isCancelled: () -> Boolean): JsonElement =
+            context.citationSymbols.find(body, directory, authorize, isCancelled)
+        override fun matchCopiedSelection(text: String, plainTextOnly: Boolean): JsonElement? = context.matchCopiedSelection(text, plainTextOnly)
+        override fun problems(): JsonElement = WorkspaceProblems.snapshot(project)
+    }
+
     private val log = logger<RestProxy>()
     private val modelPricing = ModelPricingCatalog()
     // One decoder and cache for every view, as the architecture guide documents.
-    private val remoteImages = RemoteImages(thumbnails = service<ImageThumbnails>(), ownsThumbnails = false)
-    private val localImages = LocalImages(service<ImageThumbnails>(), ownsThumbnails = false)
+    private val remoteImagesDelegate = lazy { RemoteImages(thumbnails = service<ImageThumbnails>(), ownsThumbnails = false) }
+    private val remoteImages by remoteImagesDelegate
+    private val localImagesDelegate = lazy { LocalImages(service<ImageThumbnails>(), ownsThumbnails = false) }
+    private val localImages by localImagesDelegate
     private val citationPaths = CitationPaths()
-    private val sideQuestions = SideQuestions(server.transport::request, { server.transport.apiVersion },
-        { server.currentStatus() is varro.server.ServerStatus.Running }, { server.requestGeneration() to server.url() },
-        { (listOfNotNull(project.basePath) + context.context.arr("workspaceFolders")?.mapNotNull { it.asObjectOrNull().text("path") }.orEmpty()).distinct() },
+    private val sideQuestions = SideQuestions(backend::request, { backend.apiVersion },
+        { backend.isRunning() }, { backend.requestGeneration() to backend.url() },
+        { (listOfNotNull(workspace.basePath) + workspace.folders()).distinct() },
         authorizeSessionDirectory = ::authorizedTransfer)
     private val settings get() = varro.settings.VarroSettings.getInstance()
-    private fun workspaceRoots() = (listOfNotNull(project.basePath) +
-        context.context.arr("workspaceFolders")?.mapNotNull { it.asObjectOrNull().text("path") }.orEmpty()).distinct()
-    private val followupUsage = FollowupUsage(server.transport::request, { server.transport.apiVersion },
-        { server.requestGeneration() to server.url() }, ::workspaceRoots,
+    private fun workspaceRoots() = (listOfNotNull(workspace.basePath) +
+        workspace.folders()).distinct()
+    private val followupUsage = FollowupUsage(backend::request, { backend.apiVersion },
+        { backend.requestGeneration() to backend.url() }, ::workspaceRoots,
         { it in store.hiddenSessionIds || trash.isHidden(it) }, ::authorizedTransfer)
-    private val locations = SessionLocations(server.transport::request, { server.transport.apiVersion },
-        { Triple(server.requestGeneration(), server.url(), store.sessionHistoryScope) }, ::workspaceRoots)
+    private val locations = SessionLocations(backend::request, { backend.apiVersion },
+        { Triple(backend.requestGeneration(), backend.url(), store.sessionHistoryScope) }, ::workspaceRoots)
     private fun authorizedTransfer(id: String, directory: String): Boolean = transfers?.get(id)?.let {
         WorkspacePaths.isSame(it.str("directory"), directory) && it.obj("transfer").bool("available") == true
     } == true
-    private val requestDirectories = RequestDirectories(::workspaceRoots, { server.transport.observedSessionDirectories() },
-        ::authorizedTransfer, authorizeSession = { session, directory ->
+    /** A retained conversation's destination, or a subagent inheriting it, learning missing ancestry on demand. */
+    private fun authorizedGrant(id: String, directory: String): Boolean = authorizedTransfer(id, directory) ||
+        grants?.let { it.isGranted(id, directory) || (it.isGrantedDirectory(directory) &&
+            it.resolve(listOf(id), directory) == SessionGrants.Resolution.GRANTED) } == true
+
+    /** The directory that scopes a session request: its retained destination or inherited grant. */
+    private fun sessionScope(id: String): String? = transfers?.get(id).str("directory") ?: grants?.grant(id)?.directory
+        ?: catalogDirectory(id)
+
+    /** Where a pending prompt lives when it belongs to a retained, inherited or catalog session outside the open roots. */
+    private fun attentionScope(sessionId: String): String? = grants?.grant(sessionId)?.directory ?: catalogDirectory(sessionId)
+
+    /** Request threads may block, so a `project` catalog loads its roots' identities before deciding. */
+    private fun catalogDirectory(id: String): String? = catalog?.let { it.loadProjects(); it.ownedDirectory(id) }
+
+    private val access: EventAccess? get() = when {
+        grants != null && catalog != null -> EventAccesses(grants, catalog)
+        else -> grants ?: catalog
+    }
+
+    private val requestDirectories = RequestDirectories(::workspaceRoots, { backend.observedSessionDirectories() },
+        ::authorizedGrant, authorizeSession = { session, directory ->
             val options = RequestOptions(unscoped = true, timeoutMs = 15_000, maxResponseBytes = 2 * 1024 * 1024)
             FileReferences.authorizeDirectory(session, directory, workspaceRoots(), store.sessionHistoryScope,
-                { server.transport.request("GET", "/session/${encode(session)}", options = options).data.asObjectOrNull() },
-                { root -> server.transport.request("GET", "/project/current", options = options.copy(unscoped = false, directory = root)).data.asObjectOrNull() })
-        }, cacheKey = { "${server.requestGeneration()}|${server.url()}|${store.sessionHistoryScope}" })
-    private val childTasks = ChildTasks(server.transport::request, { server.transport.apiVersion },
-        { server.requestGeneration() to server.url() },
-        { (listOfNotNull(project.basePath) + context.context.arr("workspaceFolders")?.mapNotNull { it.asObjectOrNull().text("path") }.orEmpty()).distinct() },
+                { backend.request("GET", "/session/${encode(session)}", options = options).data.asObjectOrNull() },
+                { root -> SessionCatalog.currentProject({ path, directory -> backend.request("GET", path, options = options.copy(unscoped = false, directory = directory)).data }, root) })
+        }, cacheKey = { "${backend.requestGeneration()}|${backend.url()}|${store.sessionHistoryScope}" })
+    private val childTasks = ChildTasks(backend::request, { backend.apiVersion },
+        { backend.requestGeneration() to backend.url() },
+        { (listOfNotNull(workspace.basePath) + workspace.folders()).distinct() },
         { it in store.hiddenSessionIds }, ::authorizedTransfer)
-    private val settingsSubscription = com.intellij.openapi.application.ApplicationManager.getApplication().messageBus.connect().apply {
+    private val settingsSubscription = com.intellij.openapi.application.ApplicationManager.getApplication()?.messageBus?.connect()?.apply {
         subscribe(varro.settings.VarroSettings.TOPIC, varro.settings.VarroSettings.Listener {
-            if (settings.remoteImageMode() != "on") remoteImages.cancel()
+            if (settings.remoteImageMode() != "on" && remoteImagesDelegate.isInitialized()) remoteImages.cancel()
         })
     }
     private val contentReader by lazy { MessageContentReader(service<ImageThumbnails>()) { path, options ->
-        server.transport.request("GET", path, options = options).data
+        backend.request("GET", path, options = options).data
     } }
 
     /** In-flight requests, keyed by the webview's cancel key. */
     private val activeRequests = RequestTasks()
     private val disposed = AtomicBoolean(false)
     private val trash = SessionTrash(store, request = { method, path, body, directory ->
-        server.transport.request(method, path, body, RequestOptions(directory = directory)).data
-    }, journal = varro.store.JsonJournal(java.nio.file.Path.of(
-        com.intellij.openapi.application.PathManager.getConfigPath(), "varro", project.locationHash, "trash.json",
-    )))
+        backend.request(method, path, body, RequestOptions(directory = directory)).data
+    }, journal = varro.store.JsonJournal(workspace.trashJournal()))
 
     /**
      * Services the proxy needs from the rest of the host. Kept as an interface so
@@ -183,8 +283,8 @@ class RestProxy(
             if (cancelled()) return
             fun checkPermissionLease() = PermissionAutomationLease.assertCurrent(payload, isPermissionAutomationLeaseCurrent)
             checkPermissionLease()
-            if (skipNativeRecovery(method, path, payload.bool("interruptedRecovery") == true, server.transport.apiVersion)) {
-                log.info("interrupted-recovery native-owned, generation=${server.requestGeneration()}")
+            if (skipNativeRecovery(method, path, payload.bool("interruptedRecovery") == true, backend.apiVersion)) {
+                log.info("interrupted-recovery native-owned, generation=${backend.requestGeneration()}")
                 respond(id, data = Json.obj("skipped" to true))
                 return
             }
@@ -265,9 +365,9 @@ class RestProxy(
     fun dispose() {
         disposed.set(true)
         activeRequests.close()
-        remoteImages.close()
-        localImages.close()
-        settingsSubscription.disconnect()
+        if (remoteImagesDelegate.isInitialized()) remoteImages.close()
+        if (localImagesDelegate.isInitialized()) localImages.close()
+        settingsSubscription?.disconnect()
     }
 
     private fun respond(id: Int, data: JsonElement? = null, error: String? = null) {
@@ -283,7 +383,7 @@ class RestProxy(
     private fun forward(method: String, path: String, body: JsonElement?, queuedDispatch: Boolean = false, transferDirectory: String? = null, isCancelled: () -> Boolean = { false }): JsonElement? {
         return try { forwardRequest(method, path, body, queuedDispatch, transferDirectory, isCancelled) }
         catch (failure: Exception) {
-            val directory = transferDirectory ?: ApiRoutes.parse(method, path)?.query?.get("directory")?.firstOrNull() ?: server.workspaceDirectory().orEmpty()
+            val directory = transferDirectory ?: ApiRoutes.parse(method, path)?.query?.get("directory")?.firstOrNull() ?: backend.workspaceDirectory().orEmpty()
             WorkspaceDirectoryErrors.recover(method, path, directory, failure)
         }
     }
@@ -291,21 +391,35 @@ class RestProxy(
     private fun forwardRequest(method: String, path: String, body: JsonElement?, queuedDispatch: Boolean, transferDirectory: String?, isCancelled: () -> Boolean): JsonElement? {
         val request = ApiRoutes.parse(method, path)
         require(!(method == "POST" && request?.segments?.firstOrNull() == "question" &&
-            body.asObjectOrNull().str("kind") == "native-form" && server.transport.apiVersion != 2)) { "Native forms require OpenCode V2" }
+            body.asObjectOrNull().str("kind") == "native-form" && backend.apiVersion != 2)) { "Native forms require OpenCode V2" }
         val sessionId = request?.segments?.takeIf { it.size >= 2 && it[0] == "session" }?.get(1)
         if (request?.segments?.size == 3 && request.segments[0] == "session" &&
             request.segments[2] in setOf("child-task-controls", "interrupt-child", "background-parent")) {
             return childTasks.request(method, path, body, transferDirectory ?: request.query["directory"]?.firstOrNull()
-                ?: server.workspaceDirectory(), isCancelled)
+                ?: backend.workspaceDirectory(), isCancelled)
         }
         if (sessionId != null && sessionId != "status" && method != "GET") {
             transfers?.checkWritable(sessionId)
+            // A subagent of a moved conversation is writable only while that conversation is.
+            grants?.linkedOwner(sessionId)?.takeIf { it != sessionId }?.let { owner -> transfers?.checkWritable(owner) }
             if (isCancelled()) throw java.util.concurrent.CancellationException("OpenCode request cancelled")
+        }
+        if (method == "GET" && request?.query?.containsKey("directory") == false &&
+            (request.pathname == "/permission" || request.pathname == "/question")) {
+            return pendingSnapshot(path, isCancelled)
+        }
+        val reply = request?.segments?.takeIf { it.size == 3 && it[0] in setOf("permission", "question") && it[2] in setOf("reply", "reject") }
+        if (method == "POST" && reply != null && !request.query.containsKey("directory")) {
+            // A prompt from a retained conversation or its subagent is answered in its own location,
+            // where the adapter can find it again after a reconnect.
+            backend.pendingAttentionSessionId(reply[1])?.let(::attentionScope)?.let { directory ->
+                return backend.request(method, path, body, RequestOptions(directory = directory, isCancelled = isCancelled)).data
+            }
         }
 
         if (method == "POST" && request?.segments?.size == 3 && request.segments[2] == "side-question" && sessionId != null) {
             val directory = transferDirectory ?: request.query["directory"]?.firstOrNull()
-                ?: transfers?.get(sessionId).str("directory") ?: server.workspaceDirectory()
+                ?: sessionScope(sessionId) ?: backend.workspaceDirectory()
             return sideQuestions.ask(path, body, directory, isCancelled)
         }
 
@@ -316,9 +430,9 @@ class RestProxy(
 
         if (method == "GET" && request != null && Regex("^/session/[^/]+/message$").matches(request.pathname)) {
             val directory = transferDirectory ?: request.query["directory"]?.firstOrNull()
-                ?: transfers?.get(request.segments[1]).str("directory")
-                ?: body.asObjectOrNull().str("workspaceDirectory") ?: server.workspaceDirectory()
-            val response = server.transport.request(method, path, options = RequestOptions(
+                ?: sessionScope(request.segments[1])
+                ?: body.asObjectOrNull().str("workspaceDirectory") ?: backend.workspaceDirectory()
+            val response = backend.request(method, path, options = RequestOptions(
                 directory = directory, captureNextCursor = true, isCancelled = isCancelled,
                 maxResponseBytes = 256L * 1024 * 1024,
             ))
@@ -338,12 +452,12 @@ class RestProxy(
         }
 
         val outgoing = if (method == "POST" && sessionId != null && request.segments.size == 3 && request.segments[2] in setOf("prompt_async", "message", "command"))
-            CitationPaths.withGuidance(body, transferDirectory ?: request.query["directory"]?.firstOrNull() ?: server.workspaceDirectory()) else body
-        val result = server.transport.request(method = method, path = path, body = outgoing, options = RequestOptions(isCancelled = isCancelled,
-            directory = sessionId?.let { transfers?.get(it).str("directory") })).data
+            CitationPaths.withGuidance(body, transferDirectory ?: request.query["directory"]?.firstOrNull() ?: backend.workspaceDirectory()) else body
+        val result = backend.request(method = method, path = path, body = outgoing, options = RequestOptions(isCancelled = isCancelled,
+            directory = sessionId?.takeIf { it != "status" }?.let(::sessionScope))).data
         if (method == "POST" && sessionId != null && request.segments.size == 3 && request.segments[2] in setOf("prompt_async", "message", "command")) {
             runCatching { services.clearFollowups(sessionId, transferDirectory ?: request.query["directory"]?.firstOrNull()
-                ?: server.workspaceDirectory(), body.asObjectOrNull().str("messageID")) }
+                ?: backend.workspaceDirectory(), body.asObjectOrNull().str("messageID")) }
                 .onFailure { log.warn("Could not clear previous-turn follow-up cache") }
         }
         if (method == "GET" && request?.pathname == "/session") return locations.annotate(Json.array(
@@ -360,8 +474,8 @@ class RestProxy(
     private fun readContent(request: ApiRoutes.Request, transferDirectory: String?, isCancelled: () -> Boolean): JsonElement {
         val sessionID = request.segments[1]
         require(sessionID !in store.hiddenSessionIds) { "404 Session not found" }
-        val directory = transferDirectory ?: request.query["directory"]?.firstOrNull() ?: transfers?.get(sessionID).str("directory") ?: server.workspaceDirectory()
-        return contentReader.read(request, directory, server.url(), isCancelled)
+        val directory = transferDirectory ?: request.query["directory"]?.firstOrNull() ?: sessionScope(sessionID) ?: backend.workspaceDirectory()
+        return contentReader.read(request, directory, backend.url(), isCancelled)
     }
 
     /**
@@ -375,18 +489,22 @@ class RestProxy(
      */
     private fun sessionPage(path: String, request: ApiRoutes.Request, isCancelled: () -> Boolean): JsonElement {
         val limit = request.query["limit"]?.firstOrNull()?.toIntOrNull()?.coerceIn(1, 1_000) ?: 100
-        val response = server.transport.request("GET", path, options = RequestOptions(captureNextCursor = true, isCancelled = isCancelled))
-        val sessions = mergeTransfers(response.data.asArrayOrNull() ?: JsonArray(), request)
-
         val recycled = store.recycleBin.flatMap {
             it.asObjectOrNull()?.getAsJsonArray("sessions")?.mapNotNull { session -> session.asObjectOrNull().str("id") }.orEmpty()
         }.toSet()
         val hidden = store.hiddenSessionIds
-
-        val visible = sessions.filter { entry ->
-            val id = entry.asObjectOrNull().str("id") ?: return@filter false
-            id !in recycled && id !in hidden
+        fun isVisible(entry: JsonElement): Boolean {
+            val id = entry.asObjectOrNull().str("id") ?: return false
+            return id !in recycled && id !in hidden
         }
+        val scoped = scopedCatalogRows(request, limit, ::isVisible, isCancelled)
+        val (listed, more) = scoped?.let { it.rows to it.more } ?: run {
+            val response = backend.request("GET", path, options = RequestOptions(captureNextCursor = true, isCancelled = isCancelled))
+            (response.data.asArrayOrNull() ?: JsonArray()) to (response.nextCursor != null)
+        }
+        val sessions = mergeTransfers(listed, request)
+
+        val visible = sessions.filter(::isVisible)
 
         // Newest first, matching how the client renders the list.
         val ordered = visible.sortedByDescending { entry ->
@@ -396,7 +514,63 @@ class RestProxy(
         }
 
         val items = locations.annotate(JsonArray().apply { ordered.take(limit).forEach(::add) }, isCancelled)
-        return Json.obj("items" to items, "hasMore" to (ordered.size > limit || response.nextCursor != null))
+        return Json.obj("items" to items, "hasMore" to (ordered.size > limit || more)).apply {
+            if (scoped?.incomplete == true) addProperty("incomplete", true)
+        }
+    }
+
+    /** A scoped catalog read: admitted rows, whether more exist, and whether the read stopped at its bound. */
+    private class ScopedRows(val rows: JsonArray, val more: Boolean, val incomplete: Boolean)
+
+    /**
+     * The `descendants` or `project` catalog on V2. OpenCode filters `/api/session` by exact
+     * directory, so the scoped catalog pages through the server-wide list, newest-updated first as
+     * OpenCode orders it, and keeps the open roots' sessions plus those this window's catalog owns.
+     * Other windows' sessions, and those a more specific open window owns, are left out. Paging
+     * stops once one more visible session than requested is admitted, or the list ends. A list
+     * longer than [SCOPED_CATALOG_PAGES] pages reports `incomplete` rather than reading on.
+     * OpenCode's `project` filter is not used: both scopes also admit nested folders by
+     * containment, including independent nested repositories with their own project.
+     * `null` keeps the exact-directory listing.
+     */
+    private fun scopedCatalogRows(request: ApiRoutes.Request, limit: Int, isVisible: (JsonElement) -> Boolean,
+        isCancelled: () -> Boolean): ScopedRows? {
+        val catalog = catalog?.takeIf { backend.apiVersion == 2 && it.isScoped() && !request.query.containsKey("directory") } ?: return null
+        catalog.loadProjects()
+        val first = listOfNotNull(
+            "limit=$scopedCatalogPage",
+            request.query["search"]?.firstOrNull()?.let { "search=${encode(it)}" },
+            request.query["roots"]?.firstOrNull()?.takeIf { it == "true" }?.let { "roots=true" },
+        ).joinToString("&")
+        val roots = workspaceRoots()
+        val admitted = JsonArray()
+        val seen = HashSet<String>()
+        var visible = 0
+        var query = first
+        for (page in 1..SCOPED_CATALOG_PAGES) {
+            if (isCancelled()) throw java.util.concurrent.CancellationException("OpenCode request cancelled")
+            val response = backend.request("GET", "/experimental/session?$query", options = RequestOptions(unscoped = true,
+                captureNextCursor = true, isCancelled = isCancelled))
+            val rows = response.data.asArrayOrNull() ?: error("Malformed session list")
+            rows.forEach { value ->
+                val session = value.asObjectOrNull() ?: return@forEach
+                val id = session.str("id") ?: return@forEach
+                // A session updated while paging can appear on two pages.
+                if (!seen.add(id)) return@forEach
+                catalog.observe(session)
+                grants?.observe(session)
+                val directory = session.text("directory") ?: return@forEach
+                if (roots.any { WorkspacePaths.isSame(it, directory) } || catalog.admitsListed(session)) {
+                    admitted.add(session)
+                    if (isVisible(session)) visible++
+                }
+            }
+            if (visible > limit) return ScopedRows(admitted, more = true, incomplete = false)
+            // The cursor carries the first page's filters; an empty page or no cursor ends the list.
+            val next = response.nextCursor?.takeIf { rows.size() > 0 } ?: return ScopedRows(admitted, more = false, incomplete = false)
+            query = "limit=$scopedCatalogPage&cursor=${encode(next)}"
+        }
+        return ScopedRows(admitted, more = true, incomplete = true)
     }
 
     private fun mergeTransfers(sessions: JsonArray, request: ApiRoutes.Request): JsonArray =
@@ -404,13 +578,86 @@ class RestProxy(
 
     /** A missing folder-scoped status must not erase a retained conversation's activity. */
     private fun transferredStatuses(isCancelled: () -> Boolean): JsonObject {
-        val current = server.workspaceDirectory()
-        val result = server.transport.request("GET", "/session/status", options = RequestOptions(directory = current,
+        val current = backend.workspaceDirectory()
+        val result = backend.request("GET", "/session/status", options = RequestOptions(directory = current,
             isCancelled = isCancelled)).data.asObjectOrNull() ?: error("Malformed session status")
         return transfers?.statuses(current, result, store.hiddenSessionIds) { directory ->
-            server.transport.request("GET", "/session/status", options = RequestOptions(directory = directory,
+            backend.request("GET", "/session/status", options = RequestOptions(directory = directory,
                 isCancelled = isCancelled)).data
         } ?: result
+    }
+
+    /**
+     * The workspace's pending permissions or questions, plus those of conversations this project
+     * retains elsewhere and the subagents inheriting their grants. OpenCode scopes pending requests
+     * to their location, so each verified destination is queried. Requests there from unrelated
+     * sessions are omitted; an inconclusive ancestry rejects the snapshot, because the webview
+     * treats an omission as resolution.
+     */
+    private fun pendingSnapshot(path: String, isCancelled: () -> Boolean): JsonElement? {
+        val base = backend.request("GET", path, options = RequestOptions(isCancelled = isCancelled)).data
+        val access = access ?: return base
+        val current = backend.workspaceDirectory()
+        catalog?.loadProjects()
+        val destinations = ((grants?.verifiedDestinations() ?: emptyList()) +
+            promptDirectories(access, isCancelled) + (catalog?.ownedDirectories() ?: emptyList()))
+            .filterNot { WorkspacePaths.isSame(it, current) }
+            .distinctBy(WorkspacePaths::normalizeIdentity)
+        if (destinations.isEmpty()) return base
+        val kind = path.removePrefix("/")
+        val result = JsonArray()
+        val seen = HashSet<String>()
+        fun add(value: JsonElement) {
+            val id = PendingRequests.id(value)
+            if (id == null || seen.add(id)) result.add(value)
+        }
+        (base.asArrayOrNull() ?: error("Malformed pending $kind response")).forEach(::add)
+        for (directory in destinations) {
+            if (isCancelled()) throw java.util.concurrent.CancellationException("OpenCode request cancelled")
+            val listed = backend.request("GET", path, options = RequestOptions(directory = directory, isCancelled = isCancelled))
+                .data.asArrayOrNull() ?: error("Malformed pending $kind response")
+            PendingRequests.granted(listed, directory, access) { it in store.hiddenSessionIds || trash.isHidden(it) }.forEach(::add)
+        }
+        return result
+    }
+
+    /**
+     * The folders of sessions that can hold a pending prompt now, so a prompt asked before a reload
+     * is recovered however long ago its folder was last seen. OpenCode lists pending requests only
+     * per location and has no server-wide list, but a prompt blocks its session, so it is among the
+     * server-wide active sessions on V2; prompts this host already saw are included too. Only
+     * sessions this window owns or is granted count. Their locations come from known records or one
+     * canonical read each; an unreadable candidate rejects the snapshot rather than dropping its prompt.
+     */
+    private fun promptDirectories(access: EventAccess, isCancelled: () -> Boolean): List<String> {
+        val active = if (backend.apiVersion == 2) {
+            backend.request("GET", "/api/session/active", options = RequestOptions(unscoped = true, isCancelled = isCancelled))
+                .data.asObjectOrNull()?.obj("data")?.keySet().orEmpty()
+        } else emptySet()
+        val candidates = (backend.pendingAttentionSessionIds() + active).distinct()
+            .filter { it !in store.hiddenSessionIds && !trash.isHidden(it) }
+        val observed = backend.observedSessionDirectories()
+        var reads = 0
+        return candidates.mapNotNull { id ->
+            if (isCancelled()) throw java.util.concurrent.CancellationException("OpenCode request cancelled")
+            val directory = observed[id] ?: catalog?.knownDirectory(id) ?: run {
+                check(reads++ < MAX_PROMPT_SESSION_READS) { "Could not resolve pending request session ancestry" }
+                val record = backend.request("GET", "/session/${encode(id)}", options = RequestOptions(unscoped = true,
+                    timeoutMs = 5_000, maxResponseBytes = 2 * 1024 * 1024, isCancelled = isCancelled)).data.asObjectOrNull()
+                check(record.str("id") == id) { "Could not resolve pending request session ancestry" }
+                catalog?.observe(record)
+                grants?.observe(record)
+                record.text("directory") ?: error("Could not resolve pending request session ancestry")
+            }
+            when {
+                access.isGranted(id, directory) -> directory
+                else -> when (access.resolve(listOf(id), directory)) {
+                    SessionGrants.Resolution.GRANTED -> directory
+                    SessionGrants.Resolution.UNRELATED -> null
+                    SessionGrants.Resolution.UNKNOWN -> error("Could not resolve pending request session ancestry")
+                }
+            }
+        }
     }
 
     // --- Host API namespace ---------------------------------------------------
@@ -425,31 +672,31 @@ class RestProxy(
         return when {
             pathname == ApiRoutes.Endpoints.CITATION_PATHS || pathname == ApiRoutes.Endpoints.CITATION_SYMBOLS -> {
                 val authorize: (String?, String) -> Boolean = { session, directory ->
-                val roots = (listOfNotNull(project.basePath) + context.context.arr("workspaceFolders")?.mapNotNull { it.asObjectOrNull().text("path") }.orEmpty()).distinct()
+                val roots = (listOfNotNull(workspace.basePath) + workspace.folders()).distinct()
                 if (session == null) roots.any { WorkspacePaths.isSame(it, directory) }
                 else {
                     require(session !in store.hiddenSessionIds) { "Session not found" }
                     val options = RequestOptions(unscoped = true, timeoutMs = 15_000, maxResponseBytes = 2 * 1024 * 1024,
                         cancellableBody = true, isCancelled = isCancelled)
                     authorizedTransfer(session, directory) || FileReferences.authorizeDirectory(session, directory, roots, store.sessionHistoryScope,
-                        { server.transport.request("GET", "/session/${encode(session)}", options = options).data.asObjectOrNull() },
-                        { root -> server.transport.request("GET", "/project/current", options = options.copy(unscoped = false, directory = root)).data.asObjectOrNull() })
+                        { backend.request("GET", "/session/${encode(session)}", options = options).data.asObjectOrNull() },
+                        { root -> SessionCatalog.currentProject({ path, directory -> backend.request("GET", path, options = options.copy(unscoped = false, directory = directory)).data }, root) })
                 }
                 }
-                if (pathname == ApiRoutes.Endpoints.CITATION_SYMBOLS) context.citationSymbols.find(body, server.workspaceDirectory(), authorize, isCancelled)
-                else citationPaths.validate(body, server.workspaceDirectory(), authorize, isCancelled)
+                if (pathname == ApiRoutes.Endpoints.CITATION_SYMBOLS) workspace.citationSymbols(body, backend.workspaceDirectory(), authorize, isCancelled)
+                else citationPaths.validate(body, backend.workspaceDirectory(), authorize, isCancelled)
             }
             pathname == ApiRoutes.Endpoints.LOCAL_IMAGE -> {
-                require(!server.isAttachOnly()) { "Local images are unavailable for an attached server" }
+                require(!backend.isAttachOnly()) { "Local images are unavailable for an attached server" }
                 val roots = workspaceRoots()
                 val options = RequestOptions(unscoped = true, timeoutMs = 5_000, maxResponseBytes = 2 * 1024 * 1024,
                     cancellableBody = true, isCancelled = isCancelled)
-                localImages.load(body, server.workspaceDirectory(), roots, { session, directory ->
+                localImages.load(body, backend.workspaceDirectory(), roots, { session, directory ->
                     if (session == null) roots.any { WorkspacePaths.isSame(it, directory) }
                     else session !in store.hiddenSessionIds && (authorizedTransfer(session, directory) ||
                         FileReferences.authorizeDirectory(session, directory, roots, store.sessionHistoryScope,
-                            { server.transport.request("GET", "/session/${encode(session)}", options = options).data.asObjectOrNull() },
-                            { root -> server.transport.request("GET", "/project/current", options = options.copy(unscoped = false, directory = root)).data.asObjectOrNull() }))
+                            { backend.request("GET", "/session/${encode(session)}", options = options).data.asObjectOrNull() },
+                            { root -> SessionCatalog.currentProject({ path, directory -> backend.request("GET", path, options = options.copy(unscoped = false, directory = directory)).data }, root) }))
                 }, isCancelled)
             }
             pathname == ApiRoutes.Endpoints.REMOTE_IMAGE -> {
@@ -466,24 +713,24 @@ class RestProxy(
             pathname == ApiRoutes.Endpoints.MODEL_PRICING ->
                 modelPricing.get(q("providerID")!!, q("modelID")!!) ?: JsonNull.INSTANCE
 
-            pathname == ApiRoutes.Endpoints.WORKSPACE_PROBLEMS -> WorkspaceProblems.snapshot(project)
+            pathname == ApiRoutes.Endpoints.WORKSPACE_PROBLEMS -> workspace.problems()
 
             pathname == ApiRoutes.Endpoints.COPIED_SELECTION_MATCH -> {
                 val record = body.asObjectOrNull()
                 val text = record.str("text")
                 require(text != null && text.isNotBlank() && text.length <= 256 * 1024) { "Invalid copied selection text" }
-                context.matchCopiedSelection(text, record.bool("plainTextOnly") == true)
+                workspace.matchCopiedSelection(text, record.bool("plainTextOnly") == true)
             }
 
             pathname == ApiRoutes.Endpoints.PROVIDER_LIMIT ->
                 services.providerLimit(q("providerID")!!, q("modelID"))
 
             pathname == ApiRoutes.Endpoints.STARTUP_DIAGNOSTICS -> {
-                val directory = q("directory") ?: server.workspaceDirectory()
-                val roots = listOfNotNull(project.basePath, server.workspaceDirectory()) +
-                    context.context.arr("workspaceFolders")?.mapNotNull { it.asObjectOrNull().text("path") }.orEmpty()
+                val directory = q("directory") ?: backend.workspaceDirectory()
+                val roots = listOfNotNull(workspace.basePath, backend.workspaceDirectory()) +
+                    workspace.folders()
                 require(directory == null || roots.any { WorkspacePaths.isSame(it, directory) }) { "Workspace directory is not an open project folder" }
-                StartupDiagnostics({ server.transport.apiVersion }, server.transport::request).read(directory, isCancelled)
+                StartupDiagnostics({ backend.apiVersion }, backend::request).read(directory, isCancelled)
             }
 
             // The client types this as `string | null`: the file's text, not a
@@ -549,7 +796,7 @@ class RestProxy(
                 handleSessionEndpoint(method, request, body, transferDirectory ?: q("directory"), isCancelled)
 
             // Server process memory is distinct from persisted session/project rules.
-            pathname == ApiRoutes.Endpoints.PERMISSION_SERVER_MEMORY -> server.transport.savedPermissions.handle(
+            pathname == ApiRoutes.Endpoints.PERMISSION_SERVER_MEMORY -> backend.savedPermissions(
                 method, q("sessionId") ?: body.asObjectOrNull().text("sessionId"), body,
                 RequestOptions(directory = q("directory"), isCancelled = isCancelled),
             )
@@ -586,7 +833,10 @@ class RestProxy(
         directory: String?,
     ): JsonElement {
         if (method == "POST") {
-            body.asObjectOrNull().str("scope")?.let { store.sessionHistoryScope = it }
+            body.asObjectOrNull().str("scope")?.let {
+                store.sessionHistoryScope = it
+                catalog?.invalidate()
+            }
         }
         return Json.obj(
             "scope" to store.sessionHistoryScope,
@@ -597,7 +847,7 @@ class RestProxy(
     /** Walks up from [directory] looking for a `.git` entry, as Git itself does. */
     private fun isGitWorkingTree(directory: String?): Boolean {
         val start = directory?.takeIf { it.isNotBlank() }
-            ?: project.basePath
+            ?: workspace.basePath
             ?: return false
         var current: java.nio.file.Path? = runCatching { java.nio.file.Paths.get(start) }.getOrNull()
         while (current != null) {
@@ -641,8 +891,8 @@ class RestProxy(
                 // the directory that session actually belongs to, so subsequent
                 // message and diff reads resolve against the right workspace.
                 val target = directory ?: body.asObjectOrNull().text("directory")
-                    ?: server.transport.observedSessionDirectories()[sessionId]
-                server.activateDirectory(target)
+                    ?: backend.observedSessionDirectories()[sessionId]
+                backend.activateDirectory(target)
                 // The client expects the Session itself, and reads it only after
                 // the scope switch, so it must be fetched against the new scope.
                 fetchSession(sessionId, target, isCancelled) ?: JsonNull.INSTANCE
@@ -699,7 +949,7 @@ class RestProxy(
     private fun renameIfUntitled(sessionId: String, body: JsonElement?, directory: String?, isCancelled: () -> Boolean): JsonElement {
         val title = body.asObjectOrNull().text("title") ?: return JsonNull.INSTANCE
         val current = runCatching {
-            server.transport.request(
+            backend.request(
                 "GET",
                 "/session/${encode(sessionId)}",
                 options = RequestOptions(directory = directory, isCancelled = isCancelled),
@@ -710,7 +960,7 @@ class RestProxy(
         if (existing.isNotBlank() && !UNTITLED.matches(existing)) return JsonNull.INSTANCE
 
         return runCatching {
-            server.transport.request(
+            backend.request(
                 "PATCH",
                 "/session/${encode(sessionId)}",
                 body = Json.obj("title" to title),
@@ -746,13 +996,13 @@ class RestProxy(
 
     /** Reads one session, scoped to [directory]. `null` when it cannot be read. */
     private fun fetchSession(sessionId: String, directory: String?, isCancelled: () -> Boolean): JsonElement? = runCatching {
-        server.transport.request(
+        backend.request(
             "GET",
             "/session/${encode(sessionId)}",
             options = RequestOptions(directory = directory, isCancelled = isCancelled),
         ).data
     }.getOrElse { failure ->
-        if (WorkspaceDirectoryErrors.isMissing(failure.message)) throw IllegalStateException(WorkspaceDirectoryErrors.message(directory ?: server.workspaceDirectory().orEmpty()), failure)
+        if (WorkspaceDirectoryErrors.isMissing(failure.message)) throw IllegalStateException(WorkspaceDirectoryErrors.message(directory ?: backend.workspaceDirectory().orEmpty()), failure)
         null
     }
 
@@ -763,6 +1013,13 @@ class RestProxy(
         internal fun skipNativeRecovery(method: String, path: String, recovery: Boolean, apiVersion: Int): Boolean =
             recovery && apiVersion == 2 && method == "POST" &&
                 Regex("^/session/[^/]+/(?:prompt_async|message|command)$").matches(path.substringBefore('?'))
+
+        /** Server-wide sessions per scoped catalog page. */
+        private const val SCOPED_CATALOG_PAGE = 1_000
+        /** Canonical reads one pending snapshot may spend locating candidate sessions. */
+        private const val MAX_PROMPT_SESSION_READS = 128
+        /** Pages one scoped catalog load reads at most before reporting itself incomplete. */
+        private const val SCOPED_CATALOG_PAGES = 20
 
         /** Titles OpenCode leaves as placeholders. */
         private val UNTITLED = Regex("""^(?:untitled|new session)$""", RegexOption.IGNORE_CASE)

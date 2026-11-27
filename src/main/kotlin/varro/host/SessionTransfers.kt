@@ -98,7 +98,11 @@ class SessionTransfers(
         }.mapNotNull { project(it, scope, verify = false) }
     }
 
-    @Synchronized fun get(id: String): JsonObject? = entry(id)?.let { project(it, roots()) }
+    /**
+     * Verification may read the server, so it runs outside the monitor: event routing and
+     * notifications read [list] without waiting on it. Entries are replaced, never mutated.
+     */
+    fun get(id: String): JsonObject? = synchronized(this) { entry(id) }?.let { project(it, roots()) }
 
     private fun project(entry: JsonObject, scope: List<String>, verify: Boolean = true): JsonObject? = entry.obj("session")?.deepCopy()?.apply {
         val hiddenOrigins = entry.arr("hiddenOrigins")?.strings().orEmpty()

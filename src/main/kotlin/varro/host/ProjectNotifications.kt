@@ -32,6 +32,8 @@ internal class ProjectNotifications(
     private val server: OpenCodeServer,
     private val settings: VarroSettings,
     private val store: VarroStore,
+    /** A conversation retained outside the project, or a subagent inheriting its grant. */
+    private val isGranted: (String) -> Boolean = { false },
     private val openChat: (String) -> Unit,
 ) : Disposable {
     private val log = logger<ProjectNotifications>()
@@ -71,6 +73,7 @@ internal class ProjectNotifications(
 
     private fun inScope(id: String): Boolean? {
         if (id in store.hiddenSessionIds) return false
+        if (isGranted(id)) return true
         val directory = server.transport.observedSessionDirectories()[id] ?: return if (id in scopedSessions) true else null
         return WorkspacePaths.isSame(directory, project.basePath)
     }

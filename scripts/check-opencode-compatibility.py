@@ -14,6 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SUITES = (
     "varro.server.OpenCodeV2IntegrationTest",
     "varro.server.OpenCodeManagedServiceIntegrationTest",
+    "varro.server.OpenCodeV2MovedSubagentIntegrationTest",
 )
 
 
@@ -107,7 +108,7 @@ def main():
         record["command"] = command
         subprocess.run(command, cwd=ROOT, env=environment, timeout=2400 if args.full_check else 600, check=True)
         record.update(status="passed", suites=read_results(ROOT / "build/test-results/test"))
-        print(f"Kotlin adapter and managed-service compatibility passed against OpenCode {observed}.")
+        print(f"Kotlin adapter, managed-service and moved-session routing compatibility passed against OpenCode {observed}.")
         return 0
     except (OSError, ValueError, ET.ParseError, subprocess.SubprocessError) as error:
         record["error"] = str(error)

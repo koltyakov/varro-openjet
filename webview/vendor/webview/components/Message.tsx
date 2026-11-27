@@ -14,6 +14,7 @@ import {
   isAssistantActiveInlineToolPart,
   isAssistantActivityPart,
   isAssistantActivityPartRunning,
+  isAssistantEditActivityPart,
   type AssistantActivityGroupInfo,
 } from '../lib/assistant-activity';
 import { client } from '../lib/client';
@@ -131,6 +132,10 @@ export function Message(props: {
   onTurnHoverChange?: (messageId: string, hovering: boolean) => void;
   onResponseHoverChange?: (messageId: string, hovering: boolean) => void;
   onAssistantDiffSettledEmpty?: (messageId: string) => void;
+  // Returns a release callback when the list holds its reveal until this diff request settles.
+  onAssistantDiffLoadStart?: () => (() => void) | undefined;
+  // Runs `retire` when the list has reserved the summary's space for a bottom-anchored reader.
+  onAssistantDiffSummaryRetire?: (messageId: string, retire: () => void) => void;
   isLastAssistant?: boolean;
   hideErrorAction?: boolean;
   retryState?: AssistantRetryState;
@@ -445,6 +450,11 @@ export function Message(props: {
       ) || []
     );
   });
+  // Matches AssistantMessageContent's keepEditInline for this message.
+  const keepsEditsInline = () => {
+    const info = assistant();
+    return !!info && info.time.completed === undefined && !info.error;
+  };
   const hasVisibleAssistantOutput = () => {
     const visibleParts = visibleAssistantParts().filter((part) => {
       if (
@@ -452,6 +462,8 @@ export function Message(props: {
         !isAssistantActivityPart(part) ||
         !isAssistantActivityPartRunning(part) ||
         isAssistantActiveInlineToolPart(part) ||
+        // A live message keeps edits inline; they never enter the activity preview lifecycle.
+        (isAssistantEditActivityPart(part) && keepsEditsInline()) ||
         (part.type === 'tool' &&
           (props.questionRequestForTool?.(part) || props.permissionMatchForTool?.(part)))
       ) {
@@ -483,6 +495,12 @@ export function Message(props: {
 
   const [diffs, setDiffs] = createSignal<FileDiff[]>();
   const [diffsLoading, setDiffsLoading] = createSignal(false);
+  const diffDirectory = createMemo(() => {
+    const sessionId = diffRequest()?.split('\u0000')[0];
+    return sessionId
+      ? state.sessions.find((session) => session.id === sessionId)?.directory
+      : undefined;
+  });
   createEffect(
     () => {
       const key = diffRequest();
@@ -490,31 +508,53 @@ export function Message(props: {
       return {
         sessionID,
         messageID,
-        directory: state.sessions.find((session) => session.id === sessionID)?.directory,
+        directory: diffDirectory(),
       };
     },
     ({ sessionID, messageID, directory }) => {
       if (!sessionID || !messageID) {
-        setDiffs(undefined);
-        setDiffsLoading(false);
-        return;
+        const retire = () => {
+          setDiffs(undefined);
+          setDiffsLoading(false);
+        };
+        const { messageId, retireSummary } = untrack(() => ({
+          messageId: props.info.id,
+          retireSummary: props.onAssistantDiffSummaryRetire,
+        }));
+        if (!retireSummary || !untrack(diffs)?.length) {
+          retire();
+          return;
+        }
+        // A newer reply takes over the summary. Keep this one painted for a microtask so the
+        // list can reserve its space before the removal, instead of clamping the viewport.
+        let current = true;
+        queueMicrotask(() => {
+          if (current) retireSummary(messageId, retire);
+        });
+        return () => {
+          current = false;
+        };
       }
       let cancelled = false;
       setDiffsLoading(true);
-      void client.session
-        .diff(sessionID, messageID, { directory })
-        .catch((): FileDiff[] => [])
-        .then((value) => {
-          if (cancelled) return;
-          setDiffs(value);
-          setDiffsLoading(false);
-        });
+      // Opening a completed chat keeps the transcript hidden until this summary row is known,
+      // so the row does not land below the revealed bottom and ease the viewport after paint.
+      const releaseReveal = untrack(() => props.onAssistantDiffLoadStart?.());
+      const settle = (value: FileDiff[]) => {
+        if (cancelled) return;
+        setDiffs(value);
+        setDiffsLoading(false);
+        releaseReveal?.();
+      };
+      void client.session.diff(sessionID, messageID, { directory }).then(settle, () => settle([]));
       return () => {
         cancelled = true;
+        releaseReveal?.();
       };
     }
   );
-  const visibleDiffs = createMemo(() => (diffRequest() ? diffs() || [] : []));
+  // Settled diffs stay until the request effect retires them, including after the request ends.
+  const visibleDiffs = createMemo(() => diffs() || []);
   let emptyDiffSettlementEpoch = 0;
   const compactionDivider = createMemo<CompactionPart | null>(() => {
     const parts = normalizedParts();

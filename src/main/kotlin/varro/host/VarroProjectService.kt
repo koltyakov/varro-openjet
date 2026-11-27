@@ -128,7 +128,52 @@ class VarroProjectService(private val project: Project) : Disposable {
         knownWorktree = sessionLocations::knownTransferred,
     )
 
-    private val notifications = ProjectNotifications(project, server, settings, store) { sessionId ->
+    private fun isHiddenOrRecycled(id: String): Boolean = id in store.hiddenSessionIds ||
+        store.recycleBin.any { entry ->
+            entry.asObjectOrNull().str("rootID") == id ||
+                entry.asObjectOrNull().arr("sessions")?.any { it.asObjectOrNull().str("id") == id } == true
+        }
+
+    /** Retained conversations outside the open roots, and the subagents they run there. */
+    private val sessionGrants = SessionGrants(
+        roots = ::transferRoots,
+        links = { transfers.list() },
+        verify = { id -> transfers.get(id)?.obj("transfer")?.bool("available") == true },
+        observedDirectory = { id -> server.transport.observedSessionDirectory(id) },
+        readSession = { id -> server.transport.request("GET", "/session/${java.net.URLEncoder.encode(id, Charsets.UTF_8)}",
+            options = varro.server.RequestOptions(unscoped = true, timeoutMs = 5_000, maxResponseBytes = 2 * 1024 * 1024)).data.asObjectOrNull() },
+        connection = { listOf(server.requestGeneration(), server.url(), transferRoots().map(varro.server.WorkspacePaths::normalizeIdentity)) },
+        executor = com.intellij.util.concurrency.AppExecutorUtil.getAppExecutorService(),
+    )
+
+    /** Sessions in nested folders and project worktrees that this window's history catalog owns. */
+    private val sessionCatalog = SessionCatalog(
+        key = project.basePath?.let(varro.server.WorkspacePaths::normalizeIdentity) ?: project.locationHash,
+        roots = ::transferRoots,
+        scope = { store.sessionHistoryScope },
+        readProject = { root -> SessionCatalog.currentProject({ path, directory -> server.transport.request("GET", path,
+            options = varro.server.RequestOptions(directory = directory, timeoutMs = 5_000, maxResponseBytes = 1024 * 1024)).data }, root) },
+        readSession = { id -> server.transport.request("GET", "/session/${java.net.URLEncoder.encode(id, Charsets.UTF_8)}",
+            options = varro.server.RequestOptions(unscoped = true, timeoutMs = 5_000, maxResponseBytes = 2 * 1024 * 1024)).data.asObjectOrNull() },
+        connection = { listOf(server.requestGeneration(), server.url(), transferRoots().map(varro.server.WorkspacePaths::normalizeIdentity)) },
+        executor = com.intellij.util.concurrency.AppExecutorUtil.getAppExecutorService(),
+        lineage = sessionGrants::lineage,
+    )
+
+    private val eventRouter = GrantedEventRouter<varro.server.ParsedServerEvent>(EventAccesses(sessionGrants, sessionCatalog), ::isHiddenOrRecycled,
+        isStillPending = { event ->
+            val props = event.properties.obj("info") ?: event.properties
+            val id = props.str("id") ?: props.str("permissionID") ?: props.str("requestID")
+            id != null && server.transport.isPendingAttentionRequest(id)
+        },
+        deliver = ::deliverServerEvent,
+    )
+
+    private val eventRouting = HostEventRouting(::transferRoots, sessionGrants, sessionCatalog, eventRouter)
+
+    private val notifications = ProjectNotifications(project, server, settings, store, isGranted = { id ->
+        (sessionGrants.grant(id) != null || sessionCatalog.ownsSession(id)) && !sessionGrants.isHiddenLineage(listOf(id), ::isHiddenOrRecycled)
+    }) { sessionId ->
         sidebarCommand("command/open-session", Json.obj("sessionId" to sessionId))
     }
 
@@ -229,6 +274,8 @@ class VarroProjectService(private val project: Project) : Disposable {
     init {
         server.transport.onSessionObserved = { session ->
             session.text("id")?.let { id -> if (session.text("parentID") != null) childSessionIds.add(id) }
+            sessionGrants.observe(session)
+            sessionCatalog.observe(session)
             if (InternalHelperSessions.isHidden(session)) {
                 session.text("id")?.let(store::hideSession)
             } else {
@@ -239,6 +286,8 @@ class VarroProjectService(private val project: Project) : Disposable {
         }
         server.transport.onRequestSucceeded = notifications::requestSucceeded
         Disposer.register(this, notifications)
+        val unregisterCatalog = CatalogOwners.shared.register(sessionCatalog)
+        Disposer.register(this, Disposable { unregisterCatalog() })
         store.migrateBrowserSessionSelections()
         server.hasHostWork = { ralph.isActive() || queue.hasPending() || queue.messages().size() > 0 }
         store.queuedMessages = queue.messages()
@@ -353,6 +402,8 @@ class VarroProjectService(private val project: Project) : Disposable {
             selections = selections,
             isPermissionAutomationLeaseCurrent = { lease -> isPermissionAutomationLeaseCurrent(host, lease) },
             transfers = transfers,
+            grants = sessionGrants,
+            catalog = sessionCatalog,
         )
         panels.add(host)
         Disposer.register(host) {
@@ -533,7 +584,10 @@ class VarroProjectService(private val project: Project) : Disposable {
      * Upstream routes detailed events only to the endpoint owning their execution
      * directory and projects safe lifecycle summaries elsewhere. A JetBrains
      * project is a single workspace, so an event is forwarded when it belongs to
-     * this project's directory or carries no directory at all.
+     * one of this project's roots or carries no directory at all. An event from
+     * another directory is forwarded only for a conversation this project retains
+     * there, or a subagent inheriting its grant ([SessionGrants]); everything else
+     * belongs to another window.
      */
     private fun forwardServerEvent(event: JsonElement) {
         val parsed = ServerEvents.parse(event) ?: return
@@ -567,16 +621,18 @@ class VarroProjectService(private val project: Project) : Disposable {
             }
             return
         }
+        // Another IDE window owns other directories unless this project retains the conversation
+        // or its catalog owns the session; forwarding others would list sessions it cannot act on.
+        if ((project.guessProjectDir()?.path ?: project.basePath) == null) eventRouter.deliverOwned(parsed)
+        else eventRouting.route(parsed, parsed.type, parsed.properties, parsed.workspaceDirectory, eventSessionId)
+    }
+
+    /** Delivers a routed event. [GrantedEventRouter] serializes calls. */
+    private fun deliverServerEvent(parsed: varro.server.ParsedServerEvent) {
+        if (project.isDisposed) return
+        val info = parsed.properties.obj("info")
         val eventDirectory = parsed.workspaceDirectory
         val projectDirectory = project.guessProjectDir()?.path ?: project.basePath
-        if (eventDirectory != null && projectDirectory != null &&
-            transferRoots().none { varro.server.WorkspacePaths.isSame(eventDirectory, it) }
-        ) {
-            // Another IDE window owns this directory; forwarding it would make this
-            // project's session list show sessions it cannot act on.
-            return
-        }
-
         val payload = JsonObject().apply {
             addProperty("type", parsed.type)
             parsed.id?.let { addProperty("id", it) }
@@ -623,7 +679,12 @@ class VarroProjectService(private val project: Project) : Disposable {
             val session = parsed.properties.obj("info") ?: parsed.properties
             session.text("id")?.let { id -> if (session.text("parentID") != null) childSessionIds.add(id) }
         }
-        if (parsed.type == "session.deleted") (info.text("id") ?: sessionId)?.let(childSessionIds::remove)
+        if (parsed.type == "session.deleted") (info.text("id") ?: sessionId)?.let { id ->
+            childSessionIds.remove(id)
+            // After routing, so a deleted subagent's event still reaches the view that lists it.
+            sessionGrants.forget(id)
+            sessionCatalog.forget(id)
+        }
         // After session state reflects the event, as upstream attaches warming after its bridge.
         promptCacheWarming.handleServerEvent(parsed.type, parsed.properties)
         notifications.event(parsed)
@@ -814,7 +875,8 @@ class VarroProjectService(private val project: Project) : Disposable {
                                         options = options.copy(unscoped = true)).data.asObjectOrNull()
                                 },
                                 readProject = { root ->
-                                    server.transport.request("GET", "/project/current", options = options.copy(directory = root)).data.asObjectOrNull()
+                                    SessionCatalog.currentProject({ path, directory ->
+                                        server.transport.request("GET", path, options = options.copy(directory = directory)).data }, root)
                                 })
                             options.checkCancelled()
                             authorized

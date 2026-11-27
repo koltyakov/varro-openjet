@@ -117,6 +117,8 @@ export type MessageRowSharedProps = {
   questionRequestForTool: (part: ToolPart) => QuestionRequest | null;
   permissionMatchForTool: (part: ToolPart) => ToolCallPermissionMatch | null;
   onAssistantDiffSettledEmpty?: (messageId: string) => void;
+  onAssistantDiffLoadStart?: () => (() => void) | undefined;
+  onAssistantDiffSummaryRetire?: (messageId: string, retire: () => void) => void;
   onWorkedSummaryHoverChange?: (promptMessageId: string, hovering: boolean) => void;
   onUserMessageHoverChange?: (messageId: string, hovering: boolean) => void;
 };
@@ -353,6 +355,8 @@ export function MessageRow(
             }
             userMessageSeriesEndId={props.userMessageSeriesEndId}
             onAssistantDiffSettledEmpty={props.onAssistantDiffSettledEmpty}
+            onAssistantDiffLoadStart={props.onAssistantDiffLoadStart}
+            onAssistantDiffSummaryRetire={props.onAssistantDiffSummaryRetire}
             onUserMessageHoverChange={props.onUserMessageHoverChange}
             onTurnHoverChange={props.onTurnHoverChange}
             onResponseHoverChange={props.onResponseHoverChange}

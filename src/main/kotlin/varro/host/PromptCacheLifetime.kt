@@ -101,7 +101,7 @@ private val BEDROCK_CLAUDE_5M = listOf(
 
 // Hosts that serve OpenAI models with OpenAI's own prompt cache. Other hosts of GPT-named models,
 // such as GitHub Copilot, manage caching themselves.
-private val OPENAI_PROVIDERS = setOf("openai", "azure", "opencode", "openrouter")
+private val OPENAI_PROVIDERS = setOf("openai", "azure", "opencode", "openrouter", "amazon-bedrock")
 private val OPENAI_PACKAGES = setOf("@ai-sdk/openai", "@ai-sdk/azure")
 // Models before GPT-5.6 that support `prompt_cache_retention: "24h"`. GPT-5.5 supports only that.
 private val OPENAI_EXTENDED_RETENTION = setOf(
@@ -124,6 +124,7 @@ private val OPENAI_MODEL = Regex("^(gpt-\\d|o\\d)")
 private val OPENAI_VERSION = Regex("^gpt-(\\d+)(?:\\.(\\d+))?")
 private val DATED_SUFFIX = Regex("-\\d{4}-\\d{2}-\\d{2}$")
 private val AISDK_PREFIX = Regex("^aisdk:")
+private val BEDROCK_OPENAI_PREFIX = Regex("^(?:[a-z]+\\.)?openai\\.")
 
 private fun claudeLifetime(modelID: String, ttlMs: Long?): PromptCacheLifetime {
     if (ttlMs != null && !(ttlMs > 5 * MINUTE && BEDROCK_CLAUDE_5M.any { modelID.contains(it) }))
@@ -139,13 +140,15 @@ private fun claudeLifetime(modelID: String, ttlMs: Long?): PromptCacheLifetime {
     )
 }
 
-private fun openAILifetime(baseID: String, ttl: String?): PromptCacheLifetime {
+private fun openAILifetime(baseID: String, ttl: String?, host: String): PromptCacheLifetime {
     val version = OPENAI_VERSION.find(baseID)
     val major = version?.groupValues?.get(1)?.takeIf { it.isNotEmpty() }?.toDouble() ?: 0.0
     val minor = version?.groupValues?.get(2)?.takeIf { it.isNotEmpty() }?.toDouble() ?: 0.0
+    // Bedrock documents only the GPT-5.6+ minimum, and accepts no lifetime besides it.
+    val bedrock = host == "amazon-bedrock"
     if (major > 5 || (major == 5.0 && minor >= 6)) {
         // `prompt_cache_options.ttl` takes "30m" (the default) or "12h"; both are minimum lifetimes.
-        if (ttl == "12h")
+        if (ttl == "12h" && !bedrock)
             return PromptCacheLifetime(
                 ttlMs = 12 * HOUR,
                 source = "configured",
@@ -162,7 +165,7 @@ private fun openAILifetime(baseID: String, ttl: String?): PromptCacheLifetime {
         )
     }
     val undated = baseID.replace(DATED_SUFFIX, "")
-    if (undated in OPENAI_EXTENDED_RETENTION)
+    if (undated in OPENAI_EXTENDED_RETENTION && !bedrock)
         // GPT-5.5 always uses 24-hour retention. Earlier models default to it unless the organization
         // uses Zero Data Retention, which keeps the in-memory default instead.
         return PromptCacheLifetime(
@@ -175,9 +178,139 @@ private fun openAILifetime(baseID: String, ttl: String?): PromptCacheLifetime {
         )
     return PromptCacheLifetime(
         ttlMs = 5 * MINUTE,
+        likelyMs = 10 * MINUTE,
         source = "provider",
         description = "OpenAI's in-memory cache usually lasts 5 to 10 min after each request, at most 1 h.",
     )
+}
+
+/**
+ * OpenRouter passes a proprietary vendor's requests to that vendor's own cache, under its usual
+ * rules. Open-weight models can be served by any host there, each with its own cache.
+ */
+private val OPENROUTER_VENDORS = mapOf("google" to "google", "x-ai" to "xai")
+
+private fun hostFor(providerID: String, id: String): String {
+    if (providerID != "openrouter") return providerID
+    // JavaScript `id.slice(0, id.indexOf('/'))`: without a slash, the slice drops the last character.
+    val slash = id.indexOf('/')
+    val vendor = if (slash >= 0) id.substring(0, slash) else id.dropLast(1)
+    return OPENROUTER_VENDORS[vendor] ?: providerID
+}
+
+private val GOOGLE_HOST = Regex("^(google|google-vertex)$")
+private val ZAI_HOST = Regex("^(zai|zai-coding-plan|zhipuai|zhipuai-coding-plan)$")
+private val KIMI_HOST = Regex("^(moonshotai|moonshotai-cn|kimi-for-coding|kimi-code-plan-cn|kimi-code-plan-global)$")
+private val ALIBABA_HOST = Regex("^alibaba(-coding-plan|-token-plan)?(-cn)?$")
+
+/**
+ * Documented or measured lifetimes for other popular providers. Most cache automatically without
+ * promising a lifetime, so `ttlMs` stays at what keep-alives can count on and `likelyMs` follows
+ * what the provider describes or independent measurements found.
+ */
+private fun otherProviderLifetime(host: String, id: String, ttl: String?): PromptCacheLifetime? {
+    // Gemini's implicit cache has no fixed lifetime. Google Cloud keeps prefixes at most 24 h and
+    // its Argon guide gives a 15 to 20 min window; measurements found 5 to 15 min under load.
+    if (GOOGLE_HOST.containsMatchIn(host) && id.contains("gemini"))
+        return PromptCacheLifetime(
+            ttlMs = 5 * MINUTE,
+            likelyMs = 15 * MINUTE,
+            source = "provider",
+            description = "Gemini's implicit cache has no fixed lifetime; it usually lasts 5 to 15 min after each request, at most 24 h.",
+        )
+    // A disk cache, cleared "usually within a few hours to a few days" once unused.
+    if (host == "deepseek")
+        return PromptCacheLifetime(
+            ttlMs = HOUR,
+            likelyMs = 6 * HOUR,
+            source = "provider",
+            description = "DeepSeek's disk cache is usually cleared a few hours to a few days after its last use.",
+        )
+    // No published lifetime: entries "can be evicted at any time". Measured at about 30 min.
+    if (host == "xai")
+        return PromptCacheLifetime(
+            ttlMs = 5 * MINUTE,
+            likelyMs = 30 * MINUTE,
+            source = "provider",
+            description = "xAI publishes no cache lifetime and may evict entries at any time; it usually lasts about 30 min.",
+        )
+    // No published lifetime. Measured on the coding plan: every request still hit after 60 min idle.
+    if (ZAI_HOST.containsMatchIn(host))
+        return PromptCacheLifetime(
+            ttlMs = 5 * MINUTE,
+            likelyMs = HOUR,
+            source = "provider",
+            description = "Z.ai publishes no cache lifetime; it usually lasts at least 1 h after each request.",
+        )
+    // 5 min, renewed by each hit; `prompt_cache_options.ttl` (OpenCode's cache.ttl) selects 1 h.
+    if (KIMI_HOST.containsMatchIn(host))
+        return if (ttl == "1h")
+            PromptCacheLifetime(
+                ttlMs = HOUR,
+                source = "configured",
+                description = "Kimi keeps the cache 1 h (cache.ttl) after each request that reads it.",
+            )
+        else
+            PromptCacheLifetime(
+                ttlMs = 5 * MINUTE,
+                source = "provider",
+                description = "Kimi keeps the cache 5 min after each request that reads it, or 1 h with cache.ttl \"1h\".",
+            )
+    // OpenCode marks Model Studio requests for its explicit cache: 5 min, renewed by each hit.
+    // Qwen4 also accepts a 1 h lifetime.
+    if (ALIBABA_HOST.containsMatchIn(host))
+        return if (ttl == "1h" && id.contains("qwen4"))
+            PromptCacheLifetime(
+                ttlMs = HOUR,
+                source = "configured",
+                description = "Qwen keeps the cache 1 h (cache.ttl) after each request that reads it.",
+            )
+        else
+            PromptCacheLifetime(
+                ttlMs = 5 * MINUTE,
+                source = "provider",
+                description = "Model Studio keeps the cache 5 min after each request that reads it.",
+            )
+    // "All cached data automatically expires after 2 hours without use"; hits are best effort.
+    if (host == "groq")
+        return PromptCacheLifetime(
+            ttlMs = 5 * MINUTE,
+            likelyMs = 2 * HOUR,
+            source = "provider",
+            description = "Groq's cache expires 2 h after its last use, and hits are best effort.",
+        )
+    // "Usually stay in the cache for at least several minutes", up to several hours under low load.
+    if (host == "fireworks-ai")
+        return PromptCacheLifetime(
+            ttlMs = 5 * MINUTE,
+            likelyMs = HOUR,
+            source = "provider",
+            description = "Fireworks usually keeps the cache several minutes, and up to several hours under low load.",
+        )
+    // In memory by default; `prompt_cache_retention: "24h"` is only a hint the server may ignore.
+    if (host == "meta")
+        return PromptCacheLifetime(
+            ttlMs = 5 * MINUTE,
+            likelyMs = if (ttl == "24h") HOUR else 15 * MINUTE,
+            source = if (ttl == "24h") "configured" else "provider",
+            description = "Meta keeps the cache in memory until load or inactivity evicts it; the 24 h retention setting is only a hint.",
+        )
+    // Nova caches for 5 min only and rejects a longer ttl.
+    if (host == "amazon-bedrock" && id.contains("amazon.nova"))
+        return PromptCacheLifetime(
+            ttlMs = 5 * MINUTE,
+            source = "provider",
+            description = "Nova on Bedrock keeps the cache 5 min after each request that reads it.",
+        )
+    // Undocumented: entries reportedly drop after a few minutes of quiet.
+    if (host == "mistral")
+        return PromptCacheLifetime(
+            ttlMs = 3 * MINUTE,
+            likelyMs = 5 * MINUTE,
+            source = "provider",
+            description = "Mistral publishes no cache lifetime; it reportedly lasts only a few minutes.",
+        )
+    return null
 }
 
 /**
@@ -217,21 +350,25 @@ fun resolvePromptCacheLifetime(
     // Model IDs identify Claude on every host: Anthropic, Bedrock, Vertex, OpenRouter and gateways.
     // Packages do not, since other providers expose Anthropic-compatible APIs for their own models.
     if (CLAUDE_MODEL.containsMatchIn(id)) return claudeLifetime(id, ttlMs)
-    val baseID = id.substring(id.lastIndexOf('/') + 1)
+    // Bedrock names OpenAI models `openai.gpt-…`, with an optional regional profile prefix.
+    val baseID = id.substring(id.lastIndexOf('/') + 1).replaceFirst(BEDROCK_OPENAI_PREFIX, "")
     if ((model.providerID in OPENAI_PROVIDERS || pkg in OPENAI_PACKAGES) &&
         OPENAI_MODEL.containsMatchIn(baseID) && !baseID.startsWith("gpt-oss")
     )
-        return openAILifetime(baseID, ttl)
+        return openAILifetime(baseID, ttl, model.providerID)
+    otherProviderLifetime(hostFor(model.providerID, id), id, ttl)?.let { return it }
     if (ttlMs != null)
         return PromptCacheLifetime(
             ttlMs = ttlMs,
             source = "configured",
             description = "The model's cache.ttl keeps the cache ${formatTtl(ttlMs)} after each request.",
         )
+    // Most measured caches outlive 5 min, so the estimate only calls one likely expired after 15.
     return PromptCacheLifetime(
         ttlMs = FALLBACK_PROMPT_CACHE_TTL_MS,
+        likelyMs = 15 * MINUTE,
         source = "fallback",
-        description = "Most providers keep the cache about 5 min after each request, some longer.",
+        description = "This provider publishes no cache lifetime; most keep the cache 5 to 30 min after each request.",
     )
 }
 

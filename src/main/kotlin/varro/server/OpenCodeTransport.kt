@@ -682,10 +682,17 @@ class OpenCodeTransport(
 
     fun pendingAttentionSessionIds(): List<String> = pendingAttentionRequests.values.distinct()
 
+    fun isPendingAttentionRequest(requestId: String): Boolean = pendingAttentionRequests.containsKey(requestId)
+
+    fun pendingAttentionSessionId(requestId: String): String? = pendingAttentionRequests[requestId]
+
     fun pendingAttentionDirectory(requestId: String): String? =
         pendingAttentionRequests[requestId]?.let { observedSessionDirectories[it] }
 
     fun observedSessionDirectories(): Map<String, String> = observedSessionDirectories.toMap()
+
+    /** One session's observed directory, without copying the whole map. */
+    fun observedSessionDirectory(sessionId: String): String? = observedSessionDirectories[sessionId]
 
     fun abortRequests() {
         inFlight.forEach { it.cancel(true) }

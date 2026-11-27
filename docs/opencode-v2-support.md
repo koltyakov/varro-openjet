@@ -1,6 +1,6 @@
 # OpenCode V2 support
 
-OpenJet supports V1 from 1.16.0 and V2 from 2.0.6. The webview and shared sources were synced from Varro's `main` branch at `1ba7b6e6ccb1`, version 0.37.1. Tested baselines are V1 1.19.6 and V2 2.4.2. The Kotlin adapter handles released-server contracts, including generated skill, shell and synthetic transcript records. Synthetic text appears as automatic-action notices, except goal kickoffs, which appear as user prompts. Canonical subagent completion metadata produces linked subagent activities. Pending and running V2 patch calls render as active edits. Assistant history preserves automatic retry metadata for recovery notices. History attachments use deferred references with Kotlin-generated thumbnails and on-demand original reads. Chat annotations retain bounded display context before deferral. [Session cleanup and usage export](session-cleanup.md) preserve statistics and optional parent transcripts before confirmed deletions.
+OpenJet supports V1 from 1.16.0 and V2 from 2.0.6. The webview and shared sources were synced from Varro's `main` branch at `337d0886ffdc`, version 0.37.2. Tested baselines are V1 1.19.6 and V2 2.4.2. The Kotlin adapter handles released-server contracts, including generated skill, shell and synthetic transcript records. Synthetic text appears as automatic-action notices, except goal kickoffs, which appear as user prompts. Canonical subagent completion metadata produces linked subagent activities. Pending and running V2 patch calls render as active edits. Assistant history preserves automatic retry metadata for recovery notices. History attachments use deferred references with Kotlin-generated thumbnails and on-demand original reads. Chat annotations retain bounded display context before deferral. [Session cleanup and usage export](session-cleanup.md) preserve statistics and optional parent transcripts before confirmed deletions.
 
 V2 sessions support `/pause` and a Resume action in the transcript. Pausing parks queued messages and interrupts with `resume=false`. Pause markers persist in the shared Varro session annotations, and session summaries and usage reports exclude paused time. Commit-message generation uses the stateless endpoint when the server advertises it, falling back to a helper session when the endpoint or selected model is unavailable before generation starts.
 
@@ -3964,6 +3964,203 @@ Remaining differences and verification limits:
 | Release verification | `WalkThroughChangesAction` | The first `v0.14.0` release run failed Plugin Verifier on 2025.2.6.3 because `ProjectLevelVcsManager`'s Kotlin accessors compiled against 2026.2 are absent there. Repository discovery now walks content roots to the nearest `.git`; a local 2025.2.6.3 verification reports Compatible. |
 | Interactive/platform coverage | Walkthrough action and scope popup, Manage Skills/MCPs actions, warming settings UI and global config writes, ToDo marks | Unit tests, browser host tests and released-server fixtures only, not an interactive sandbox IDE or Windows/Linux run. Warming pings against a live provider, and whether that provider reports cache usage, were not exercised. |
 
+## Upstream sync review, 2026-11-27, 97e719b6
+
+Reviewed Varro `1ba7b6e6ccb129d70bdb31e22c878cbdcae7436c` through
+`97e719b6c8c5752b096eebf1427cf49dca31f98d`, versions 0.37.1 to 0.37.2 (14
+commits). The comparison covers changed extension sources and tests, shared
+sources, `package.json` (only the version changed: no new commands, settings or
+dependencies) and browser sources. Vendored sources remain unmodified. SDK/client
+baselines remain V1 1.19.6 and V2 2.4.2, so there is no new released OpenCode
+range to review. The browser changes consume no new host request: ancestry for
+an unplaced question uses the existing `GET /session/:id` read that permission
+ancestry already used. The user's OpenJet 0.14.1 version is preserved.
+
+`b3be1cc6` (worktree question delivery) is not ported separately. `4c539091`
+reverted its adapter and `session-state-manager.ts` changes and replaced its
+containment-based event routing, so only the net `1ba7b6e6..97e719b6` change was
+assessed.
+
+| Upstream change | OpenJet alignment and regression coverage |
+| --- | --- |
+| `563b0492`: `prompt-cache-lifetime.ts`; lifetimes for other popular providers | `PromptCacheLifetime` ports `otherProviderLifetime`: Gemini on Google and Vertex, DeepSeek, xAI, Z.ai, Kimi, Model Studio Qwen, Groq, Fireworks, Meta, Bedrock Nova and Mistral, with their configured-`cache.ttl` variants. OpenRouter `google/` and `x-ai/` models follow their vendor's cache. `slice(0, indexOf('/'))` is kept exact, so an ID without a slash drops its last character as it does upstream. Bedrock now serves OpenAI models: `[region.]openai.` prefixes are stripped, and the 12 h and 24-hour-retention lifetimes are refused there. In-memory OpenAI gets `likelyMs` 10 min. The fallback gets `likelyMs` 15 min and upstream's new description. `PromptCacheWarming` already stops keep-alives once `likelyMs` passes, so warmed fallback-provider sessions now keep pinging for up to 15 min instead of 5, as upstream does. `PromptCacheLifetimeTest` ports upstream's provider table and the revised fallback/configured cases, and adds the Bedrock regional prefix and slashless OpenRouter cases. |
+| `4c539091`: `rest-proxy.ts` `getAuthorizedSession`, `restoreInheritedEventAuthorization`, `learnSessionAncestry`, owned session-read grants, ancestry-checked pending snapshots; `sidebar-provider.ts` catalog-root transcript routing and post-verification hidden checks | Not ported: these extend the catalog-based event authorization that OpenJet does not have (see the remaining differences). OpenJet forwards events only when their directory is one of the project's open roots, and reads pending requests in the workspace scope, so it has no per-session grants for a child to inherit. Subagents running in an open root already route through that root. The added `session.next.agent.switched`/`model.switched` transcript types are already forwarded by `VarroProjectService.forwardServerEvent`. The hidden/recycled recheck guards upstream's asynchronous catalog re-verification, which OpenJet does not have; its synchronous filter, which drops hidden helper session IDs, is unchanged. |
+| `4c539091`: `data-loaders.ts`, `open-code-runtime-instance.ts`, `session-lifecycle.ts`; retained moved-conversation subagents, question ancestry placement | Browser-only on the existing session read and catalog routes. Subagents of moved conversations appear in OpenJet only when their events reach the view, which is limited as described below. |
+| `MessageList.tsx`, `Message.tsx`, `message-list/*`, `message-window.ts`, `messages.css`; transcript position, change-summary reveal and retirement, prompt numbering, bubble spacing | Browser-only. No host contract change. |
+
+`scripts/check-opencode-compatibility.py --version 2.4.2 --full-check` passed a
+fresh `./gradlew check buildPlugin --rerun-tasks` with the exact published 2.4.2
+binary in isolated HOME/XDG/database/service-state roots. The V2 adapter suite
+and all three managed-service cases passed without skips. 1,084 Kotlin tests ran
+with no failures. The two skips are, as before, the opt-in local-database
+benchmark and the V1 released suite. The 127 browser host tests, TypeScript
+checking, vendor integrity and bundling passed too. Evidence is
+`build/opencode-compatibility/2.4.2/verification.json` and
+`build/sync-97e719b6-2.4.2.log`. The V1 SDK is unchanged, so the V1 released
+suite was not rerun, and Plugin Verifier was not rerun because no platform API
+usage changed. The package is `build/distributions/varro-openjet-0.14.1.zip`,
+SHA-256 `979d86cad985a3a3ae9eaf92ab8d72043224ab20d7f5180035753225b1271325`.
+
+Remaining differences and verification limits:
+
+| Status | Upstream files/endpoints and OpenJet code | User-visible impact |
+| --- | --- | --- |
+| Not ported, architectural (extended) | `rest-proxy.ts` inherited subagent grants, ancestry recovery and ancestry-checked pending snapshots, plus the #67 catalog-root items listed in the previous review; `sidebar-provider.ts` catalog-root transcript routing. OpenJet `VarroProjectService.forwardServerEvent`, `RestProxy`, `SessionTransfers` and the `/permission` and `/question` pass-through | Unchanged from the previous review and now also covering `4c539091`. Live events, permissions and questions from a moved conversation, or its subagents, running outside the project's open roots do not reach the OpenJet view until that folder is open. The moved conversation's own history remains readable through its retained transfer. Matching upstream needs per-session catalog grants, per-directory pending snapshots and catalog-based event authorization: a host redesign beyond these commits. Not reproduced live. |
+| Interactive/platform coverage | Transcript scrolling, change-summary and prompt-rail changes in JCEF | Unit tests, browser host tests and released-server fixtures only, not an interactive sandbox IDE or Windows/Linux run. Lifetimes for the newly listed providers were not checked against live provider caches. |
+
+## Upstream sync follow-up, 2026-11-27, 2107831a, and moved-conversation routing
+
+Reviewed Varro `97e719b6c8c5` through `2107831a5384` (one commit, still 0.37.2).
+It changes only browser sources (`MessageList.tsx`, `WindowedSessionItems.tsx`,
+`AssistantMessageContent.tsx`, `part-utils.ts`): unresolved pending edits no longer
+show a transient placeholder, and session-list scroll anchoring skips bottom-clamped
+measurements. No extension, shared, configuration or dependency change; baselines
+remain V1 1.19.6 and V2 2.4.2.
+
+This follow-up also ports the per-session routing that the previous review left as an
+architectural gap, for conversations moved outside the project's open roots and their
+subagents (`4c539091` and the transfer parts of #67):
+
+| Upstream behavior | OpenJet implementation and regression coverage |
+| --- | --- |
+| `rest-proxy.ts` `getAuthorizedSession`, retained-transfer grants | `SessionGrants` grants a visible, verified retained link its destination, and a descendant the nearest linked ancestor's grant only in that exact directory. An ancestor in an open root ends inheritance. Grants are derived on every check, so hiding a link, failed verification, reconnects and closed origins revoke children. `SessionGrantsTest`. |
+| `restoreTransferredEventAuthorization`, `restoreInheritedEventAuthorization`, `learnSessionAncestry` | Missing ancestry is learned from canonical unscoped session reads (at most eight per walk), only for directories a visible link names; the nearest linked conversation is verified again before granting. Reads of another session's record, failures, the bound and connection changes are inconclusive. Concurrent walks share one result; unrelated results are remembered for 60 seconds. `SessionGrantsTest`. |
+| `sidebar-provider.ts` `projectEventForEndpoint`, catalog-root transcript routing, post-verification hidden checks | `VarroProjectService.forwardServerEvent` forwards an out-of-root event only when its sessions are granted that directory and no session in their lineage is hidden or recycled. `GrantedEventRouter` resolves unknown ancestry off the SSE thread, delivers deferred catalog and attention events in order (skipping asks no longer pending), queues later ones behind them and serializes all deliveries. Transcript deltas are not replayed late. Session records from events are observed before routing, so a new subagent's first event already inherits. `SessionGrantsTest` router cases. |
+| `rest-proxy.ts` ancestry-checked workspace pending snapshots | Directory-less `/permission` and `/question` reads add each verified destination's pending requests for granted, non-hidden sessions, after re-verifying visible links. An inconclusive ancestry rejects the snapshot. `PendingRequests` cases in `SessionGrantsTest`. |
+| `getOwnedSessionReadGrant`, `resolvePendingAttentionReplyDirectory`, inherited permission-automation scope | Session reads and writes without a directory use the grant's directory; `RequestDirectories` accepts a granted directory, resolving ancestry on demand. Writes to a subagent first check that its moved conversation is writable. Permission and question replies for a granted session are sent in its location, so the adapter's location-scoped fallback can find the request after a reconnect. |
+| Attention notifications for routed asks | `ProjectNotifications` treats granted sessions as in scope. |
+| Lock contention found during the port | `SessionTransfers.get` now verifies outside its monitor, so `list()` from the event thread or EDT never waits on a location read. `SessionTransfersTest`. |
+| Event-thread cost | Out-of-root events from other windows are dropped after one link read with no session reads, and single-session directory lookups no longer copy the transport's observed-directory map. `SessionGrantsTest`. |
+
+`scripts/check-opencode-compatibility.py --version 2.4.2 --full-check` passed a
+fresh `./gradlew check buildPlugin --rerun-tasks` on the final sources with the
+exact published 2.4.2 binary in isolated roots. The V2 adapter suite and all three
+managed-service cases passed without skips. 1,098 Kotlin tests ran with no
+failures, including 13 `SessionGrantsTest` cases. The two skips are, as before,
+the opt-in local-database benchmark and the V1 released suite. The 127 browser
+host tests, TypeScript checking, vendor integrity and bundling passed. Evidence is
+`build/opencode-compatibility/2.4.2/verification.json` and
+`build/sync-2107831a-2.4.2.log`. The package is
+`build/distributions/varro-openjet-0.14.1.zip`, SHA-256
+`eb81e70eb2976bb81c71f8ec85d4902e6f357b2588b2da9a6e000f1a8c71d407`.
+
+Remaining differences and verification limits:
+
+| Status | Upstream files/endpoints and OpenJet code | User-visible impact |
+| --- | --- | --- |
+| Not ported, architectural (narrowed) | #67 catalog-root authorization for sessions that were never moved: nested folders and project worktrees listed through the `project` history scope. `rest-proxy.ts` catalog pending snapshots, `sidebar-provider.ts` `isCatalogSessionInWorkspace`; OpenJet `VarroProjectService.forwardServerEvent` | Live events and prompts from a session created directly in a nested folder or worktree that is not an open root, without a retained move link, still appear only when that folder is open. Moved conversations and their subagents are no longer affected. |
+| Design difference | Upstream transcript routing for retained links before verification | OpenJet forwards a moved conversation's events only after its link is verified (on first history read or the first event's resolution). Earlier transcript deltas are dropped rather than replayed late; history reloads supply them. |
+| Design difference | Upstream rejects a pending snapshot when link verification itself is uncertain | `SessionLocations.authorizeTransferred` reports failures as unverified, so an unverifiable link's destination is skipped. Its conversation is read-only and its prompts are hidden until verification succeeds. |
+| Not verified live | Released-server move of a running conversation with a subagent prompt | Covered by unit tests with fake server records and the real `SessionTransfers`; no released 2.4.2 fixture drives a move plus a subagent permission, and no interactive IDE run was performed. |
+
+## Session-catalog routing and released routing coverage, 2026-11-27
+
+This follow-up closes the remaining #67 gap above, for sessions created directly in
+nested folders or project worktrees. It adds released-server coverage for moved
+conversations and their subagents.
+
+| Upstream behavior | OpenJet implementation and regression coverage |
+| --- | --- |
+| `rest-proxy.ts` `resolveSessionCatalogScope`, `isSessionInCatalogScope`, `applySessionCatalogScope` | `SessionCatalog` resolves each open root's history scope: `directory` exact, `descendants` nested folders, `project` the Git root's OpenCode project including worktrees. Non-Git roots fall back to `descendants`. On V2 a scoped catalog page reads the server-wide `/experimental/session?limit=1000` once, because 2.4.2 filters `/api/session?directory=` by exact directory (probed against the released binary). It keeps the open roots' sessions plus owned ones; a full page reports more. Upstream's V2 `project` scope still passes the root directory and therefore returns only exact sessions; OpenJet lists the project's worktrees. `SessionCatalogTest`, `RestProxyRoutingTest`, released case 2. |
+| V2 `/project/current` without `vcs` | `SessionCatalog.currentProject` completes `vcs` from `/project`. `FileReferences.authorizeDirectory`, `SessionLocations.location` and the catalog use it, so the `project` scope now admits Git worktrees on V2 rather than silently falling back to containment. `SessionCatalogTest`. |
+| `sidebar-provider.ts` catalog-root transcript and attention routing; `getAuthorizedSessionOwningRoot` | `HostEventRouting` (shared by `VarroProjectService` and the released test) routes out-of-root events through `EventAccesses`, which combines transfer grants and catalog ownership. Unknown session projects are read once and deferred catalog/attention events redelivered in order, as for grants. `SessionCatalogTest`. |
+| Window isolation (JetBrains-specific: windows share one process) | `CatalogOwners.shared` arbitrates every open window: exact root, then the deepest containing root, then a project match, ties to the lowest root identity. Each catalog session is listed live and prompted in exactly one window, and closing a window hands its sessions on. `SessionCatalogTest`, released case 2. |
+| `rest-proxy.ts` catalog-directory pending snapshots and reply directories | Directory-less `/permission` and `/question` snapshots also query up to 64 owned session directories. Replies and directory-less session requests for owned sessions use their folder. `RestProxyRoutingTest`, released case 2. |
+| Testability | `RestProxy` gained internal `Backend` and `Workspace` seams; the production constructor is unchanged. Image services are lazy and the settings subscription tolerates no application, so `RestProxyRoutingTest` drives `handleRequest` in plain JUnit. The IntelliJ light test application cannot start against the Ultimate platform this build targets. |
+
+`RestProxyRoutingTest` covers moved-session request scoping (conversation, inherited
+subagent, unrelated and stray sessions, rejected foreign directories). It also covers
+subagent writes blocked while the moved conversation is unverified, and permission and
+question replies routed to destination and worktree folders but not to local ones. It
+covers pending snapshots with granted, foreign and inconclusive sessions, and scoped
+catalog pages that exclude another window's package folder and unrelated projects.
+
+`OpenCodeV2MovedSubagentIntegrationTest` runs against the exact published binary in
+isolated HOME/XDG/database roots and is required by
+`scripts/check-opencode-compatibility.py`. Released 2.4.2 applies a running
+conversation's move at its next safe boundary, after the current turn. The test
+therefore requests the move mid-turn, releases the turn, and checks the retained,
+verified link. It then checks the destination subagent's inherited grant and event
+routing, and that a second window receives nothing. It checks that OpenCode lists the
+request only in the destination while the host snapshot includes it. Finally, after a
+reconnect an unrouted reply fails with "no longer pending" while the host's
+folder-routed reply succeeds, and the subagent result reaches the moved conversation.
+
+`scripts/check-opencode-compatibility.py --version 2.4.2 --full-check` passed a fresh
+`./gradlew check buildPlugin --rerun-tasks` on the final sources with the exact
+published 2.4.2 binary. The adapter suite, all three managed-service cases and both
+moved-session routing cases passed without skips. 1,113 Kotlin tests ran with no
+failures; the two skips are the opt-in local-database benchmark and the V1 released
+suite. The 127 browser host tests, vendor integrity and bundling passed too.
+Evidence is `build/opencode-compatibility/2.4.2/verification.json` and
+`build/catalog-routing-2.4.2.log`. The package is
+`build/distributions/varro-openjet-0.14.1.zip`, SHA-256
+`2d49edad21eceb7d1479d5eeb1259789483c89aef815acbb91a29f9901344cb6`.
+
+Remaining differences and verification limits:
+
+| Status | Upstream files/endpoints and OpenJet code | User-visible impact |
+| --- | --- | --- |
+| Superseded below | Catalog listing | A scoped page read at most 1,000 server-wide sessions; the follow-up below pages with OpenCode's cursor. |
+| Superseded below | Pending snapshots | Owned directories were capped at the 64 most recently observed; the follow-up below locates prompts through active sessions. |
+| V1 | `SessionCatalog` routing applies to V1 events; scoped listing is V2-only | V1 catalogs keep OpenCode's own project listing. The V1 released suite was not rerun. |
+| Not verified interactively | Multi-window behavior in a running IDE | Window arbitration is verified in unit tests and the released test's in-process windows, not with two IDE windows open. |
+
+## Catalog paging and prompt recovery follow-up, 2026-11-27
+
+Probes against the released 2.4.2 binary established the contracts used here:
+- `/api/session` is ordered newest-updated first, and a renamed session moves to the front.
+- `cursor.next` carries the first page's filters, and the list ends with an empty page or no cursor.
+- `/api/permission/request` and `/api/form` return nothing without a location, so there is no server-wide pending list.
+- A session blocked on a real tool permission is listed as `running` by the server-wide `/api/session/active` until it is answered.
+
+| Change | OpenJet implementation and regression coverage |
+| --- | --- |
+| Scoped catalog beyond 1,000 sessions | `RestProxy.scopedCatalogRows` follows the cursor 1,000 at a time until one more visible owned session than requested is admitted, or the list ends (including a trailing empty page). It drops duplicates across pages and counts neither hidden, recycled nor other windows' sessions. After 20 pages it sets `incomplete` and `hasMore`. OpenCode's `project` filter was considered and rejected: both scopes also admit nested folders by containment, including independent nested repositories. `RestProxyRoutingTest` (early stop, trailing page, bound, ownership and duplicates across pages); released catalog case with two-session pages over the real cursor. |
+| Pending prompts in folders beyond the 64 most recent | `RestProxy.promptDirectories` queries the folders of server-wide active sessions and of sessions with a prompt this host already saw, alongside retained destinations and recent owned folders. Only owned or granted candidates count. Locations come from known records or one canonical read each (at most 128 per snapshot), and an unlocatable or inconclusive candidate rejects the snapshot. `RestProxyRoutingTest` (an old folder beyond the recent 64, a post-restart worktree session read once, a webview-reload prompt, other projects and another window's exact folder never queried, unlocatable candidates). The released case runs a real shell tool call whose permission a freshly started window, with no events or records, finds and answers, while an unrelated window does not adopt it. |
+
+`scripts/check-opencode-compatibility.py --version 2.4.2 --full-check` passed a fresh
+`./gradlew check buildPlugin --rerun-tasks` on the final sources with the exact
+published 2.4.2 binary. The adapter suite, the three managed-service cases and the
+three moved-session routing cases passed without skips. 1,120 Kotlin tests ran with
+no failures, including 11 `RestProxyRoutingTest` cases; the two skips are the opt-in
+local-database benchmark and the V1 released suite. The 127 browser host tests passed.
+Evidence is `build/opencode-compatibility/2.4.2/verification.json` and
+`build/catalog-paging-2.4.2.log`. The package is
+`build/distributions/varro-openjet-0.14.1.zip`, SHA-256
+`6b8f7909985f74c5bac085889f1513762f6cb060d1022800eb502a40446de68a`.
+
+Remaining limits:
+
+| Status | Upstream files/endpoints and OpenJet code | User-visible impact |
+| --- | --- | --- |
+| Bound | Scoped catalog paging | A server where 20,000 newer sessions precede this window's next one shows an incomplete page rather than reading further. |
+| Design difference | Prompts on idle sessions | A prompt raised through the API on a session that is not running, which OpenCode tools do not do, is found only through recent folders or a seen event. |
+| V1 | Active-session discovery | V1 has no server-wide active list; V1 snapshots keep the previous sources. |
+
+## Upstream sync review, 2026-11-27, 337d0886
+
+Reviewed Varro `2107831a5384` through `337d0886ffdc` (two commits, still 0.37.2).
+Both change only browser sources (`MessageList.tsx`, `Message.tsx`, `ToolCall.tsx`,
+`AssistantMessageContent.tsx`, `message-event-collapse.ts`, `part-utils.ts`, the new
+`file-edit-totals.ts`), plus upstream e2e, Playwright configuration and development docs.
+Thinking stays visible across collapsed edit steps, and a merged file-edit card's header
+sums the completed edits' line counts. The totals reuse `getToolFileChanges` over completed
+tool parts, the same per-edit additions and deletions the cards already read from
+`OpenCodeV2Projection`, so no host contract changed. There are no extension, shared,
+configuration or dependency changes; baselines remain V1 1.19.6 and V2 2.4.2.
+No backend gaps were found in the reviewed changes.
+
+`scripts/check-opencode-compatibility.py --version 2.4.2 --full-check` passed a fresh
+`./gradlew check buildPlugin --rerun-tasks` with the exact published 2.4.2 binary. All
+three released suites passed without skips. 1,120 Kotlin tests ran with no failures;
+the two skips are the opt-in local-database benchmark and the V1 released suite. The 127
+browser host tests, vendor integrity and bundling passed. Evidence is
+`build/opencode-compatibility/2.4.2/verification.json` and `build/sync-337d0886-2.4.2.log`.
+The package is `build/distributions/varro-openjet-0.14.1.zip`, SHA-256
+`1bf5d7fe2bef45fb5151eaa3d2813218a7346ee5d1238b9f9f3def9992e6aae3`. The new edit-card
+behavior was not checked interactively in JCEF.
+
 ## Verification
 
 The opt-in integration test launches a released CLI with isolated HOME, XDG directories and database. Its provider is a local deterministic HTTP fixture. It checks authenticated health and SSE, catalogs, pending input, prompt streaming, reopened history, helper and stateless generation, archive/restore, saved-permission editing when supported, permission and form acknowledgement, fork, tail deletion, session deletion, and read-only V1 import. Steering checks interrupt a stalled turn, resume pending steering, and verify after completion and 0, 75 and 250 ms sampling delays that queued input stays parked. It has been run against OpenCode 2.0.6, 2.0.25, 2.0.26, 2.0.28, 2.0.29, 2.0.32, 2.1.1, 2.1.2, 2.1.3, 2.1.4, 2.2.0, 2.2.1 and 2.2.3; the steering regression has been run against 2.0.26, 2.0.28, 2.0.29, 2.0.32, 2.1.1, 2.1.2, 2.1.3, 2.1.4, 2.2.0, 2.2.1 and 2.2.3. From 2.1.2, the fixture also verifies that native free-model exclusions survive both projected provider catalogs. From 2.2.0, it verifies decision endpoint discovery, signed-out server-owned limits, non-chat model filtering and the renamed text-generation route and selected-model admission error. From 2.2.3, it verifies confirmed cleanup with usage and parent-transcript preservation.
@@ -3983,7 +4180,16 @@ For a sync or version bump, use the pinned-release helper instead:
 python3 scripts/check-opencode-compatibility.py --version 2.4.2
 ```
 
-It runs both released suites, verifies the installed and served version, rejects
+`OpenCodeV2MovedSubagentIntegrationTest` is the third released suite (three cases). It moves a
+generating conversation into a project worktree, starts a native subagent there and
+raises a permission. It then checks inherited-grant routing, isolation from another
+window, the host's pending snapshot and a reply routed to the destination after a
+reconnect. A second case checks the `project` history scope: the scoped catalog page,
+per-window ownership of nested-folder, worktree and exactly-open package sessions,
+their pending snapshots and folder-routed replies, with real cursor paging. A third case
+recovers a real blocked tool permission in an owned folder from a freshly started window.
+
+It runs all three released suites, verifies the installed and served version, rejects
 missing/skipped/failed tests, forces a fresh Gradle run, and writes a JSON result.
 Gradle also tracks binary paths, contents, and expected versions as test inputs,
 so ordinary opt-in runs cannot reuse a previously skipped result.

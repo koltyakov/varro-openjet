@@ -146,7 +146,7 @@ class SessionLocations(
         require(directory == null || WorkspacePaths.isSame(directory, current)) { "Conversation location changed. Refresh before opening its folder." }
         require(retained.str("id") == id && WorkspacePaths.isSame(retained.str("directory"), current) ||
             FileReferences.authorizeDirectory(id, current, roots(), historyScope, { session },
-                { open -> read("/project/current", options.copy(directory = open)).asObjectOrNull() })) { "404 Session not found" }
+                { open -> SessionCatalog.currentProject({ path, directory -> read(path, options.copy(directory = directory)) }, open) })) { "404 Session not found" }
         val worktree = try {
             if (apiVersion() == 2) WorkspacePaths.normalizeIdentity(current) in gitWorktrees(projectID, root, cancelled)
             else {
