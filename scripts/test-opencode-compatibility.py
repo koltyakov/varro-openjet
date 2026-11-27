@@ -19,7 +19,14 @@ class CompatibilityTest(unittest.TestCase):
         self.assertNotIn("--tests", command)
         self.assertNotIn("-PskipWebview=true", command)
 
-    def test_focused_compatibility_keeps_both_released_suites(self):
+    def test_released_suites_are_the_adapter_service_and_moved_session_suites(self):
+        self.assertEqual(compatibility.SUITES, (
+            "varro.server.OpenCodeV2IntegrationTest",
+            "varro.server.OpenCodeManagedServiceIntegrationTest",
+            "varro.server.OpenCodeV2MovedSubagentIntegrationTest",
+        ))
+
+    def test_focused_compatibility_keeps_every_released_suite(self):
         command = compatibility.gradle_command()
         self.assertEqual(command[1:4], ["test", "-PskipWebview=true", "--rerun-tasks"])
         self.assertEqual(command[4:], [item for suite in compatibility.SUITES for item in ("--tests", suite)])
@@ -43,11 +50,11 @@ class CompatibilityTest(unittest.TestCase):
             fields = " ".join(f'{key}="{value}"' for key, value in attributes.items())
             (directory / f"TEST-{name}.xml").write_text(f'<testsuite name="{name}" {fields}/>')
 
-    def test_both_suites_must_pass_without_skips(self):
+    def test_every_suite_must_pass_without_skips(self):
         with tempfile.TemporaryDirectory() as folder:
             directory = Path(folder)
             self.reports(directory)
-            self.assertEqual(2, len(compatibility.read_results(directory)))
+            self.assertEqual(len(compatibility.SUITES), len(compatibility.read_results(directory)))
             for counts in ({"tests": 0}, {"skipped": 1}, {"failures": 1}, {"errors": 1}):
                 self.reports(directory, **counts)
                 with self.assertRaises(ValueError):
