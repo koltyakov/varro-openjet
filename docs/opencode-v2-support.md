@@ -1,6 +1,6 @@
 # OpenCode V2 support
 
-OpenJet supports V1 from 1.16.0 and V2 from 2.0.6. The webview and shared sources were synced from Varro's `main` branch at `337d0886ffdc`, version 0.37.2. Tested baselines are V1 1.19.6 and V2 2.4.2. The Kotlin adapter handles released-server contracts, including generated skill, shell and synthetic transcript records. Synthetic text appears as automatic-action notices, except goal kickoffs, which appear as user prompts. Canonical subagent completion metadata produces linked subagent activities. Pending and running V2 patch calls render as active edits. Assistant history preserves automatic retry metadata for recovery notices. History attachments use deferred references with Kotlin-generated thumbnails and on-demand original reads. Chat annotations retain bounded display context before deferral. [Session cleanup and usage export](session-cleanup.md) preserve statistics and optional parent transcripts before confirmed deletions.
+OpenJet supports V1 from 1.16.0 and V2 from 2.0.6. The webview and shared sources were synced from Varro's `main` branch at `64fe91b9d25b`, version 0.38.1. Tested baselines are V1 1.19.6 and V2 2.4.2. The Kotlin adapter handles released-server contracts, including generated skill, shell and synthetic transcript records. Synthetic text appears as automatic-action notices, except goal kickoffs, which appear as user prompts. Canonical subagent completion metadata produces linked subagent activities. Pending and running V2 patch calls render as active edits. Assistant history preserves automatic retry metadata for recovery notices. History attachments use deferred references with Kotlin-generated thumbnails and on-demand original reads. Chat annotations retain bounded display context before deferral. [Session cleanup and usage export](session-cleanup.md) preserve statistics and optional parent transcripts before confirmed deletions.
 
 V2 sessions support `/pause` and a Resume action in the transcript. Pausing parks queued messages and interrupts with `resume=false`. Pause markers persist in the shared Varro session annotations, and session summaries and usage reports exclude paused time. Commit-message generation uses the stateless endpoint when the server advertises it, falling back to a helper session when the endpoint or selected model is unavailable before generation starts.
 
@@ -4160,6 +4160,68 @@ browser host tests, vendor integrity and bundling passed. Evidence is
 The package is `build/distributions/varro-openjet-0.14.1.zip`, SHA-256
 `1bf5d7fe2bef45fb5151eaa3d2813218a7346ee5d1238b9f9f3def9992e6aae3`. The new edit-card
 behavior was not checked interactively in JCEF.
+
+## Upstream sync review, 2026-11-27, b089b82e
+
+Reviewed Varro `337d0886ffdc` through `b089b82e1988`, eight commits ending at 0.38.0.
+The OpenCode SDK/client baselines and support floors did not change: V1 1.19.6
+(floor 1.16.0), V2 2.4.2 (floor 2.0.6). There is no new consumed OpenCode endpoint.
+
+| Upstream change | OpenJet behavior |
+| --- | --- |
+| `prompt-cache-observer.ts`, `opencode-config-service.ts`, `protocol.ts` | `PromptCacheObserver` replaces the scheduler and the global config writer. Live steps and validated history feed the existing learner. `promptCache/sync` and `promptCache/samples` return or update `promptCache/learned`. Existing OpenCode `warming` entries are left in place and suppress learning when detected. |
+| `rest-proxy.ts`, `permission-review-policy.ts`, `auto-approve-judge.ts` | `RestProxy` adds the selected default/custom/off rejection guidance to forwarded chat prompts. `PermissionJudge` bounds feedback and shares prior-decision and alternative-action guidance with `JevDecisions` and `NativeDecisions`. `AskAgentConfig` supplies the managed V1 continuation default. V2 owns its continuation behavior. |
+| `decision-providers.ts`, `native-decisions.ts`, `extension-config.ts` | `DecisionProviders` selects one reviewer and preserves the password-safe key. Existing native routes take precedence over the legacy Jev opt-in. An explicit selection or clear replaces that opt-in. Native decision requests still use `POST /api/experimental/generate/decisions`; decision failures go directly to the chat judge. |
+| `package.json`, `webview-session.ts`, `workspace-problems.ts` | `VarroConfigurable` adds the composer tabs toggle, defaults Problems context off, and groups permission, utility and usage settings. `VarroProjectService` sends the tabs setting on boot and config updates. The UI owns tab layout, running command expansion, transcript follow and removal of the empty-state histogram. |
+| `open-code-process.ts`, `extension.ts`, `package.json` | Blank selects an automatic port. `OpenCodeProcess` retains JetBrains' 4096-first probing and ownership records. A fixed port does not fall back or adopt another port. A project reopen applies the port choice. JetBrains settings are application-level, so the VS Code workspace caps on permission mode and workspace executable-path rejection have no equivalent setting source here. |
+| `package.json` `scm/title` | `varro-git.xml` removes the walkthrough from the Commit toolbar. Tools > Varro and Find Action still offer it. |
+
+VS Code setting key migration, remote configuration scopes, and the VS Code
+sandbox and verification script changes do not apply to JetBrains. Existing
+OpenJet setting keys for models and other retained preferences keep their values.
+
+`scripts/check-opencode-compatibility.py --version 2.4.2 --full-check` passed on
+the published arm64 binary. The V2 adapter, managed-service and moved-session
+routing suites passed all seven tests without skips. The V1 fixture passed on
+1.19.6 and checked that the released server reads the continuation default;
+an isolated config probe also accepted it on 1.16.0. The full build recorded
+1,108 passing Kotlin tests, one opt-in usage benchmark skipped, and 128 passing
+browser host tests. Type checking, vendor integrity and bundling passed.
+Evidence is `build/opencode-compatibility/2.4.2/verification.json`; the package
+is `build/distributions/varro-openjet-0.14.2.zip`.
+
+The IntelliJ IDEA 2026.2.2 sandbox rendered the tabs in JCEF, switched between
+panels, and switched to the stacked layout after a config update. A synthetic
+running tool showed "Waiting for output", then rendered new output while keeping
+the transcript at the bottom. That fixture tests rendering with a synthetic host.
+The Kotlin fixtures cover request routing and settings behavior. Live TypeSafe
+and other decision providers, real provider cache expiry, the native settings
+dialog, and Windows/Linux IDE runs were not exercised. Beyond the JetBrains
+differences above, no backend gaps were found in the reviewed changes.
+
+## Upstream sync review, 2026-11-27, 64fe91b9
+
+Reviewed Varro `b089b82e1988` through `64fe91b9d25b`, two commits ending at 0.38.1.
+`ModelsPanel.tsx`, `ToolbarPickers.tsx`, and `models.css` shorten routing tags
+only on model rows where the name would truncate. On tighter rows the speed
+label hides, while the icon and accessible route names remain. The webview
+still reads the same `/varro/opencode-config` response from `ModelRoutingService`.
+There were no changes in `src/extension`, `src/shared`, or dependencies. The
+OpenCode baselines and both support floors are unchanged.
+
+Upstream `package.json` changes only the version and settings help text.
+`VarroConfigurable` mirrors the relevant descriptions for JetBrains. VS Code
+setting scopes and debug controls do not apply to this update. No backend gaps
+were found in the reviewed changes.
+
+The fresh `check buildPlugin` run passed all three isolated Kotlin suites
+against published OpenCode 2.4.2 and the V1 fixture against 1.19.6. 128 browser
+host tests and 117 upstream Models panel tests passed, along with type checking,
+vendoring integrity, and bundling. The IntelliJ IDEA 2026.2.2 JCEF sandbox used
+a synthetic catalog to verify that a crowded row shrinks its route tags and
+hides its speed label, a short row keeps both, and widening restores the full
+labels. Live provider catalogs, the native settings dialog, and Windows/Linux
+IDE runs were not exercised.
 
 ## Verification
 

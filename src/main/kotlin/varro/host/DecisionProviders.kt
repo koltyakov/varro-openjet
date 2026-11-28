@@ -15,7 +15,7 @@ import varro.settings.VarroSettings
 
 /**
  * Port of `src/extension/decision-providers.ts`: owns the TypeSafe credential and
- * the opt-in setting for Jev decisions. The key lives in the IDE password safe;
+ * the single decision reviewer selection. The key lives in the IDE password safe;
  * `TYPESAFE_API_KEY` in the IDE environment is the fallback.
  */
 internal class DecisionProviders(
@@ -43,7 +43,7 @@ internal class DecisionProviders(
 
     fun hasApiKey(): Boolean = apiKey() != null
 
-    fun readSettings() = JevSettings(settings.decisionsJevAutoApprove, JevDecisions.DEFAULT_MODEL)
+    fun directModel(): String? = JevDecisions.directModelId(settings.decisionModel())
 
     fun status(): JsonObject {
         val source = when {
@@ -51,12 +51,12 @@ internal class DecisionProviders(
             environmentKey() != null -> "environment"
             else -> null
         }
-        val current = readSettings()
+        val selected = directModel()
         return Json.obj("jev" to Json.obj(
             "connected" to (source != null),
             "credentialSource" to source,
-            "model" to current.model,
-            "autoApprove" to current.autoApprove,
+            "model" to (selected ?: JevDecisions.DEFAULT_MODEL),
+            "autoApprove" to (selected != null),
         )).apply {
             native?.status()?.let { add("native", it.apply { addProperty("visible", settings.debugShowNativeDecisionModels) }) }
         }
@@ -70,27 +70,32 @@ internal class DecisionProviders(
                 require(model.length <= 500) { "Invalid decision model" }
                 if (model.isNotEmpty()) {
                     val status = native?.status()
-                    require(status.bool("supported") == true && status.arr("models")?.any {
+                    require(JevDecisions.directModelId(model) == null && status.bool("supported") == true && status.arr("models")?.any {
                         val entry = it.asObjectOrNull()
                         "${entry.str("providerID")}/${entry.str("modelID")}" == model
                     } == true) { "Select an available OpenCode decision model" }
                 }
-                if (settings.chatAutoApproveDecisionModel != model) {
-                    settings.chatAutoApproveDecisionModel = model
-                    onChanged()
-                }
+                if (model.isNotEmpty() || directModel() == null) select(model)
             }
             "connect" -> connect()
-            "disconnect" -> secrets.set(null)
-            "update" -> request.bool("autoApprove")?.let { enabled ->
-                if (settings.decisionsJevAutoApprove != enabled) {
-                    settings.decisionsJevAutoApprove = enabled
-                    onChanged()
-                }
+            "disconnect" -> {
+                secrets.set(null)
+                if (directModel() != null) select("")
+            }
+            "update" -> when (request.bool("autoApprove")) {
+                true -> if (directModel() == null) select(JevDecisions.DIRECT_ROUTE)
+                false -> if (directModel() != null) select("")
+                null -> Unit
             }
             else -> throw IllegalArgumentException("Unsupported decision provider request")
         }
         return status()
+    }
+
+    private fun select(route: String) {
+        if (settings.decisionModel() == route) return
+        settings.selectDecisionModel(route)
+        onChanged()
     }
 
     /** Prompts for a TypeSafe API key, verifies it with a minimal request, and stores it. */
@@ -98,7 +103,7 @@ internal class DecisionProviders(
         val apiKey = ui.promptApiKey()?.trim()?.takeIf { it.isNotEmpty() } ?: return false
         try {
             createClient(apiKey).evaluate(
-                readSettings().model,
+                directModel() ?: JevDecisions.DEFAULT_MODEL,
                 Json.toElement("Connection check from Varro."),
                 Json.obj("ok" to Json.obj("type" to "noul", "instructions" to "Is this a connection check?")),
                 10_000,
@@ -108,8 +113,8 @@ internal class DecisionProviders(
             return false
         }
         secrets.set(apiKey)
-        if (!settings.decisionsJevAutoApprove) {
-            ui.showInfo("TypeSafe Jev connected. Turn it on for auto-approve in the Varro Models view.")
+        if (directModel() == null) {
+            ui.showInfo("TypeSafe Jev connected. Turn on Auto-approve decisions for it in the Varro Models view.")
         }
         return true
     }

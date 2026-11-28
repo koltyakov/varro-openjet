@@ -1011,6 +1011,7 @@ class OpenCodeV2IntegrationTest {
             val id = transport.request("POST", "/session", Json.obj("title" to "Isolated command $phase fixture",
                 "model" to Json.obj("providerID" to "fixture", "modelID" to "fixture"))).data.asObjectOrNull().str("id")!!
             var childID: String? = null
+            var expired = false
             try {
                 val before = transport.request("GET", "/session/$id").data.asObjectOrNull()
                 val inputCount = providerInputs.size
@@ -1052,11 +1053,52 @@ class OpenCodeV2IntegrationTest {
                 assertEquals(before.obj("model"), after.obj("model"))
                 assertEquals(before.str("agent"), after.str("agent"))
                 assertEquals(1, results().size)
+                // A real subagent tree: expiry deletes it only while no other client has changed it.
+                expired = verifyRecycleExpiry(transport, id, childID, changedElsewhere = phase == "error")
             } finally {
-                childID?.let { transport.request("DELETE", "/session/$it") }
-                transport.request("DELETE", "/session/$id")
+                // A failed expiry check may already have deleted the tree; keep its assertion as the reported failure.
+                fun delete(session: String) {
+                    try { transport.request("DELETE", "/session/$session") }
+                    catch (failure: OpenCodeRequestException) { if (failure.message?.startsWith("404 ") != true) throw failure }
+                }
+                if (!expired) {
+                    childID?.let(::delete)
+                    delete(id)
+                }
             }
         }
+    }
+
+    /** Returns whether expiry permanently deleted the tree. */
+    private fun verifyRecycleExpiry(transport: OpenCodeTransport, id: String, childID: String, changedElsewhere: Boolean): Boolean {
+        // Archive timestamps are only comparable once neither session is still finishing work.
+        waitFor("Subagent tree did not become idle") {
+            val status = transport.request("GET", "/session/status").data.asObjectOrNull()!!
+            listOf(id, childID).all { status.obj(it)?.str("type").let { type -> type == null || type == "idle" } }
+        }
+        var clock = System.currentTimeMillis()
+        val trash = varro.host.SessionTrash(varro.store.VarroStore(), { method, path, body, directory ->
+            transport.request(method, path, body, RequestOptions(directory = directory)).data
+        }, { clock }, legacyUnarchive = { transport.apiVersion == 1 })
+        trash.recycle(id, null)
+        assertTrue(trash.isHidden(childID))
+        val entry = trash.list().single().asJsonObject
+        assertEquals(setOf(id, childID), entry.obj("archivedTimes")!!.keySet())
+        for (session in listOf(id, childID)) {
+            assertNotNull("$session was not archived", transport.request("GET", "/session/$session").data.asObjectOrNull().obj("time").num("archived"))
+        }
+        if (changedElsewhere) transport.request("PATCH", "/session/$childID", Json.obj("title" to "Continued by another client"))
+        clock += varro.host.SessionTrash.RETENTION_MS + 1
+        assertEquals("Expiry kept the entry; a failed check is logged by SessionTrash", 0, trash.list().size())
+        fun absent(session: String) = try {
+            transport.request("GET", "/session/$session"); false
+        } catch (failure: OpenCodeRequestException) {
+            if (failure.message?.startsWith("404 ") != true) throw failure
+            true
+        }
+        assertEquals("root deletion", !changedElsewhere, absent(id))
+        assertEquals("child deletion", !changedElsewhere, absent(childID))
+        return !changedElsewhere
     }
 
     private fun waitFor(message: String = "Released-server fixture did not reach the expected state", condition: () -> Boolean) {

@@ -238,42 +238,15 @@ class VarroProjectService(private val project: Project) : Disposable {
         },
     )
 
-    /** Sessions known to be children; warming covers only root sessions. */
-    private val childSessionIds: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
-
-    private val promptCacheWarming = PromptCacheWarming(object : PromptCacheWarming.Deps {
-        override fun readMode() = settings.promptCacheWarmingMode()
-        override fun readDurationMs() = settings.promptCacheWarmingDurationMs()
-        override fun isAvailable() = server.transport.apiVersion == 2 && lastStatus.get() is ServerStatus.Running
-        override fun isWarmable(sessionID: String) = sessionID !in childSessionIds && sessionID !in store.hiddenSessionIds &&
-            store.recycleBin.none { entry -> entry.asObjectOrNull().arr("sessions")?.any { it.asObjectOrNull().str("id") == sessionID } == true }
-        override fun isBusy(sessionID: String) = sessionID in busySessions
-        override fun directoryFor(sessionID: String) = server.transport.observedSessionDirectories()[sessionID]
-            ?: transfers.get(sessionID).str("directory")
-        override fun generate(sessionID: String, directory: String?, prompt: String, isCancelled: () -> Boolean): PromptCacheWarming.Usage {
-            val response = server.transport.request("POST", "/api/session/${java.net.URLEncoder.encode(sessionID, Charsets.UTF_8).replace("+", "%20")}/generate",
-                Json.obj("prompt" to prompt), varro.server.RequestOptions(directory = directory, isCancelled = isCancelled)).data
-            val cache = response.asObjectOrNull().obj("data").obj("tokens").obj("cache")
-            return PromptCacheWarming.Usage(cache.num("read") ?: 0.0, cache.num("write") ?: 0.0)
+    private val promptCacheObserver = PromptCacheObserver(sharedPromptCacheLearner, readOpenCodeWarming = {
+        if (server.transport.apiVersion != 2 || lastStatus.get() !is ServerStatus.Running) null
+        else server.transport.request("GET", "/config").data.asObjectOrNull()?.let { config ->
+            config.obj("warming") != null || config.bool("warming") == true
         }
-        override fun readProviders(directory: String?): JsonArray =
-            server.transport.request("GET", "/config/providers", options = varro.server.RequestOptions(directory = directory))
-                .data.asObjectOrNull().arr("providers") ?: error("Invalid OpenCode provider catalog")
-        override fun readOpenCodeWarming(): Boolean {
-            val warming = server.transport.request("GET", "/config").data.asObjectOrNull()?.get("warming")
-            return warming?.isJsonObject == true || (warming?.isJsonPrimitive == true && warming.asJsonPrimitive.isBoolean && warming.asBoolean)
-        }
-        override fun writeOpenCodeWarming(value: JsonElement?) = hostServices.updateGlobalWarming(value)
-        override fun loadChosen() = store.promptCacheWarmingSessions
-        override fun saveChosen(ids: List<String>) { store.promptCacheWarmingSessions = ids }
-        override fun post(state: JsonObject) = broadcast("warming/state", state)
-        override fun logWarning(message: String) = log.warn(message)
-    }, sharedPromptCacheLearner)
-    @Volatile private var promptCacheWarmingSettings = settings.promptCacheWarmingMode() to settings.promptCacheWarmingDurationMs()
+    }, post = { broadcast("promptCache/learned", it) })
 
     init {
         server.transport.onSessionObserved = { session ->
-            session.text("id")?.let { id -> if (session.text("parentID") != null) childSessionIds.add(id) }
             sessionGrants.observe(session)
             sessionCatalog.observe(session)
             if (InternalHelperSessions.isHidden(session)) {
@@ -349,7 +322,6 @@ class VarroProjectService(private val project: Project) : Disposable {
 
         ApplicationManager.getApplication().messageBus.connect(this)
             .subscribe(VarroSettings.TOPIC, VarroSettings.Listener {
-                applyPromptCacheWarmingSettings()
                 notifications.settingsChanged()
                 pinnedProviderLimits.invalidate()
                 hostServices.clearProviderQuotaCache()
@@ -501,7 +473,7 @@ class VarroProjectService(private val project: Project) : Disposable {
             addProperty("expandThinking", settings.chatExpandThinking)
             addProperty("showChangedFiles", settings.chatShowChangedFiles)
             addProperty("showTurnTimer", settings.chatShowTurnTimer)
-            addProperty("showEmptyStateHistogram", settings.chatShowEmptyStateHistogram)
+            addProperty("groupComposerBlocks", settings.chatGroupComposerBlocks)
             addProperty("remoteImages", settings.remoteImageMode())
             addProperty("promptCompletionModel", settings.chatPromptCompletionModel)
             addProperty("followupsEnabled", settings.chatFollowupsEnabled)
@@ -545,7 +517,7 @@ class VarroProjectService(private val project: Project) : Disposable {
                 "expandThinking" to settings.chatExpandThinking,
                 "showChangedFiles" to settings.chatShowChangedFiles,
                 "showTurnTimer" to settings.chatShowTurnTimer,
-                "showEmptyStateHistogram" to settings.chatShowEmptyStateHistogram,
+                "groupComposerBlocks" to settings.chatGroupComposerBlocks,
                 "remoteImages" to settings.remoteImageMode(),
                 "promptCompletionModel" to settings.chatPromptCompletionModel,
                 "followupsEnabled" to settings.chatFollowupsEnabled,
@@ -659,42 +631,14 @@ class VarroProjectService(private val project: Project) : Disposable {
             }
         }
         if (parsed.type == "server.connected") streamingToolContent.clear()
-        if (parsed.type in setOf("session.created", "session.updated")) {
-            val session = parsed.properties.obj("info") ?: parsed.properties
-            session.text("id")?.let { id -> if (session.text("parentID") != null) childSessionIds.add(id) }
-        }
         if (parsed.type == "session.deleted") (info.text("id") ?: sessionId)?.let { id ->
-            childSessionIds.remove(id)
             // After routing, so a deleted subagent's event still reaches the view that lists it.
             sessionGrants.forget(id)
             sessionCatalog.forget(id)
         }
-        // After session state reflects the event, as upstream attaches warming after its bridge.
-        promptCacheWarming.handleServerEvent(parsed.type, parsed.properties)
+        promptCacheObserver.handleServerEvent(parsed.type, parsed.properties)
         notifications.event(parsed)
         broadcast("server/event", streamingToolContent.project(payload))
-    }
-
-    /**
-     * Applies a changed warming mode or duration. `all` writes OpenCode's own global config, so the
-     * write runs off the settings thread and a failure is reported instead of silently ignored.
-     */
-    private fun applyPromptCacheWarmingSettings() {
-        val next = settings.promptCacheWarmingMode() to settings.promptCacheWarmingDurationMs()
-        val previous = synchronized(this) {
-            val current = promptCacheWarmingSettings
-            if (current == next) return
-            promptCacheWarmingSettings = next
-            current
-        }
-        ApplicationManager.getApplication().executeOnPooledThread {
-            try {
-                promptCacheWarming.applySettings(previous.first)
-            } catch (failure: Exception) {
-                log.warn("Could not apply prompt cache warming settings", failure)
-                notify("Could not update OpenCode's warming setting: ${failure.message ?: failure}", NotificationType.WARNING)
-            }
-        }
     }
 
     /** A todo marker lasts until the next prompt reaches the session, or the session is deleted. */
@@ -1100,14 +1044,9 @@ class VarroProjectService(private val project: Project) : Disposable {
                     else payload.text("directory")?.takeIf { it.length <= 4096 }?.let { generateSessionUsageReport(id, it) }
                 }
 
-                "warming/sync" -> ApplicationManager.getApplication().executeOnPooledThread { promptCacheWarming.sync() }
-                "warming/samples" -> PromptCacheWarming.parseHistorySamples(payload)?.let { (id, samples) ->
-                    promptCacheWarming.recordHistory(id, samples)
-                }
-                "warming/set" -> {
-                    val sessionId = payload.str("sessionId")?.takeIf { it.length <= 512 && SESSION_ID.matches(it) } ?: return
-                    val enabled = payload?.get("enabled")?.takeIf { it.isJsonPrimitive && it.asJsonPrimitive.isBoolean }?.asBoolean ?: return
-                    promptCacheWarming.setSessionWarm(sessionId, enabled)
+                "promptCache/sync" -> ApplicationManager.getApplication().executeOnPooledThread { promptCacheObserver.sync() }
+                "promptCache/samples" -> PromptCacheObserver.parseHistorySamples(payload)?.let { (id, samples) ->
+                    promptCacheObserver.recordHistory(id, samples)
                 }
 
                 "ralph/start", "ralph/stop", "ralph/pause", "ralph/resume",
@@ -1144,7 +1083,7 @@ class VarroProjectService(private val project: Project) : Disposable {
         payload.bool("expandThinking")?.let { settings.chatExpandThinking = it }
         payload.bool("showChangedFiles")?.let { settings.chatShowChangedFiles = it }
         payload.bool("showTurnTimer")?.let { settings.chatShowTurnTimer = it }
-        payload.bool("showEmptyStateHistogram")?.let { settings.chatShowEmptyStateHistogram = it }
+        payload.bool("groupComposerBlocks")?.let { settings.chatGroupComposerBlocks = it }
         payload.bool("followupsEnabled")?.let { settings.chatFollowupsEnabled = it }
         payload.str("followupModel")?.let { settings.chatFollowupModel = it.trim() }
         if (payload?.has("followupsEnabled") == true || payload?.has("followupModel") == true) {
@@ -1657,7 +1596,7 @@ class VarroProjectService(private val project: Project) : Disposable {
     }
 
     override fun dispose() {
-        promptCacheWarming.dispose()
+        promptCacheObserver.dispose()
         pinnedProviderLimits.close()
         streamingToolContent.clear()
         ralph.close()

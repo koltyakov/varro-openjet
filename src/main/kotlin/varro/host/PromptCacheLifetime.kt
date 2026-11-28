@@ -15,7 +15,7 @@ import kotlin.math.roundToLong
  * Host-side port of upstream `src/shared/prompt-cache-lifetime.ts`. The webview keeps its own
  * vendored TypeScript copy; this file carries only what the host uses: lifetime resolution for
  * keep-alive scheduling and the learned-lifetime histograms. `promptCacheHistorySamples` stays in
- * the webview, which sends its results as `warming/samples`. Constants, buckets, regexes and
+ * the webview, which sends its results as `promptCache/samples`. Constants, buckets, regexes and
  * model/provider tables must stay identical to upstream.
  */
 
@@ -81,10 +81,6 @@ fun parsePromptCacheTtl(value: String?): Long? {
     val ms = match.groupValues[1].toDouble() * TTL_UNITS.getValue(match.groupValues[2])
     return if (ms > 0 && ms <= MAX_SAFE_INTEGER) ms.toLong() else null
 }
-
-/** Re-send this long after the last request: a minute early for short lifetimes, 10% early for long ones. */
-fun promptCacheKeepAliveIntervalMs(ttlMs: Long): Long =
-    max(ttlMs / 2.0, min(ttlMs * 0.9, (ttlMs - MINUTE).toDouble())).toLong()
 
 private fun formatTtl(ms: Long): String =
     if (ms >= HOUR && ms % HOUR == 0L) "${ms / HOUR} h" else "${(ms.toDouble() / MINUTE).roundToLong()} min"

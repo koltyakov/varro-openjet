@@ -20,33 +20,27 @@ it('accepts local file image targets but rejects network and executable paths', 
   }
 });
 
-it('accepts the host todo-mark and prompt-cache warming snapshots', () => {
+it('accepts the host todo-mark and learned prompt-cache snapshots', () => {
   const todo = { type: 'todo-sessions/sync', payload: { sessionIds: ['ses_one'] } };
   expect(parseExtensionMessage(todo)).toEqual(todo);
-  // PromptCacheWarming.snapshot serializes explicit nulls through Json.stringifyMessage.
-  const warming = {
-    type: 'warming/state',
+  const learned = {
+    type: 'promptCache/learned',
     payload: {
-      available: true,
-      mode: 'chosen',
-      durationMs: 1_800_000,
-      openCodeWarming: false,
-      sessions: {
-        ses_waiting: { warmUntil: null, sentAt: null, ttlMs: null, stopped: null },
-        ses_warm: { warmUntil: 1_900_000, sentAt: 100_000, ttlMs: 300_000, stopped: null },
-        ses_expired: { warmUntil: 1_900_000, sentAt: 100_000, ttlMs: 3_600_000, stopped: 'expired' },
-      },
       learned: { 'anthropic/claude-sonnet-5-5': { ms: 3_600_000, bounded: true } },
     },
   };
-  expect(parseExtensionMessage(warming)).toEqual(warming);
-  const missingNull = structuredClone(warming);
-  delete (missingNull.payload.sessions.ses_waiting as { ttlMs?: null }).ttlMs;
-  expect(parseExtensionMessage(missingNull)).toBeNull();
-  const missingLearned = structuredClone(warming) as { payload: { learned?: unknown } };
-  delete missingLearned.payload.learned;
-  expect(parseExtensionMessage(missingLearned)).toBeNull();
+  expect(parseExtensionMessage(learned)).toEqual(learned);
+  expect(parseExtensionMessage({ ...learned, payload: {} })).toBeNull();
+  expect(parseExtensionMessage({ ...learned, type: 'warming/state' })).toBeNull();
   for (const command of ['command/open-skill-settings', 'command/open-mcp-settings']) {
     expect(parseExtensionMessage({ type: command })).toEqual({ type: command });
   }
+});
+
+it('accepts an explicit opt-out from composer tabs in host config updates', () => {
+  const message = { type: 'config/update', payload: {
+    desktopSessionPaneSide: 'right', defaultPermissionMode: 'auto',
+    chatFontSize: 13, chatEditorFontSize: 12, chatFontFamily: 'default', groupComposerBlocks: false,
+  } };
+  expect(parseExtensionMessage(message)).toEqual(message);
 });

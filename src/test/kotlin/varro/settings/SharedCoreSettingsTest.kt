@@ -9,7 +9,8 @@ class SharedCoreSettingsTest {
         val source = VarroSettings().apply {
             commitMessageModel = "provider/commit"
             reviewModel = "provider/review#high"
-            chatPromptCacheWarming = "all"
+            permissionRejectionMode = "custom"
+            permissionRejectionCustom = "Local guidance"
             chatAutoApproveModel = "provider/judge"
             chatPromptCompletionModel = "provider/completion"
             chatFollowupModel = "provider/followups"
@@ -26,9 +27,9 @@ class SharedCoreSettingsTest {
         SharedCoreSettings.apply(shared, destination)
         assertEquals("provider/commit", destination.commitMessageModel)
         assertEquals("provider/review#high", destination.reviewModel)
-        // Warming spends tokens and can edit global OpenCode config, so it stays per IDE.
-        assertFalse(shared.has("chatPromptCacheWarming"))
-        assertEquals("off", destination.chatPromptCacheWarming)
+        assertFalse(shared.has("permissionRejectionMode"))
+        assertFalse(shared.has("permissionRejectionCustom"))
+        assertEquals("default", destination.permissionRejectionMode)
         assertEquals("provider/judge", destination.chatAutoApproveModel)
         assertEquals("provider/completion", destination.chatPromptCompletionModel)
         assertEquals("provider/followups", destination.chatFollowupModel)
@@ -54,7 +55,7 @@ class SharedCoreSettingsTest {
         val settings = VarroSettings().apply { chatFontSize = 17 }
         SharedCoreSettings.apply(Json.obj("commitMessageModel" to "provider/commit", "chatFontSize" to 99, "future" to true), settings)
         assertEquals("provider/commit", settings.commitMessageModel)
-        assertEquals(4096, settings.serverPort)
+        assertNull(settings.fixedServerPort())
         assertEquals(17, settings.chatFontSize)
     }
 

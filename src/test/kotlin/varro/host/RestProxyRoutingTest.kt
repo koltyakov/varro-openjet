@@ -20,6 +20,8 @@ class RestProxyRoutingTest {
 
     private inner class Fixture(scope: String = "directory") {
         val calls = mutableListOf<Call>()
+        var lastBody: JsonElement? = null
+        var rejectionGuidance = PermissionReviewPolicy.guidance("default", "")
         val pending = mutableMapOf<String, String>()
         val records = mutableMapOf<String, JsonObject>()
         val observed = mutableMapOf<String, String>()
@@ -34,6 +36,7 @@ class RestProxyRoutingTest {
             override fun request(method: String, path: String, body: JsonElement?, options: RequestOptions): OpenCodeResponse {
                 options.checkCancelled()
                 calls += Call(method, path, options.directory, options.unscoped)
+                lastBody = body
                 return OpenCodeResponse(responder(method, path, options.directory), if (options.captureNextCursor) nextCursor(path) else null)
             }
             override fun workspaceDirectory() = "/origin"
@@ -73,7 +76,7 @@ class RestProxyRoutingTest {
         } as RestProxy.HostServices
 
         val proxy = RestProxy(backend, workspace, store, services, { responses += it },
-            transfers = transfers, grants = grants, catalog = catalog)
+            transfers = transfers, grants = grants, catalog = catalog, rejectionGuidance = { rejectionGuidance })
 
         private var nextId = 1
 
@@ -101,6 +104,29 @@ class RestProxyRoutingTest {
         }
 
         fun last(method: String, prefix: String) = calls.last { it.method == method && it.path.startsWith(prefix) }
+    }
+
+    @Test fun `prompt forwarding applies the current rejection setting without changing existing system text`() {
+        val fixture = Fixture()
+        val body = Json.obj("system" to "Existing system text.")
+        val route = "/session/ses_local/prompt_async"
+        fixture.send("POST", route, body)
+        val default = fixture.lastBody.asObjectOrNull().str("system")!!
+        assertTrue(default.startsWith("Existing system text."))
+        assertTrue(default.contains("If the rejection feedback or a later user message asks for a different approach"))
+
+        fixture.rejectionGuidance = PermissionReviewPolicy.guidance("custom", "  Ask what to try next.  ")
+        fixture.send("POST", route, body)
+        assertTrue(fixture.lastBody.asObjectOrNull().str("system")!!.endsWith("Ask what to try next."))
+        assertEquals(PermissionReviewPolicy.guidance("default", ""), PermissionReviewPolicy.guidance("custom", " "))
+
+        fixture.rejectionGuidance = PermissionReviewPolicy.guidance("off", "Ignore this")
+        fixture.send("POST", route, body)
+        val disabled = fixture.lastBody.asObjectOrNull().str("system")!!
+        assertFalse(disabled.contains("If the rejection feedback"))
+        assertTrue(disabled.startsWith("Existing system text."))
+        assertTrue(disabled.contains("File citations"))
+        assertEquals("Existing system text.", body.str("system"))
     }
 
     @Test fun `a moved conversation and its subagents are read in their destination`() {

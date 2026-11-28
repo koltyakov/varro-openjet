@@ -29,7 +29,7 @@ class JevDecisionsTest {
         ))
 
     private fun jev(response: () -> Pair<Int, String>, enabled: Boolean = true) =
-        JevDecisions(JevClient({ "key" }, JevHttp { _, _, _, _ -> response() }), { JevSettings(enabled, "jev-latest") }, { true })
+        JevDecisions(JevClient({ "key" }, JevHttp { _, _, _, _ -> response() }), { if (enabled) "jev-latest" else null }, { true })
 
     @Test fun `posts typed questions with bearer auth`() {
         var seen: Pair<Map<String, String>, String>? = null
@@ -39,18 +39,18 @@ class JevDecisionsTest {
             seen = headers to body
             200 to Json.stringify(answers("allow", 0.95))
         })
-        JevDecisions(client, { JevSettings(true, "jev-latest") }, { true }).judgePermission(permission, JsonArray())
+        JevDecisions(client, { "jev-custom" }, { true }).judgePermission("jev-custom", permission, JsonArray())
         assertEquals("Bearer secret", seen!!.first["Authorization"])
         val body = Json.parse(seen!!.second).asObjectOrNull()
-        assertEquals("jev-latest", body.str("model"))
+        assertEquals("jev-custom", body.str("model"))
         assertEquals("choice", body.obj("questions").obj("decision").str("type"))
         assertEquals("npm test", body.obj("state").obj("permission").str("title"))
     }
 
     @Test fun `reports HTTP failures, malformed answers, and missing keys`() {
         fun failure(block: () -> Unit) = try { block(); fail("expected failure"); "" } catch (e: JevApiError) { e.message.orEmpty() }
-        assertTrue(failure { jev({ 401 to "" }).judgePermission(permission, JsonArray()) }.contains("401"))
-        assertTrue(failure { jev({ 200 to """{"answers":{"decision":{"type":"noul","noul":1}}}""" }).judgePermission(permission, JsonArray()) }
+        assertTrue(failure { jev({ 401 to "" }).judgePermission("jev-latest", permission, JsonArray()) }.contains("401"))
+        assertTrue(failure { jev({ 200 to """{"answers":{"decision":{"type":"noul","noul":1}}}""" }).judgePermission("jev-latest", permission, JsonArray()) }
             .contains("invalid answer for \"decision\""))
         val keyless = JevClient({ null }, JevHttp { _, _, _, _ -> fail("must not call TypeSafe"); 0 to "" })
         assertTrue(failure { keyless.evaluate("m", Json.obj(), Json.obj(), 1) }.contains("not configured"))
@@ -59,7 +59,7 @@ class JevDecisionsTest {
 
     @Test fun `allows only confident, low-risk answers`() {
         fun decide(vararg args: Double) = jev({ 200 to Json.stringify(answers("allow", args[0], args[1], args[2], args[3])) })
-            .judgePermission(permission, JsonArray()).str("decision")
+            .judgePermission("jev-latest", permission, JsonArray()).str("decision")
         assertEquals("allow", decide(0.9, 0.9, 0.05, 0.02))
         assertEquals("ask", decide(0.7, 0.9, 0.05, 0.02))
         assertEquals("ask", decide(0.9, 0.6, 0.05, 0.02))
@@ -69,9 +69,9 @@ class JevDecisionsTest {
 
     @Test fun `rejects only when the user rejected before`() {
         val rejecting = jev({ 200 to Json.stringify(answers("reject", 0.95)) })
-        assertEquals("ask", rejecting.judgePermission(permission, JsonArray()).str("decision"))
+        assertEquals("ask", rejecting.judgePermission("jev-latest", permission, JsonArray()).str("decision"))
         val prior = Json.array(listOf(Json.obj("type" to "bash", "title" to "npm test", "response" to "reject")))
-        assertEquals("reject", rejecting.judgePermission(permission, prior).str("decision"))
+        assertEquals("reject", rejecting.judgePermission("jev-latest", permission, prior).str("decision"))
     }
 
     @Test fun `judge uses Jev before the model judge and reports it as the reviewer`() {
@@ -122,7 +122,8 @@ class JevDecisionsTest {
         assertEquals("key", stored)
         assertEquals("secret", connected.str("credentialSource"))
         assertEquals(true, providers.handle(Json.obj("action" to "update", "autoApprove" to true)).obj("jev").bool("autoApprove"))
-        assertTrue(settings.decisionsJevAutoApprove)
+        assertEquals("typesafe/jev-latest", settings.decisionModel())
         assertFalse(providers.handle(Json.obj("action" to "disconnect")).obj("jev").bool("connected")!!)
+        assertEquals("", settings.decisionModel())
     }
 }

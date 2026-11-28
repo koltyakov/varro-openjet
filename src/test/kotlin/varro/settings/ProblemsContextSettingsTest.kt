@@ -5,14 +5,14 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ProblemsContextSettingsTest {
-    @Test fun `problems context defaults on and persists the opt out`() {
+    @Test fun `problems context defaults off and persists the opt in`() {
         val settings = VarroSettings()
-        assertTrue(settings.chatEnableProblemsContext)
-        settings.chatEnableProblemsContext = false
+        assertFalse(settings.chatEnableProblemsContext)
+        settings.chatEnableProblemsContext = true
         val restored = VarroSettings().apply { loadState(settings.getState()) }
-        assertFalse(restored.chatEnableProblemsContext)
-        restored.loadState(VarroSettings())
         assertTrue(restored.chatEnableProblemsContext)
+        restored.loadState(VarroSettings())
+        assertFalse(restored.chatEnableProblemsContext)
     }
 
     @Test fun `active file context defaults on and persists independently of problems`() {
@@ -21,9 +21,9 @@ class ProblemsContextSettingsTest {
         settings.chatAutoAttachActiveFile = false
         val restored = VarroSettings().apply { loadState(settings.getState()) }
         assertFalse(restored.chatAutoAttachActiveFile)
-        assertTrue(restored.chatEnableProblemsContext)
-        restored.loadState(VarroSettings().apply { chatEnableProblemsContext = false })
-        assertTrue(restored.chatAutoAttachActiveFile)
         assertFalse(restored.chatEnableProblemsContext)
+        restored.loadState(VarroSettings().apply { chatEnableProblemsContext = true })
+        assertTrue(restored.chatAutoAttachActiveFile)
+        assertTrue(restored.chatEnableProblemsContext)
     }
 }

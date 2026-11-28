@@ -33,6 +33,21 @@ class OpenCodeServiceRoutingTest {
         assertTrue(routing.privateSelected)
     }
 
+    @Test fun `a fixed port neither adopts registrations on another port nor advances on a collision`() {
+        val root = temporary.newFolder().toPath()
+        val cli = OpenCodeCli({ "" }, { null }, environment = mapOf("XDG_STATE_HOME" to root.toString()))
+        registration(root.resolve("opencode/service.json"), 43125)
+        val fixed = OpenCodeProcess(cli, { 43124 }, { null }, serverStateDirectory = root.resolve("fixed"), automaticPort = { false })
+        assertTrue(fixed.serviceRegistrations(allowGlobal = true).isEmpty())
+        assertFalse(fixed.tryAdvancePort())
+        assertEquals(43124, fixed.port)
+
+        val automatic = OpenCodeProcess(cli, { 43124 }, { null }, serverStateDirectory = root.resolve("auto"), automaticPort = { true })
+        assertEquals("http://127.0.0.1:43125", automatic.serviceRegistrations(allowGlobal = true).single().url)
+        assertTrue(automatic.tryAdvancePort())
+        assertEquals(43125, automatic.port)
+    }
+
     @Test fun `verified private discovery never falls back to Desktop after registration disappears`() {
         val root = temporary.newFolder().toPath()
         val global = root.resolve("global/opencode/service.json")

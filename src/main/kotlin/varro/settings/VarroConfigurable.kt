@@ -49,9 +49,15 @@ class VarroConfigurable : BoundConfigurable("Varro") {
         }
         group("OpenCode Server") {
             row("Port:") {
-                intTextField(1..65_535)
-                    .bindIntText(settings::serverPort)
-                    .comment("Restart the server after changing this.")
+                textField()
+                    .bindText({ settings.fixedServerPort()?.toString().orEmpty() }, { settings.serverPort = it.trim().toIntOrNull() ?: 0 })
+                    .validationOnApply {
+                        val text = it.text.trim()
+                        if (text.isEmpty() || text.toIntOrNull() in 1..65_535) null
+                        else com.intellij.openapi.ui.ValidationInfo("Enter a port from 1 to 65535 or leave it blank.", it)
+                    }
+                    .columns(8)
+                    .comment("Leave blank to let Varro choose a port. If you enter a port, Varro uses only that port. Reopen the project after changing it.")
             }
             row("CLI path:") {
                 textField()
@@ -62,11 +68,12 @@ class VarroConfigurable : BoundConfigurable("Varro") {
             row {
                 checkBox("Start the server automatically when Varro needs it")
                     .bindSelected(settings::serverAutoStart)
+                    .comment("Turn off if you run the server yourself. Some CLI and server configuration actions are then unavailable.")
             }
             row {
                 checkBox("Install OpenCode CLI updates in the background")
                     .bindSelected(settings::serverAutoUpdate)
-                    .comment("Updates are only applied while no session is running.")
+                    .comment("Updates stay on the installed major version and run only while no session is active.")
             }
         }
 
@@ -74,19 +81,11 @@ class VarroConfigurable : BoundConfigurable("Varro") {
             row {
                 checkBox("Automatically attach the active file or editor selection")
                     .bindSelected(settings::chatAutoAttachActiveFile)
-                    .comment("Applies to queued messages too. Manually attached files and database context are unaffected.")
+                    .comment("Applies to queued messages. Files and database context you attach yourself are still included.")
             }
             row {
                 checkBox("Include IDE problems in chat context")
                     .bindSelected(settings::chatEnableProblemsContext)
-            }
-            row("Default permission mode:") {
-                comboBox(listOf("default", "auto", "full"))
-                    .bindItem(settings::chatDefaultPermissionMode.toNullableProperty())
-                    .comment(
-                        "`default` follows OpenCode's own rules, `auto` applies local rules, " +
-                            "`full` lets a session act without confirmation.",
-                    )
             }
             row("Sessions pane side:") {
                 comboBox(listOf("left", "right"))
@@ -109,9 +108,9 @@ class VarroConfigurable : BoundConfigurable("Varro") {
                     .bindSelected(settings::chatShowTurnTimer)
             }
             row {
-                checkBox("Show the interactive histogram in empty chats")
-                    .bindSelected(settings::chatShowEmptyStateHistogram)
-                    .comment("Animates while hovered.")
+                checkBox("Group composer panels into tabs")
+                    .bindSelected(settings::chatGroupComposerBlocks)
+                    .comment("Shows three or more panels as tabs. Turn off to stack them.")
             }
             row("Chat font size:") {
                 intTextField(0..100)
@@ -121,7 +120,7 @@ class VarroConfigurable : BoundConfigurable("Varro") {
             row("Remote Markdown images:") {
                 comboBox(listOf("off", "ask", "on"))
                     .bindItem(settings::chatRemoteImages.toNullableProperty())
-                    .comment("Ask loads images only after a click; on loads nearby images automatically. Downloads expose this host's IP and the requested URL. No cookies or credentials are sent.")
+                    .comment("Ask shows a Load image button. On loads nearby images automatically. Image servers can see this host's IP address. No cookies or credentials are sent.")
             }
             row("Chat font family:") {
                 textField().bindText(settings::chatFontFamily).comment("default follows the IDE font family.")
@@ -152,74 +151,76 @@ class VarroConfigurable : BoundConfigurable("Varro") {
             row { checkBox("Plans ready for review").bindSelected(settings::notificationsSoundPlanReady) }
         }
 
-        group("Models") {
+        group("Permissions") {
+            row("Default permission mode:") {
+                comboBox(listOf("default", "auto", "full"))
+                    .bindItem(settings::chatDefaultPermissionMode.toNullableProperty())
+                    .comment("Default follows OpenCode's rules. Auto reviews eligible requests. Full grants access without confirmation.")
+            }
+            row("Auto-approve judge model:") {
+                textField().bindText(settings::chatAutoApproveModel).columns(40)
+                    .comment("Chat model for Auto mode, as provider/model. When a decision model is set, this model handles its failures. Leave empty to use OpenCode's small model or the current chat model.")
+            }
+            row("Decision model:") {
+                textField().bindText(settings::decisionModel, settings::selectDecisionModel).columns(40)
+                    .comment("Reviews permission details before the chat judge. Connect TypeSafe Jev in Models or set <code>TYPESAFE_API_KEY</code>, then use <code>typesafe/jev-latest</code>. Other routes require OpenCode 2.2.0 or later. Failures go to the chat judge. Leave empty to turn it off.")
+            }
+            row {
+                checkBox("Show experimental OpenCode decision models in the Models view")
+                    .bindSelected(settings::debugShowNativeDecisionModels)
+                    .comment("Hiding this section does not disable a configured reviewer.")
+            }
+            row("Rejected-permission guidance:") {
+                comboBox(listOf("default", "custom", "off"))
+                    .bindItem(settings::permissionRejectionMode.toNullableProperty())
+                    .comment("Sets the chat instructions for rejected permissions. Off adds no instructions. OpenCode still enforces permission rules.")
+            }
+            row("Custom rejection guidance:") {
+                textArea().bindText(settings::permissionRejectionCustom)
+                    .comment("Used in custom mode. Empty uses the built-in guidance.")
+            }
+        }
+
+        group("Usage and Limits") {
             row("Pinned provider quotas:") {
                 comboBox(listOf("rotating", "all"))
                     .bindItem(settings::providerLimitsStatusBarDisplay.toNullableProperty())
-                    .comment("Rotate pinned providers every 15 seconds, or show all. Providers selected in visible chats are excluded. Manage pins and display names in the chat provider list.")
+                    .comment("Rotate pinned providers every 15 seconds or show them all. Providers selected in visible chats are left out. Hover for details.")
             }
             row {
                 checkBox("Show cache write tokens in usage reports")
                     .bindSelected(settings::usageReportsShowCacheWrite)
-                    .comment("Adds a separate Cache write column. When disabled, cache write tokens are included in the Input column.")
+                    .comment("When off, cache writes count toward the Input column.")
             }
+            row("Expired prompt cache warning:") {
+                intTextField(0..100_000_000)
+                    .bindIntText(settings::chatPromptCacheWarningTokens)
+                    .comment("Warn when an idle session with at least this many context tokens has likely lost its prompt cache. Its next message can cost more. Set to 0 to turn the warning off.")
+            }
+        }
+
+        group("Utilities") {
             row {
                 checkBox("Suggest follow-up actions after Build responses")
                     .bindSelected(settings::chatFollowupsEnabled)
-                    .comment("Requires OpenCode V2 stateless generation. Sends the request and final answer for extra inference, which may consume paid tokens or subscription quota. Disable to opt out.")
+                    .comment("Requires OpenCode V2. Sends the request and final answer to a model, which can use paid tokens or subscription quota.")
             }
             row("Follow-up model:") {
                 textField()
                     .bindText(settings::chatFollowupModel)
-                    .comment("`providerID/modelID`. Empty uses the session model and reasoning. Hover to preview; click to send, or use the action menu to run in a background chat. Draft and attachments stay unchanged.")
+                    .comment("Provider/model for suggested next steps. Leave empty to use the session's model and reasoning, or choose Use for follow-ups in Models.")
                     .columns(40)
             }
             row("Prompt completion model:") {
                 textField()
                     .bindText(settings::chatPromptCompletionModel)
-                    .comment("`providerID/modelID`. Empty disables autocomplete. Requires OpenCode V2 and an API key. Drafts and recent chat context are sent directly to the provider. Tab accepts; Escape dismisses.")
+                    .comment("Provider/model for suggestions as you type. Requires OpenCode V2 and a supported API-key connection. Your draft and recent prompts go to the provider. Tab accepts, Escape dismisses. Leave empty to turn it off.")
                     .columns(40)
-            }
-            row("Expired prompt cache warning:") {
-                intTextField(0..100_000_000)
-                    .bindIntText(settings::chatPromptCacheWarningTokens)
-                    .comment("Warn above the composer when an idle session's prompt cache has likely expired and its context holds at least this many tokens, so the next message re-sends it at the uncached rate. 0 turns the warning off.")
-            }
-            row("Keep prompt caches warm:") {
-                comboBox(listOf("off", "chosen", "all"))
-                    .bindItem(settings::chatPromptCacheWarming.toNullableProperty())
-                    .comment("Off never sends keep-alives. Chosen keeps sessions you turn on with Keep warm in the context popup warm while the IDE runs. All writes OpenCode's own <code>warming</code> setting to the global OpenCode config, which keeps every root session warm, also in the TUI, and removes it when you switch away. Each keep-alive re-sends the session context and costs money or subscription quota. Requires OpenCode V2.")
-            }
-            row("Warm for (minutes):") {
-                comboBox(VarroSettings.PROMPT_CACHE_WARMING_MINUTES)
-                    .bindItem({ settings.chatPromptCacheWarmingMinutes.takeIf { it in VarroSettings.PROMPT_CACHE_WARMING_MINUTES } ?: 30 },
-                        { settings.chatPromptCacheWarmingMinutes = it ?: 30 })
-                    .comment("How long a session stays warm after each reply.")
             }
             row {
                 checkBox("Trace auxiliary inference prompts")
                     .bindSelected(settings::chatPromptTrace)
-                    .comment("Opt-in VARRO_TRACE_V1 attribution for follow-ups, judges, commit messages, side questions, walkthroughs, and completion. Sends session IDs or a workspace hash as prompt text. Requires a compatible proxy to strip the line; otherwise the model receives it. Does not enable inference.")
-            }
-            row("Auto-approve judge model:") {
-                textField()
-                    .bindText(settings::chatAutoApproveModel)
-                    .comment("`providerID/modelID`. Leave empty to disable model-based approval.")
-                    .columns(40)
-            }
-            row {
-                checkBox("Use TypeSafe Jev to judge permission requests before the judge model")
-                    .bindSelected(settings::decisionsJevAutoApprove)
-                    .comment("Only confident answers approve; anything else asks you. Connect it with <b>Add decision model</b> in the Varro Models view menu, or set <code>TYPESAFE_API_KEY</code>. Permission details are sent to TypeSafe.")
-            }
-            row("Native decision model:") {
-                textField().bindText(settings::chatAutoApproveDecisionModel).columns(40)
-                    .comment("Optional provider/model. Requires OpenCode 2.2.0. Sends Auto-mode permission details using the server's base configuration and credentials, including remote servers. Errors fall back to Jev or the chat judge; empty disables it.")
-            }
-            row {
-                checkBox("Show experimental native decision models in the Models view")
-                    .bindSelected(settings::debugShowNativeDecisionModels)
-                    .comment("Debug only. Hiding this section does not disable a configured native reviewer.")
+                    .comment("For usage-tracking proxies. Adds a <code>VARRO_TRACE_V1</code> line with the request's purpose and session IDs or a workspace hash. The proxy must remove the line before it reaches the model.")
             }
             row("Commit message model:") {
                 textField()
@@ -231,10 +232,10 @@ class VarroConfigurable : BoundConfigurable("Varro") {
                 textArea().bindText(settings::commitMessageRules)
                     .comment("Style and format preferences, for example Conventional Commits with a scope. Cannot enable tools or commits.")
             }
-            row("Review model:") {
+            row("Walkthrough model:") {
                 textField()
                     .bindText(settings::reviewModel)
-                    .comment("`providerID/modelID` or `providerID/modelID#variant` for change walkthroughs. Leave empty to use the active chat's selected model and reasoning. Set it from the Models view with <b>Use for reviews</b>.")
+                    .comment("Use provider/model or provider/model#variant to set the reasoning level. Leave empty to use the active chat's model and reasoning, or choose Use for reviews in Models.")
                     .columns(40)
             }
         }

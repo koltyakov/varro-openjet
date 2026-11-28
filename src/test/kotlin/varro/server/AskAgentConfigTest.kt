@@ -78,6 +78,15 @@ class AskAgentConfigTest {
         assertEquals("{}", Files.readString(path))
     }
 
+    @Test fun `V1 supplies a default for continuing after rejection independently of the Ask agent`() {
+        config().use {
+            val v1 = Path.of(it.prepare(false).getValue("OPENCODE_CONFIG"))
+            assertEquals(true, read(v1).obj("experimental")?.get("continue_loop_on_deny")?.asBoolean)
+            val v2 = Path.of(it.prepare(false, v2 = true).getValue("OPENCODE_CONFIG"))
+            assertFalse(read(v2).has("experimental"))
+        }
+    }
+
     @Test fun `runtime config leaves automatic compaction to OpenCode`() {
         val compaction = """{"compaction":{"auto":false,"reserved":8192}}"""
         val root = temporary.newFolder("compaction").toPath()

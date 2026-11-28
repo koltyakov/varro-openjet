@@ -31,7 +31,7 @@ import java.util.concurrent.atomic.AtomicReference
  *  3. Check the version floor. An older CLI is reported as `update-required`
  *     rather than failing with an opaque API error later.
  *  4. Spawn, then poll health until it answers or the attempt times out. An
- *     `EADDRINUSE` during a managed start walks to the next port.
+ *     `EADDRINUSE` during an automatic-port start walks to the next port.
  *  5. Open the event stream.
  */
 class OpenCodeServer(
@@ -53,12 +53,14 @@ class OpenCodeServer(
         environment = cliEnvironment,
     )
 
+    private val fixedPort = settings.fixedServerPort()
     private val process = OpenCodeProcess(
         cli = cli,
-        configuredPort = { settings.normalizedPort() },
+        configuredPort = { fixedPort ?: VarroSettings.DEFAULT_SERVER_PORT },
         workspaceCwd = workspaceCwd,
         askAgentEnabled = { settings.chatEnableAskAgent },
         serverStateDirectory = serverStateDirectory,
+        automaticPort = { fixedPort == null },
     )
 
     private val status = AtomicReference<ServerStatus>(ServerStatus.Stopped)
@@ -355,7 +357,12 @@ class OpenCodeServer(
                     if (disposeGeneration.get() != generation) return
                     val started = spawnAndAwaitHealth(generation)
                     if (started) break
-                    if (process.hasPortInUseDetected() && process.tryAdvancePort()) continue
+                    if (process.hasPortInUseDetected()) {
+                        if (process.tryAdvancePort()) continue
+                        val hint = if (fixedPort == null) "Set an available port in Varro settings."
+                            else "Clear the port in Varro settings to select one automatically, or set an available port."
+                        setStatus(ServerStatus.Error("Port ${process.port} is already in use. $hint"))
+                    }
                     return
                 }
             } finally {

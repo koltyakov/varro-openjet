@@ -61,6 +61,11 @@ class RestProxy internal constructor(
     private val catalog: SessionCatalog? = null,
     /** Server-wide sessions per scoped catalog page; tests page through small released lists. */
     private val scopedCatalogPage: Int = SCOPED_CATALOG_PAGE,
+    private val rejectionGuidance: () -> String = {
+        val preferences = com.intellij.openapi.application.ApplicationManager.getApplication()
+            ?.getService(varro.settings.VarroSettings::class.java)
+        PermissionReviewPolicy.guidance(preferences?.permissionRejectionMode ?: "default", preferences?.permissionRejectionCustom.orEmpty())
+    },
 ) {
     constructor(
         project: Project,
@@ -451,8 +456,10 @@ class RestProxy internal constructor(
             return transferredStatuses(isCancelled)
         }
 
-        val outgoing = if (method == "POST" && sessionId != null && request.segments.size == 3 && request.segments[2] in setOf("prompt_async", "message", "command"))
-            CitationPaths.withGuidance(body, transferDirectory ?: request.query["directory"]?.firstOrNull() ?: backend.workspaceDirectory()) else body
+        val outgoing = if (method == "POST" && sessionId != null && request.segments.size == 3 && request.segments[2] in setOf("prompt_async", "message", "command")) {
+            CitationPaths.withGuidance(body, transferDirectory ?: request.query["directory"]?.firstOrNull()
+                ?: backend.workspaceDirectory(), rejectionGuidance())
+        } else body
         val result = backend.request(method = method, path = path, body = outgoing, options = RequestOptions(isCancelled = isCancelled,
             directory = sessionId?.takeIf { it != "status" }?.let(::sessionScope))).data
         if (method == "POST" && sessionId != null && request.segments.size == 3 && request.segments[2] in setOf("prompt_async", "message", "command")) {

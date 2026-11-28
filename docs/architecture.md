@@ -246,7 +246,7 @@ through `SystemNotifications`; retaining this transport is an accepted platform 
 | State | Owner and storage |
 | --- | --- |
 | IDE settings and shared model preferences | Application-level `VarroSettings` and `VarroModelStore`, in the IDE configuration's `varro-openjet.xml` |
-| Session models, permission modes, pins, ToDo marks, prompt-cache warming choices, plan state, unread state and project UI preferences | Project-level `VarroStore`, in the project's workspace file (`.idea/workspace.xml`). Earlier versions used the shared `.idea/varro-openjet.xml`, which is migrated on first load |
+| Session models, permission modes, pins, ToDo marks, plan state, unread state and project UI preferences | Project-level `VarroStore`, in the project's workspace file (`.idea/workspace.xml`). Earlier versions used the shared `.idea/varro-openjet.xml`, which is migrated on first load |
 | Drafts and view snapshots | `VarroStore.viewStates`, keyed by view ID, through `host/view-state` |
 | Editor chat routes | `VarroStore.editorRoutes` |
 | Queued dispatches, Ralph runs and recycle-bin entries | JSON journals under `<IDE config>/varro/<project location hash>/`, with project-store snapshots |
@@ -331,7 +331,7 @@ Before automatic expiry, OpenJet checks tree membership and each session's archi
 
 `Walkthrough` and `WalkThroughChangesAction` port upstream's changes walkthrough. Git capture shells out like commit-message generation and includes bounded untracked-file patches. Staged and unstaged changes are captured separately, each at most 4 MB of diff, and unstaged capture refuses more than 4,096 untracked files. A scope over a limit is never truncated or offered in the scope popup. If only the other scope has changes, OpenJet names the limit and asks before walking through that scope alone. The review model, or the sidebar chat's exact `commands/state` model selection, sizes the digest from `/config/providers`; tests and docs are omitted first and an oversized diff is refused before any request. Generation uses V2 one-shot generation with purpose `walkthrough` and opens a Markdown preview. The report has no file links, because JetBrains Markdown previews cannot open upstream's `vscode://` links.
 
-`PromptCacheWarming` ports upstream's keep-alive scheduler. `chosen` mode sends V2's transient `POST /api/session/:id/generate` with OpenCode's own keep-alive prompt to sessions turned on in the context popup, only for root, visible, idle sessions and only while their window lasts. A cache-miss reply, a failed ping or OpenCode's own `warming` config stops it. Lifetimes follow `PromptCacheLifetime`'s provider rules and the model's `cache.ttl`, counted from each step's dispatch, and `PromptCacheLearner` refines them from requests after idle gaps, kept in the application-level `PromptCacheLearningStore`. `all` mode writes OpenCode's global `warming` setting through `GlobalWarmingConfig`, which preserves comments, refuses unsaved or concurrently edited files, and removes every global copy when you switch away. Warming settings are application-local and never shared across IDEs.
+`PromptCacheObserver` learns from live V2 model steps and validated history samples. `PromptCacheLearner` stores observations in the application-level `PromptCacheLearningStore`, deduplicating samples sent by multiple views. The host publishes `promptCache/learned`; the webview combines it with the model's `cache.ttl` and provider defaults for expiry estimates. The observer skips samples when OpenCode's effective config has `warming` enabled, because native keep-alives can renew a cache without a visible request. OpenJet does not write `warming` or schedule its own keep-alives.
 
 `VarroStore` keeps ToDo marks with the time each was set. `session.next.prompt.admitted`, a newer user `message.updated` or `session.deleted` clears a mark, and `todo-sessions/sync` publishes every change.
 
@@ -368,14 +368,21 @@ Only ready views can own automatic permission handling, with the tool window pre
 
 Before other Auto reviewers, V2 shell requests check fresh effective native configuration from the permission-owning session's directory within a shared two-second deadline. Every concrete resource must resolve to `allow` to bypass inference. Last-match `deny` rejects; `ask` exceptions to an allowance require confirmation. Ordinary ask-by-default and unconfigured resources continue through the existing reviewers. Save suggestions and displayed command metadata never establish a grant. Failed configuration verification asks rather than inferring an allowance. Effective configuration concatenates native permission arrays across sources. `NativePermissionRules` also skips project/global grants that are provably redundant without crossing later overlapping ask/deny exceptions; a fully redundant save leaves the file unchanged.
 
-`NativeDecisions` adds an explicit server-hosted reviewer before legacy Jev and the chat judge.
-`chatAutoApproveDecisionModel` is empty by default and may be shared across IDEs. It uses the
-server's base configuration and credentials, including attached servers, not local credentials or
-the project's model override. Endpoint and decision-catalog discovery are bounded to five seconds.
-Typed predicate/choice answers pass the same conservative probability gates as Jev. Errors fall
-back; an `ask` answer is terminal. `debugShowNativeDecisionModels` only controls the experimental
-Models section and stays IDE-local. Hiding the section does not disable a configured reviewer.
-No legacy setting or credential is migrated.
+Auto mode selects at most one decision reviewer before the chat model. A `typesafe/<model>` route
+uses the TypeSafe client and the existing password-safe or environment credential; other routes go
+to `NativeDecisions`, which uses the server's base config and credentials. Endpoint and catalog
+discovery are bounded to five seconds. The decision reviewers share their questions and
+probability gates. Failures fall back to the chat judge; `ask` is terminal.
+The saved route stays under `chatAutoApproveDecisionModel` for compatibility with shared settings.
+An existing native selection takes precedence over the legacy local Jev opt-in; an explicit
+selection or clear replaces that opt-in. The experimental Models section is an IDE-local toggle.
+
+`PermissionReviewPolicy` bounds rejection feedback to 500 characters before sending it to a
+reviewer and keeps the 20 most recent valid decisions. The reviewer treats feedback as evidence
+of intent and checks alternatives independently. The rejection guidance added to chat prompts
+has default, custom and off modes and is read only from IDE settings. For managed V1 launches,
+the temporary config defaults `experimental.continue_loop_on_deny` to `true`. V2 uses the server's
+own continuation behavior.
 
 On OpenCode 2.2.0 and newer, native chat catalogs are authoritative. Config fallback cannot restore
 non-chat models or unavailable providers, or replace server-projected model limits. Older V2

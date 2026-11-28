@@ -39,17 +39,17 @@ Background updates apply only while a managed server is running and idle. They d
 
 ## Server does not start or connect
 
-1. Check **Settings > Tools > Varro > Port**, which defaults to `4096`.
-2. If automatic startup is disabled, either enable it or start OpenCode yourself on that port:
+1. Check **Settings > Tools > Varro > OpenCode Server > Port**. A blank field selects a port automatically, starting at `4096`.
+2. If automatic startup is disabled, either enable it or start OpenCode yourself on the fixed port, or on `4096` if the field is blank:
 
    ```bash
    opencode serve --port 4096
    ```
 
 3. Read the tool-window error and IDE log for startup output. A missing executable, early process exit, and incompatible server require different fixes.
-4. After changing the port or CLI path, use **Restart OpenCode Server**. If Varro reports that the server is externally managed, restart it from its owner or restart the IDE after changing the connection settings.
+4. Reopen the project after changing the port. If the CLI path changes, restart the managed server. For an externally managed server, restart it from its owner.
 
-Varro connects to a healthy OpenCode server already listening at the configured address. When a managed launch reports a port-in-use failure, it can try subsequent ports. Check the server status for the actual URL before investigating a connection on the default port.
+Varro connects to a healthy OpenCode server already listening at the configured address. Automatic selection can try subsequent ports after a collision; a fixed port never falls back. The server status shows the actual URL.
 
 If chat cannot authenticate with a provider, run `opencode auth login` or use `/connect` in chat. Provider authentication is separate from starting the local server.
 

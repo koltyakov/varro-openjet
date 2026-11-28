@@ -48,6 +48,7 @@ internal class ServerOwnership(
 
     /** Discovery keeps the original coordination key, even when another editor configured it. */
     @Synchronized fun connection(port: Int? = null, password: String? = null, recoverReplacement: Boolean = false,
+        scanOtherKeys: Boolean = port != null,
         isCancelled: () -> Boolean = { false }): Connection? {
         fun checkCurrent() {
             if (isCancelled() || Thread.currentThread().isInterrupted) throw java.util.concurrent.CancellationException("OpenCode registration recovery cancelled")
@@ -55,7 +56,7 @@ internal class ServerOwnership(
         checkCurrent()
         replacementRecovered = false
         val candidates = linkedSetOf(path)
-        if (port != null) {
+        if (scanOtherKeys && port != null) {
             val directories = if (System.getenv("VARRO_TEST_STATE_ROOT").isNullOrBlank()) listOf(directory, temporaryDirectory) else listOf(directory)
             directories.distinct().filter { Files.exists(it) }.forEach { root ->
                 Files.list(root).use { files -> files.filter {

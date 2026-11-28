@@ -36,11 +36,13 @@ class OpenCodeV1IntegrationTest {
         val installed = version.inputStream.bufferedReader().readText().trim()
         assertTrue(version.waitFor(15, TimeUnit.SECONDS)); assertEquals(0, version.exitValue())
         assertEquals(System.getenv("VARRO_OPENCODE_V1_TEST_VERSION") ?: "1.19.3", installed)
+        val injected = AskAgentConfig(environment, { workspace.toString() }, root, root)
+        val runtimeEnvironment = injected.prepare(enabled = false)
         val port = ServerSocket(0).use { it.localPort }
         val log = root.resolve("server.log")
         fun launch() = ProcessBuilder(binary, "serve", "--hostname", "127.0.0.1", "--port", port.toString())
             .directory(workspace.toFile()).redirectErrorStream(true).redirectOutput(log.toFile()).apply {
-                environment().clear(); environment().putAll(environment)
+                environment().clear(); environment().putAll(environment + runtimeEnvironment)
             }.start()
         var process = launch()
         val transport = OpenCodeTransport({ "http://127.0.0.1:$port" }, { workspace.toString() },
@@ -51,6 +53,8 @@ class OpenCodeV1IntegrationTest {
             while (!transport.checkHealth() && process.isAlive && System.nanoTime() < deadline) Thread.sleep(100)
             assertTrue(Files.readString(log), transport.checkHealth()); assertEquals(1, transport.apiVersion)
             assertEquals(installed, transport.readHealthInfo().version)
+            assertEquals(true, transport.request("GET", "/config").data.asObjectOrNull()
+                .obj("experimental").bool("continue_loop_on_deny"))
             val model = transport.request("GET", "/provider").data.asObjectOrNull().arr("all")!!.mapNotNull { it.asObjectOrNull() }
                 .single { it.str("id") == "fixture" }.obj("models").obj("model")
             assertEquals(setOf("low", "high"), model.obj("variants")!!.keySet())
@@ -94,6 +98,7 @@ class OpenCodeV1IntegrationTest {
         } finally {
             transport.dispose(); process.destroy()
             if (!process.waitFor(5, TimeUnit.SECONDS)) { process.destroyForcibly(); process.waitFor(5, TimeUnit.SECONDS) }
+            injected.close()
             Files.walk(root).use { paths -> paths.sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists) }
         }
     }

@@ -245,13 +245,6 @@ class PromptCacheLifetimeTest {
         assertEquals(Json.parse(List(12) { "[0,0]" }.joinToString(",", "[", "]")), promptCacheHistogramJson(emptyPromptCacheHistogram()))
     }
 
-    @Test fun `pings a minute early for short lifetimes and 10 percent early for long ones`() {
-        assertEquals(4 * minute, promptCacheKeepAliveIntervalMs(5 * minute))
-        assertEquals(27 * minute, promptCacheKeepAliveIntervalMs(30 * minute))
-        assertEquals(54 * minute, promptCacheKeepAliveIntervalMs(hour))
-        assertEquals(45_000L, promptCacheKeepAliveIntervalMs(90_000))
-    }
-
     @Test fun `keys match the webview`() {
         assertEquals("openai/gpt-6.2-sol", promptCacheModelKey(PromptCacheModel("openai", "gpt-6.2-sol")))
         assertEquals("openai/*", promptCacheProviderKey("openai"))

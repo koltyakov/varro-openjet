@@ -47,6 +47,8 @@ internal class AskAgentConfig(
     @Synchronized fun rewrite(enabled: Boolean): Boolean {
         val file = path ?: return false
         val config = Json.obj()
+        // V2 owns its rejection behavior and ignores this legacy option.
+        if (!v2) config.add("experimental", Json.obj("continue_loop_on_deny" to true))
         if (enabled && !hasConfiguredAsk()) config.add("agent", Json.obj("ask" to definition()))
         if (v2 && webSearch.useRandomDefault()) config.add("websearch", Json.obj("provider" to "random"))
         val next = Json.stringify(config)

@@ -29,6 +29,7 @@ class OpenCodeProcess(
     private val workspaceCwd: () -> String?,
     private val askAgentEnabled: () -> Boolean = { false },
     serverStateDirectory: java.nio.file.Path? = null,
+    private val automaticPort: () -> Boolean = { true },
 ) {
     private val log = logger<OpenCodeProcess>()
 
@@ -52,7 +53,8 @@ class OpenCodeProcess(
     private var launchRegistration: OpenCodeConnection.Registration? = null
 
     fun restoreConnection(isCancelled: () -> Boolean = { false }): Boolean {
-        val connection = ownership.connection(isCancelled = isCancelled) ?: return false
+        val requestedPort = configuredPort().takeUnless { automaticPort() }
+        val connection = ownership.connection(port = requestedPort, scanOtherKeys = false, isCancelled = isCancelled) ?: return false
         connection.let { (port, password, username) ->
             adoptPort(port)
             services.rememberVerified(ownership.registeredPid, port)
@@ -91,7 +93,10 @@ class OpenCodeProcess(
     }
 
     internal val canProbeUnregisteredService: Boolean get() = !services.privateSelected
-    internal fun serviceRegistrations(allowGlobal: Boolean) = services.registrations(privateOnly = services.privateSelected || !allowGlobal)
+    internal fun serviceRegistrations(allowGlobal: Boolean) = services.registrations(
+        targetUrl = configuredPort().takeUnless { automaticPort() }?.let { "http://127.0.0.1:$it" },
+        privateOnly = services.privateSelected || !allowGlobal,
+    )
 
     internal fun adoptService(registration: OpenCodeConnection.Registration, isCancelled: () -> Boolean = { false }) {
         services.rememberVerified(registration)
@@ -182,7 +187,7 @@ class OpenCodeProcess(
      * retrying forever.
      */
     fun tryAdvancePort(): Boolean {
-        if (portRetries.get() >= MAX_PORT_RETRIES) return false
+        if (!automaticPort() || portRetries.get() >= MAX_PORT_RETRIES) return false
         val next = port + 1
         if (next > 65_535) return false
         portRetries.incrementAndGet()

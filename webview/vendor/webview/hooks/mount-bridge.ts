@@ -129,8 +129,8 @@ export function createMountBridgeOperations(deps: {
           if (payload.showTurnTimer !== undefined) {
             uiStore.setShowTurnTimer(payload.showTurnTimer);
           }
-          if (payload.showEmptyStateHistogram !== undefined) {
-            uiStore.setShowEmptyStateHistogram(payload.showEmptyStateHistogram);
+          if (payload.groupComposerBlocks !== undefined) {
+            uiStore.setGroupComposerBlocks(payload.groupComposerBlocks);
           }
           if (payload.remoteImages !== undefined) {
             if (payload.remoteImages === 'off') clearRemoteImagePreviews();
@@ -308,8 +308,8 @@ export function handleExtensionMessageWithDependencies(
       }
       if (msg.payload.state === 'running') {
         deps.ensureConnectionInitialized();
-        // Warming needs a running v2 server, so its availability follows the server state.
-        if (previousServerState !== 'running') postMessage({ type: 'warming/sync' });
+        // OpenCode's own warming config, which pauses learning, is read from a running server.
+        if (previousServerState !== 'running') postMessage({ type: 'promptCache/sync' });
       } else {
         if (previousServerState === 'running') deps.invalidateConnection();
         deps.clearProvidersState();
@@ -526,8 +526,8 @@ export function handleExtensionMessageWithDependencies(
     case 'ralph/state':
       ralphStore.applyHostState(msg.payload.runs, msg.payload.activeIds);
       break;
-    case 'warming/state':
-      appStore.setState(storePath('promptCacheWarming', msg.payload));
+    case 'promptCache/learned':
+      appStore.setState(storePath('promptCacheLearned', msg.payload.learned));
       break;
   }
 }

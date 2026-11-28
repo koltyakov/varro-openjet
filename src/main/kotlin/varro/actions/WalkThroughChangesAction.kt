@@ -89,7 +89,7 @@ class WalkThroughChangesAction : AnAction(), DumbAware {
                 is ScopeChoice.Confirm -> {
                     val proceed = MessageDialogBuilder
                         .okCancel("Walkthrough Limit Exceeded", "${choice.reason}\n\nWalk through the ${choice.scope.label.lowercase()} only?")
-                        .yesText("Walk Through ${choice.scope.label}")
+                        .yesText("Walk Through ${choice.scope.label.split(' ').joinToString(" ") { it.replaceFirstChar(Char::uppercase) }}")
                         .noText("Cancel")
                         .ask(project)
                     return proceed && prepare(changes, choice.scope)

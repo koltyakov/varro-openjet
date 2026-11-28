@@ -28,8 +28,8 @@ class VarroSettings : PersistentStateComponent<VarroSettings> {
 
     // --- server ---------------------------------------------------------------
 
-    /** Port OpenCode serves on. Upstream default; restart the server to apply. */
-    var serverPort: Int = DEFAULT_SERVER_PORT
+    /** Zero selects a port automatically; a positive configured port is fixed. */
+    var serverPort: Int = 0
 
     /** Explicit path to the OpenCode CLI. Empty means "discover on PATH". */
     var serverCommand: String = ""
@@ -46,13 +46,13 @@ class VarroSettings : PersistentStateComponent<VarroSettings> {
     var chatExpandThinking: Boolean = false
     var chatShowChangedFiles: Boolean = false
     var chatShowTurnTimer: Boolean = true
-    var chatShowEmptyStateHistogram: Boolean = false
+    var chatGroupComposerBlocks: Boolean = true
     /** Application-only consent. Repository configuration must never enable network requests. */
     var chatRemoteImages: String = "ask"
     /** Restored by new editor/window chats; each open chat keeps its own toggle. */
     var windowChatThemeReversed: Boolean = false
-    /** Mirrors `varro.chat.autoAttachProblems`; retain the persisted name for existing opt-outs. */
-    var chatEnableProblemsContext: Boolean = true
+    /** Mirrors `varro.chat.autoAttachProblems`; retain the persisted name for existing preferences. */
+    var chatEnableProblemsContext: Boolean = false
     /** Automatic file/selection context only. Explicit attachments and database context are unaffected. */
     var chatAutoAttachActiveFile: Boolean = true
 
@@ -65,10 +65,13 @@ class VarroSettings : PersistentStateComponent<VarroSettings> {
     /** `providerID/modelID` for the auto-approve judge; empty lets Varro pick. */
     var chatAutoApproveModel: String = ""
 
-    /** Explicit server-owned decision reviewer. Empty disables native decisions. */
+    /** The decision reviewer route, shared under its existing persistence key. */
     var chatAutoApproveDecisionModel: String = ""
     /** Hides only the experimental Models section, not a configured reviewer. */
     var debugShowNativeDecisionModels: Boolean = false
+    /** Application settings only; a repository cannot supply system instructions here. */
+    var permissionRejectionMode: String = "default"
+    var permissionRejectionCustom: String = ""
 
     /** Direct API autocomplete; empty disables it. Requires an API key and OpenCode V2. */
     var chatPromptCompletionModel: String = ""
@@ -81,27 +84,23 @@ class VarroSettings : PersistentStateComponent<VarroSettings> {
     var chatPromptTrace: Boolean = false
 
     /**
-     * Mirrors `varro.chat.promptCacheWarningTokens`: warn above the composer when an idle
+     * Mirrors `varro.chat.cacheWarningTokens`: warn above the composer when an idle
      * session's prompt cache has likely expired and its context holds at least this many
      * tokens. `0` turns the warning off.
      */
     var chatPromptCacheWarningTokens: Int = DEFAULT_PROMPT_CACHE_WARNING_TOKENS
 
-    /**
-     * Mirrors `varro.chat.promptCacheWarming`: `off`, `chosen` (Varro keeps sessions the
-     * user turns on warm while the IDE runs) or `all` (OpenCode's own global `warming`
-     * config). Every keep-alive spends tokens, so only these application settings enable it.
-     */
-    var chatPromptCacheWarming: String = "off"
-
-    /** Mirrors `varro.chat.promptCacheWarmingMinutes`: 30, 60, 120 or 180. */
-    var chatPromptCacheWarmingMinutes: Int = 30
-
-    /**
-     * Mirrors `varro.decisions.jev.autoApprove`: let TypeSafe's Jev judge Auto-mode
-     * permission requests before the model judge. The API key lives in the password safe.
-     */
+    /** Legacy local Jev opt-in, used until the user writes a unified decision selection. */
     var decisionsJevAutoApprove: Boolean = false
+
+    fun decisionModel(): String = chatAutoApproveDecisionModel.trim().ifEmpty {
+        if (decisionsJevAutoApprove) varro.host.JevDecisions.DIRECT_ROUTE else ""
+    }
+
+    fun selectDecisionModel(route: String) {
+        chatAutoApproveDecisionModel = route.trim()
+        decisionsJevAutoApprove = false
+    }
 
     var chatAutoRenameUntitledSessions: Boolean = false
     var chatEnableAskAgent: Boolean = true
@@ -118,7 +117,7 @@ class VarroSettings : PersistentStateComponent<VarroSettings> {
     /** Optional absolute Handy executable path. Empty searches standard locations and PATH. */
     var dictationHandyPath: String = ""
     var providerLimitsStatusBarDisplay: String = "rotating"
-    /** Mirrors `varro.usageReports.showCacheWrite`; when off, cache writes are added to Input. */
+    /** Show cache writes separately; when off, they are added to Input. */
     var usageReportsShowCacheWrite: Boolean = false
 
     /** Font family override; `default` follows the IDE. */
@@ -138,7 +137,7 @@ class VarroSettings : PersistentStateComponent<VarroSettings> {
     var commitMessageRules: String = ""
 
     /**
-     * Mirrors `varro.review.model`: `provider/model` or `provider/model#variant` for change
+     * Mirrors `varro.walkthrough.model`: `provider/model` or `provider/model#variant` for change
      * walkthroughs. Empty uses the active chat's selected model and reasoning.
      */
     var reviewModel: String = ""
@@ -158,7 +157,7 @@ class VarroSettings : PersistentStateComponent<VarroSettings> {
         XmlSerializerUtil.copyBean(state, this)
     }
 
-    fun normalizedPort(): Int = serverPort.takeIf { it in 1..65_535 } ?: DEFAULT_SERVER_PORT
+    fun fixedServerPort(): Int? = serverPort.takeIf { it in 1..65_535 }
 
     fun remoteImageMode(): String = chatRemoteImages.takeIf { it == "off" || it == "on" } ?: "ask"
 
@@ -167,19 +166,13 @@ class VarroSettings : PersistentStateComponent<VarroSettings> {
 
     fun promptCacheWarningTokens(): Int = chatPromptCacheWarningTokens.takeIf { it >= 0 } ?: DEFAULT_PROMPT_CACHE_WARNING_TOKENS
 
-    fun promptCacheWarmingMode(): String = chatPromptCacheWarming.takeIf { it == "chosen" || it == "all" } ?: "off"
-
-    fun promptCacheWarmingDurationMs(): Long =
-        (chatPromptCacheWarmingMinutes.takeIf { it in PROMPT_CACHE_WARMING_MINUTES } ?: 30) * 60_000L
-
-        fun sessionPaneSide(): String =
+    fun sessionPaneSide(): String =
         chatDesktopSessionPaneSide.takeIf { it == "left" || it == "right" } ?: "right"
 
     companion object {
         const val DEFAULT_SERVER_PORT = 4096
-        /** `package.json` default for `varro.chat.promptCacheWarningTokens`. */
+        /** `package.json` default for `varro.chat.cacheWarningTokens`. */
         const val DEFAULT_PROMPT_CACHE_WARNING_TOKENS = 300_000
-        val PROMPT_CACHE_WARMING_MINUTES = listOf(30, 60, 120, 180)
         private val PERMISSION_MODES = setOf("default", "auto", "full")
 
         /** Fires after any settings change so open tool windows can re-push config. */

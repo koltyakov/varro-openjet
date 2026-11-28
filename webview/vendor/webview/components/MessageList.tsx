@@ -43,7 +43,6 @@ import {
   showModelPicker,
   showThinking,
   showFileDiffs,
-  showEmptyStateHistogram,
   getChildRunsByParentId,
 } from '../lib/state';
 import {
@@ -95,7 +94,6 @@ import {
 } from './message/UserMessageContent';
 import { editingMessage } from '../lib/message-edit-state';
 import { hasExpandedDiffOverlay } from '../lib/diff-overlay-state';
-import { newChatDraftKey } from '../lib/new-chat-draft';
 import {
   getPrefetchedSessionHistory,
   getSessionHistoryCursor,
@@ -147,7 +145,6 @@ import {
 import { Tooltip } from './Tooltip';
 import { UiIcon } from './UiIcon';
 import { StarterLogo } from './message-list/StarterLogo';
-import { StarterHistogram } from './message-list/StarterHistogram';
 import { SessionSearch } from './message-list/SessionSearch';
 import {
   getSubagentSessionIds,
@@ -445,6 +442,16 @@ export function getActiveTurnNavigationMessageId(
 }
 
 const retainedRowHeights = new RetainedRowHeights();
+
+/**
+ * Row gap around a block above the composer. Grouped blocks sit in `display: contents` slots,
+ * so the gap belongs to the nearest ancestor that lays them out.
+ */
+function composerBlockRowGap(element: HTMLElement) {
+  let parent = element.parentElement;
+  while (parent && getComputedStyle(parent).display === 'contents') parent = parent.parentElement;
+  return parent ? Number.parseFloat(getComputedStyle(parent).rowGap) || 0 : 0;
+}
 
 export function MessageList() {
   const pasteModifier = /Macintosh|Mac OS X/.test(navigator.userAgent) ? 'Cmd' : 'Ctrl';
@@ -5668,13 +5675,25 @@ export function MessageList() {
     );
   }
 
+  function hasUserCardAfterSummary(summary: HTMLElement) {
+    // Steering admission can group the running tool after its card has already mounted below the
+    // summary. That card is the new bottom content; holding the summary would keep it below the
+    // fold until an unrelated mutation, because its text is already part of the held signature.
+    const cards = containerRef?.querySelectorAll<HTMLElement>('.user-message-card');
+    const card = cards?.[cards.length - 1];
+    return (
+      !!card && (summary.compareDocumentPosition(card) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0
+    );
+  }
+
   function captureActivityExitSummaryAnchor() {
     const sessionId = state.activeSessionId;
     if (!containerRef || !sessionId) return;
     if (activityExitSummaryAnchor?.sessionId === sessionId) return;
     const summaries = containerRef.querySelectorAll<HTMLElement>('.assistant-activity-summary');
     const summary = summaries[summaries.length - 1];
-    if (!summary || hasActivityTrayBeforeSummary(summary)) return;
+    if (!summary || hasActivityTrayBeforeSummary(summary) || hasUserCardAfterSummary(summary))
+      return;
     activityExitSummaryAnchor = {
       sessionId,
       element: summary,
@@ -8291,17 +8310,27 @@ export function MessageList() {
     ) {
       pendingExpansionScrollAnchor = null;
       const group = control.closest<HTMLElement>('.assistant-activity-group');
-      const disappearingHeight = group
-        ? Math.max(0, group.getBoundingClientRect().bottom - control.getBoundingClientRect().bottom)
-        : 0;
-      const shortfall =
-        containerRef.scrollTop -
-        (containerRef.scrollHeight - containerRef.clientHeight - disappearingHeight);
-      if (containerRef.scrollTop > 0.5 && shortfall > 0.5) {
-        appendBottomReserveTarget = containerRef.scrollTop;
-        setAppendBottomReserve((reserve) => reserve + shortfall);
-      }
+      reserveDisclosureCollapse(
+        group
+          ? Math.max(
+              0,
+              group.getBoundingClientRect().bottom - control.getBoundingClientRect().bottom
+            )
+          : 0
+      );
       return;
+    }
+    // Tool details likewise disappear below their header. Reserve the range first; the expansion
+    // anchor captured below then keeps the header fixed instead of letting the clamp move it.
+    if (
+      control.matches('.tool-invocation-header') &&
+      control.getAttribute('aria-expanded') === 'true'
+    ) {
+      const detailId = control.getAttribute('aria-controls');
+      const detail = detailId ? document.getElementById(detailId) : null;
+      if (detail && containerRef.contains(detail)) {
+        reserveDisclosureCollapse(detail.getBoundingClientRect().height);
+      }
     }
     const isDiffToggle = control.matches('.diff-view-toggle, .diff-view-item-expandable');
     const anchor = isDiffToggle
@@ -8324,6 +8353,25 @@ export function MessageList() {
     const resumeBottomFollow =
       (expandsCompactActivity || expandsActiveActivity || expandsToolDetails) &&
       (autoScroll() || pinnedToBottom || followModeLocked);
+    // A running tool at the followed bottom grows its details below the fold. Keep following so
+    // expanding it reveals that output, instead of anchoring the header above hidden content.
+    if (
+      activityKey &&
+      expandsActiveActivity &&
+      expandsToolDetails &&
+      resumeBottomFollow &&
+      !stickyNavigationOwnsScroll() &&
+      !editingMessage() &&
+      !diffFocusPauseActive
+    ) {
+      pendingExpansionScrollAnchor = null;
+      pinnedToBottom = true;
+      setAutoScroll(true);
+      const sessionId = state.activeSessionId;
+      if (sessionId) startFollowLoop(sessionId);
+      presentation.inspectActivity(activityKey, true);
+      return;
+    }
     const expansionAnchor = captureExpansionScrollAnchor({
       anchor,
       container: containerRef,
@@ -8348,6 +8396,17 @@ export function MessageList() {
       resumeBottomFollow,
     };
     if (activityKey) presentation.inspectActivity(activityKey, expandsActiveActivity);
+  }
+
+  function reserveDisclosureCollapse(disappearingHeight: number) {
+    if (!containerRef) return;
+    const shortfall =
+      containerRef.scrollTop -
+      (containerRef.scrollHeight - containerRef.clientHeight - disappearingHeight);
+    if (containerRef.scrollTop > 0.5 && shortfall > 0.5) {
+      appendBottomReserveTarget = containerRef.scrollTop;
+      setAppendBottomReserve((reserve) => reserve + shortfall);
+    }
   }
 
   function reserveExternalBottomCollapse(collapseHeight: number) {
@@ -8511,17 +8570,17 @@ export function MessageList() {
     );
     const queue = row?.closest<HTMLElement>('.chat-queue-container');
     const list = row?.closest<HTMLElement>('.chat-queue-list');
-    if (!row || !queue || !list) return;
+    // A queue behind another composer tab has no box, so its removal frees no space.
+    if (!row || !queue || !list || queue.getClientRects().length === 0) return;
 
     const rows = list.querySelectorAll('[data-queued-message-id]');
     if (rows.length === 1) {
       const styles = getComputedStyle(queue);
-      const parentStyles = queue.parentElement ? getComputedStyle(queue.parentElement) : null;
       reserveExternalBottomCollapse(
         queue.getBoundingClientRect().height +
           (parseFloat(styles.marginTop) || 0) +
           (parseFloat(styles.marginBottom) || 0) +
-          (parseFloat(parentStyles?.rowGap || '') || 0)
+          composerBlockRowGap(queue)
       );
       return;
     }
@@ -8727,15 +8786,14 @@ export function MessageList() {
             containerRef.closest('.chat-main-column-shell')
           )
             return;
+          // Todos behind another composer tab have no box, so their removal frees no space.
+          if (element.getClientRects().length === 0) return;
           const styles = getComputedStyle(element);
-          const parentStyles = element.parentElement
-            ? getComputedStyle(element.parentElement)
-            : null;
           reserveExternalBottomCollapse(
             element.getBoundingClientRect().height +
               (Number.parseFloat(styles.marginTop) || 0) +
               (Number.parseFloat(styles.marginBottom) || 0) +
-              (Number.parseFloat(parentStyles?.rowGap || '') || 0)
+              composerBlockRowGap(element)
           );
         })
       )
@@ -11833,16 +11891,6 @@ export function MessageList() {
           if (searchNavigationTargetId()) cancelStickyNavigation();
         }}
       />
-      <Show
-        when={
-          showEmptyStateHistogram() && !state.messagesLoading && shouldShowStarterLogo()
-            ? newChatDraftKey() + 1
-            : undefined
-        }
-        keyed
-      >
-        {(_draftKey) => <StarterHistogram onClick={requestComposerFocus} />}
-      </Show>
       <Show when={hydratingSession()}>
         <div class="chat-messages-loading" role="status" aria-label="Loading messages">
           <span class="chat-messages-loading-dot" />

@@ -16,6 +16,7 @@ class NativeDecisions(
     val model: JsonObject? get() {
         if (apiVersion() != 2) return null
         val route = configuredModel().trim()
+        if (JevDecisions.directModelId(route) != null) return null
         if (!route.contains('/') || route.substringBefore('/').isEmpty() || route.substringAfter('/').isEmpty() || route.any(Char::isWhitespace)) return null
         return Json.obj("providerID" to route.substringBefore('/'), "modelID" to route.substringAfter('/'))
     }
@@ -43,7 +44,7 @@ class NativeDecisions(
             val catalog = response.asObjectOrNull().arr("data") ?: error("Invalid decision model catalog")
             val models = catalog.mapNotNull { value ->
                 val item = value.asObjectOrNull()
-                if (item.str("type") != "decision" || item.bool("enabled") == false ||
+                if (item.str("type") != "decision" || item.bool("enabled") == false || item.str("providerID") == JevDecisions.PROVIDER_ID ||
                     item.str("providerID") == null || item.str("id") == null || item.str("name") == null) null
                 else Json.obj("providerID" to item.str("providerID"), "modelID" to item.str("id"), "name" to item.str("name"))
             }

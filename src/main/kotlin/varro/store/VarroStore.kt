@@ -70,8 +70,6 @@ class VarroStore : PersistentStateComponent<VarroStore.StoreState> {
         /** `Record<sessionId, markedAt>` of sessions the user marked to come back to. */
         @JvmField var todoSessions: String = "{}"
 
-        /** `string[]` of root sessions chosen for prompt cache warming, oldest first. */
-        @JvmField var promptCacheWarmingSessions: String = "[]"
 
         /** `string[]` of sessions hidden from the user-visible catalog (helper sessions). */
         @JvmField var hiddenSessionIds: String = "[]"
@@ -300,10 +298,6 @@ class VarroStore : PersistentStateComponent<VarroStore.StoreState> {
         set(value) { state.editorRoutes = Json.stringify(value) }
 
     // --- Array-valued entries -------------------------------------------------
-
-    var promptCacheWarmingSessions: List<String>
-        @Synchronized get() = readArray(state.promptCacheWarmingSessions).strings()
-        @Synchronized set(value) { state.promptCacheWarmingSessions = Json.stringify(Json.array(value.distinct())) }
 
     var pinnedSessionIds: List<String>
         @Synchronized get() = readArray(state.pinnedSessionIds).strings()

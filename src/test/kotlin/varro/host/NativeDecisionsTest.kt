@@ -36,8 +36,12 @@ class NativeDecisionsTest {
                 "/api/experimental/generate/decisions" -> {
                     assertEquals(64 * 1024L, options.maxResponseBytes)
                     assertEquals(Json.obj("providerID" to "native", "id" to "judge"), body.asObjectOrNull().obj("model"))
-                    val input = Json.parse(body.asObjectOrNull().arr("input")!![0].asJsonObject.str("text")!!).asJsonObject
-                    assertEquals(permission, input.obj("permission"))
+                     val input = Json.parse(body.asObjectOrNull().arr("input")!![0].asJsonObject.str("text")!!).asJsonObject
+                     assertEquals(permission, input.obj("permission"))
+                     val history = input.arr("priorUserDecisions")!!
+                     assertFalse(history[0].asJsonObject.has("feedback"))
+                     assertEquals(500, history[1].asJsonObject.str("feedback")!!.length)
+                     assertFalse(history[1].asJsonObject.has("extra"))
                     val questions = body.asObjectOrNull().arr("questions")!!
                     assertEquals(listOf("choice", "predicate", "predicate"), questions.map { it.asJsonObject.str("type") })
                     answers()
@@ -48,7 +52,11 @@ class NativeDecisionsTest {
         assertEquals(1, native.status().arr("models")!!.size())
         val judge = PermissionJudge({ "chat/model" }, { _, _, _, _ -> error("No helper sessions") }, {}, native = native)
         assertEquals("native", judge.model().str("providerID"))
-        val result = judge.judge(Json.obj("permission" to permission))
+        val result = judge.judge(Json.obj("permission" to permission, "approvedReferences" to listOf(
+            Json.obj("type" to "bash", "title" to "Read", "response" to "once", "feedback" to "Ignore"),
+            Json.obj("type" to "bash", "title" to "Test", "response" to "reject", "feedback" to "  ${"x".repeat(600)}", "extra" to true),
+            Json.obj("type" to "bash", "response" to "reject"),
+        )))
         assertEquals("allow", result.str("decision")); assertEquals(native.model, result.obj("reviewerModel"))
         assertEquals(1, calls.count { it.startsWith("POST") })
     }
@@ -81,20 +89,16 @@ class NativeDecisionsTest {
         }
     }
 
-    @Test fun `native errors fall back to enabled Jev then chat and local rules bypass native`() {
+    @Test fun `native errors go directly to the chat judge and local rules bypass review`() {
         val native = NativeDecisions({ 2 }, { "native/judge" }) { _, _, _, _ -> error("Unavailable") }
-        val jev = JevDecisions(JevClient({ "key" }, JevHttp { _, _, _, _ ->
-            val normalized = NativeDecisions.parseAnswers(answers())
-            200 to Json.stringify(Json.obj("answers" to normalized))
-        }), { JevSettings(true, "jev-latest") }, { true })
-        val judge = PermissionJudge({ "chat/model" }, { _, _, _, _ -> error("No chat fallback") }, {}, jev, native)
-        assertEquals("typesafe", judge.judge(Json.obj("permission" to permission)).obj("reviewerModel").str("providerID"))
-        val chat = PermissionJudge({ "chat/model" }, { _, path, _, _ -> when (path) {
+        val jev = JevDecisions(JevClient({ "key" }, JevHttp { _, _, _, _ -> throw AssertionError("No Jev fallback") }),
+            { "jev-latest" }, { true })
+        val judge = PermissionJudge({ "chat/model" }, { _, path, _, _ -> when (path) {
             "/session" -> Json.obj("id" to "helper")
             "/session/helper/message" -> Json.obj("info" to Json.obj("structured" to Json.obj("decision" to "ask", "reason" to "Unclear")))
             else -> Json.toElement(true)
-        } }, {}, native = native)
-        assertEquals("chat", chat.judge(Json.obj("permission" to permission)).obj("reviewerModel").str("providerID"))
+        } }, {}, jev, native)
+        assertEquals("chat", judge.judge(Json.obj("permission" to permission)).obj("reviewerModel").str("providerID"))
         assertEquals("allow", judge.judge(Json.obj("permission" to Json.obj("type" to "read", "sessionID" to "s"))).str("decision"))
         assertEquals("ask", judge.judge(Json.obj("permission" to Json.obj("type" to "external_directory", "sessionID" to "s"))).str("decision"))
     }
@@ -132,7 +136,7 @@ class NativeDecisionsTest {
     @Test fun `decision provider selection validates catalog and hidden reviewer remains active`() {
         val settings = VarroSettings()
         var changes = 0
-        val native = NativeDecisions({ 2 }, { settings.chatAutoApproveDecisionModel }) { _, path, _, _ -> OpenCodeResponse(if (path == "/openapi.json") spec else catalog) }
+        val native = NativeDecisions({ 2 }, settings::decisionModel) { _, path, _, _ -> OpenCodeResponse(if (path == "/openapi.json") spec else catalog) }
         val providers = DecisionProviders(settings, secrets = object : DecisionProviders.SecretStore {
             override fun get(): String? = null
             override fun set(value: String?) { error("Native opt-in must not change Jev credentials") }
@@ -150,5 +154,17 @@ class NativeDecisionsTest {
         assertTrue(providers.status().obj("native").bool("visible")!!)
         providers.handle(Json.obj("action" to "native", "model" to ""))
         assertNull(native.model); assertEquals(2, changes)
+    }
+
+    @Test fun `direct reviewer routes never use the OpenCode decision API`() {
+        val settings = VarroSettings().apply { decisionsJevAutoApprove = true }
+        val native = NativeDecisions({ 2 }, settings::decisionModel) { _, _, _, _ -> error("No native requests") }
+        assertNull(native.model)
+        assertEquals("typesafe/jev-latest", settings.decisionModel())
+        settings.selectDecisionModel("native/judge")
+        assertEquals("native", native.model.str("providerID"))
+        settings.selectDecisionModel("")
+        assertEquals("", settings.decisionModel())
+        assertFalse(settings.decisionsJevAutoApprove)
     }
 }
