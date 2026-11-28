@@ -206,7 +206,7 @@ class RestProxy internal constructor(
     private val disposed = AtomicBoolean(false)
     private val trash = SessionTrash(store, request = { method, path, body, directory ->
         backend.request(method, path, body, RequestOptions(directory = directory)).data
-    }, journal = varro.store.JsonJournal(workspace.trashJournal()))
+    }, journal = varro.store.JsonJournal(workspace.trashJournal()), legacyUnarchive = { backend.apiVersion == 1 })
 
     /**
      * Services the proxy needs from the rest of the host. Kept as an interface so

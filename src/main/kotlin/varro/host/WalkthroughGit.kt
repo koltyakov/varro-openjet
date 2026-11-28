@@ -19,21 +19,56 @@ import java.util.concurrent.TimeUnit
 internal object WalkthroughGit {
     const val MAX_UNTRACKED_FILE_BYTES = 20_000
     const val MAX_UNTRACKED_TOTAL_BYTES = 40_000
+    const val MAX_DIFF_BYTES = 4 * 1024 * 1024
+    const val MAX_UNTRACKED_PATHS = 4096
+    /** Room for [MAX_UNTRACKED_PATHS] paths of up to 1 KiB each, so the path count is the binding limit. */
+    private const val MAX_PATH_LIST_BYTES = MAX_UNTRACKED_PATHS * 1024
     private const val GIT_TIMEOUT_SECONDS = 30L
 
-    data class Changes(val staged: String, val unstaged: String)
+    private val DIFF_LIMIT = "${MAX_DIFF_BYTES / (1024 * 1024)} MB"
+    val STAGED_TOO_LARGE = "The staged changes exceed the $DIFF_LIMIT walkthrough limit. " +
+        "Unstage some files to walk through a smaller set."
+    val UNSTAGED_TOO_LARGE = "The unstaged changes exceed the $DIFF_LIMIT walkthrough limit. " +
+        "Stage the files you want explained and walk through the staged changes."
+    val TOO_MANY_UNTRACKED = "There are more than ${String.format(java.util.Locale.US, "%,d", MAX_UNTRACKED_PATHS)} untracked files. " +
+        "Add generated files to .gitignore, or stage the files you want explained and walk through the staged changes."
+
+    /** A failed section exceeded a capture limit. The other scope is still selectable. */
+    data class Changes(val staged: Result<String>, val unstaged: Result<String>)
+
+    private class CaptureLimit(message: String) : IllegalArgumentException(message)
+
+    /** Raised by [git] when its output passes the caller's byte limit; mapped to a scope-specific [CaptureLimit]. */
+    private class OutputLimitExceeded : RuntimeException()
+
+    private fun captureSection(read: () -> String): Result<String> = try {
+        Result.success(read())
+    } catch (limit: CaptureLimit) {
+        Result.failure(limit)
+    }
+
+    private inline fun <T> limited(message: String, read: () -> T): T = try {
+        read()
+    } catch (_: OutputLimitExceeded) {
+        throw CaptureLimit(message)
+    }
 
     /** @param check throws to cancel; called between and during Git commands. */
     fun capture(root: String, check: () -> Unit): Changes {
-        val staged = git(root, check, "diff", "--cached", "--no-color", "--no-ext-diff")
-            ?: error("Git could not read the staged changes in $root.")
-        val tracked = git(root, check, "diff", "--no-color", "--no-ext-diff")
-            ?: error("Git could not read the unstaged changes in $root.")
-        val untracked = git(root, check, "ls-files", "--others", "--exclude-standard", "-z")
-            ?.split('\u0000')?.filter { it.isNotEmpty() }
-            .orEmpty()
-        val patches = untrackedPatches(Path.of(root), untracked, check)
-        return Changes(staged, (listOf(tracked) + patches).filter { it.isNotBlank() }.joinToString("\n"))
+        val staged = captureSection {
+            limited(STAGED_TOO_LARGE) { git(root, check, MAX_DIFF_BYTES, "diff", "--cached", "--no-color", "--no-ext-diff") }
+        }
+        val unstaged = captureSection {
+            val tracked = limited(UNSTAGED_TOO_LARGE) { git(root, check, MAX_DIFF_BYTES, "diff", "--no-color", "--no-ext-diff") }
+            val names = limited(TOO_MANY_UNTRACKED) {
+                git(root, check, MAX_PATH_LIST_BYTES, "ls-files", "--others", "--exclude-standard", "-z")
+            }
+            val paths = names.splitToSequence('\u0000').filter(String::isNotEmpty).take(MAX_UNTRACKED_PATHS + 1).toList()
+            if (paths.size > MAX_UNTRACKED_PATHS) throw CaptureLimit(TOO_MANY_UNTRACKED)
+            val patches = untrackedPatches(Path.of(root), paths, check)
+            (listOf(tracked) + patches).filter(String::isNotEmpty).joinToString("\n")
+        }
+        return Changes(staged, unstaged)
     }
 
     /** Synthetic patches for untracked files, matching upstream's text exactly. */
@@ -59,12 +94,12 @@ internal object WalkthroughGit {
                     patches += "$header\nnew untracked file ($byteLength bytes; content omitted)"
                     continue
                 }
-                val bytes = Files.newInputStream(file, LinkOption.NOFOLLOW_LINKS).use { it.readNBytes(MAX_UNTRACKED_FILE_BYTES) }
                 val availableBytes = maxOf(0, MAX_UNTRACKED_TOTAL_BYTES - includedBytes)
                 if (availableBytes == 0) {
-                    patches += "$header\nnew untracked file (${bytes.size} bytes; content omitted)"
+                    patches += "$header\nnew untracked file ($byteLength bytes; content omitted)"
                     continue
                 }
+                val bytes = Files.newInputStream(file, LinkOption.NOFOLLOW_LINKS).use { it.readNBytes(MAX_UNTRACKED_FILE_BYTES) }
                 val included = bytes.copyOf(minOf(bytes.size, availableBytes))
                 includedBytes += included.size
                 val content = if (included.contains(0)) "Binary untracked file (${bytes.size} bytes)"
@@ -88,8 +123,7 @@ internal object WalkthroughGit {
     private fun prefixLines(text: String): String =
         text.removeSuffix("\n").split('\n').joinToString("\n") { "+$it" }
 
-    /** Runs Git in [root]; null when it exits non-zero. */
-    fun git(root: String, check: () -> Unit, vararg parameters: String): String? {
+    private fun git(root: String, check: () -> Unit, maxBytes: Int, vararg parameters: String): String {
         check()
         val process = ProcessBuilder(listOf("git", "-c", "core.quotePath=false") + parameters)
             .directory(File(root))
@@ -97,7 +131,11 @@ internal object WalkthroughGit {
             .redirectError(ProcessBuilder.Redirect.DISCARD)
             .start()
         val reader = Executors.newSingleThreadExecutor()
-        val output = reader.submit<String> { process.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() } }
+        val output = reader.submit<ByteArray> {
+            process.inputStream.use { stream ->
+                stream.readNBytes(maxBytes + 1).also { if (it.size > maxBytes) process.destroyForcibly() }
+            }
+        }
         try {
             val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(GIT_TIMEOUT_SECONDS)
             while (!process.waitFor(50, TimeUnit.MILLISECONDS)) {
@@ -105,7 +143,10 @@ internal object WalkthroughGit {
                 if (System.nanoTime() >= deadline) error("Git timed out while reading the changes.")
             }
             check()
-            return if (process.exitValue() == 0) output.get(5, TimeUnit.SECONDS) else null
+            val bytes = output.get(5, TimeUnit.SECONDS)
+            if (bytes.size > maxBytes) throw OutputLimitExceeded()
+            check(process.exitValue() == 0) { "Git ${parameters.first()} failed while reading changes in $root." }
+            return bytes.toString(Charsets.UTF_8)
         } finally {
             process.destroyForcibly()
             output.cancel(true)

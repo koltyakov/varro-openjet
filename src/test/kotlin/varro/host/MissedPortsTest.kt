@@ -9,6 +9,7 @@ import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import varro.protocol.*
 import varro.store.VarroStore
+import varro.server.OpenCodeResponse
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
@@ -61,7 +62,17 @@ class MissedPortsTest {
         assertNull(recovered.claim("sidebar", "s", "queued", true))
         recovered.update("sidebar", JsonArray())
         assertEquals(1, recovered.messages().size())
-        recovered.recover { Json.array(listOf(Json.obj("info" to Json.obj("id" to "msg_unique", "role" to "user")))) }
+        val cursors = mutableListOf<String?>()
+        recovered.recover { session, cursor ->
+            assertEquals("s", session)
+            cursors += cursor
+            when (cursor) {
+                null -> OpenCodeResponse(JsonArray(), "older")
+                "older" -> OpenCodeResponse(Json.array(listOf(Json.obj("info" to Json.obj("id" to "msg_unique")))), "never-read")
+                else -> throw AssertionError("Read past the confirmed delivery")
+            }
+        }
+        assertEquals(listOf(null, "older"), cursors)
         assertEquals(0, recovered.messages().size())
         recovered.update("sidebar", initial)
         assertEquals(0, recovered.messages().size())
@@ -118,7 +129,11 @@ class MissedPortsTest {
         assertTrue(queue.admit("sidebar", request))
         queue.complete(request, false)
         val recovered = QueuedDispatches(path, JsonArray())
-        recovered.recover { error("server offline") }
+        recovered.recover { _, cursor ->
+            if (cursor != null) error("server offline")
+            OpenCodeResponse(JsonArray(), "older")
+        }
+        recovered.recover { _, _ -> OpenCodeResponse(JsonArray()) }
         assertEquals(1, recovered.messages().size())
         assertNull(recovered.claim("sidebar", "s", "queued", true))
     }
@@ -155,7 +170,7 @@ class MissedPortsTest {
         trash.remove("root", true)
         assertFalse(trash.isHidden("root"))
         assertFalse(trash.isHidden("child"))
-        assertEquals(0L, sessions["root"].obj("time").long("archived"))
+        assertTrue(sessions["root"].obj("time")!!.get("archived").isJsonNull)
         assertEquals(50L, sessions["child"].obj("time").long("archived"))
         assertEquals(0, store.recycleBin.size())
         trash.recycle("root", "/workspace")
@@ -194,6 +209,7 @@ class MissedPortsTest {
             "deletedAt" to 1, "expiresAt" to 5, "sessions" to JsonArray()))) }
         var removed = false
         val trash = SessionTrash(store, { method, path, _, _ ->
+            if (path == "/session/expired/children") return@SessionTrash JsonArray()
             assertEquals("/session/expired", path)
             if (method == "GET") Json.obj("id" to "expired", "time" to Json.obj("archived" to 2, "updated" to 2))
             else {
@@ -227,6 +243,60 @@ class MissedPortsTest {
         )) }
         val trash = SessionTrash(store, { _, _, _, _ -> error("503 unavailable") }, { 10 })
         assertEquals(listOf("broken", "fresh"), trash.list().map { it.asJsonObject.str("rootID") })
+    }
+
+    @Test fun `expiry verifies the entire archived tree before deleting the root`() {
+        for (change in listOf("unchanged", "updated", "renamed", "resumed", "rearchived", "new child", "missing child", "offline")) {
+            var clock = 100L
+            val records = listOf("root" to null, "child" to "root", "leaf" to "child").associate { (id, parent) ->
+                id to Json.obj("id" to id, "parentID" to parent, "time" to Json.obj("updated" to 1))
+            }.toMutableMap()
+            var deleted = false
+            val trash = SessionTrash(VarroStore(), { method, path, body, _ ->
+                val id = path.split('/')[2]
+                when {
+                    path.endsWith("/children") -> {
+                        if (change == "offline" && clock > 100 && id == "child") error("503 offline")
+                        Json.array(records.values.filter { it.str("parentID") == id })
+                    }
+                    method == "GET" -> records.getValue(id)
+                    method == "PATCH" -> records.getValue(id).apply {
+                        obj("time")!!.apply { add("archived", body.asObjectOrNull().obj("time")!!.get("archived")); addProperty("updated", clock) }
+                    }
+                    else -> { assertEquals("DELETE", method); assertEquals("root", id); deleted = true; Json.toElement(true) }
+                }
+            }, { clock })
+            trash.recycle("root", null)
+            val time = records.getValue("leaf").obj("time")!!
+            when (change) {
+                "updated" -> time.addProperty("updated", clock + 1)
+                "renamed" -> records.getValue("leaf").addProperty("title", "Continued elsewhere")
+                "resumed" -> time.remove("archived")
+                "rearchived" -> time.addProperty("archived", clock + 1)
+                "new child" -> records["new"] = Json.obj("id" to "new", "parentID" to "leaf")
+                "missing child" -> records.remove("leaf")
+            }
+            clock += SessionTrash.RETENTION_MS
+            assertEquals(change, if (change == "offline") 1 else 0, trash.list().size())
+            assertEquals(change, change == "unchanged", deleted)
+        }
+    }
+
+    @Test fun `old tree without post-archive timestamps needs manual deletion`() {
+        val root = Json.obj("id" to "root", "time" to Json.obj("archived" to 10, "updated" to 10))
+        val child = Json.obj("id" to "child", "parentID" to "root", "time" to root.obj("time"))
+        val store = VarroStore().apply { recycleBin = Json.array(listOf(Json.obj("rootID" to "root",
+            "sessions" to listOf(root, child), "deletedAt" to 10, "expiresAt" to 11))) }
+        val trash = SessionTrash(store, { method, path, _, _ ->
+            assertEquals("GET", method)
+            when (path) {
+                "/session/root" -> root
+                "/session/root/children" -> Json.array(listOf(child))
+                "/session/child/children" -> JsonArray()
+                else -> error(path)
+            }
+        }, { 12 })
+        assertEquals(1, trash.list().size())
     }
 
     @Test fun `unconfirmed deletion keeps the recycle entry until absence is confirmed`() {

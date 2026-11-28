@@ -5,6 +5,8 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import varro.protocol.*
+import varro.host.SessionTrash
+import varro.store.VarroStore
 
 class OpenCodeV2ArchiveTest {
     @JvmField @Rule val temporary = TemporaryFolder()
@@ -51,6 +53,35 @@ class OpenCodeV2ArchiveTest {
             }
         }
         assertEquals(Json.obj(), state.read("ses_fixture"))
+    }
+
+    @Test fun `recycle bin restores an active session through the native archive adapter`() {
+        val archived = mutableMapOf("ses_root" to false, "ses_a" to false, "ses_b" to true)
+        fun record(id: String) = Json.obj("id" to id, "time" to Json.obj("updated" to 20).apply {
+            if (archived.getValue(id)) addProperty("archived", 20)
+        })
+        val adapter = OpenCodeV2Adapter({ method, path, body, _ -> OpenCodeResponse(when {
+            path == "/openapi.json" -> spec(true)
+            path == "/api/session?parentID=ses_root&limit=1000" -> Json.obj("data" to listOf(record("ses_a")),
+                "cursor" to Json.obj("next" to "more"))
+            path == "/api/session?parentID=ses_root&limit=1000&cursor=more" -> Json.obj("data" to listOf(record("ses_b")))
+            path.startsWith("/api/session?parentID=") -> Json.obj("data" to emptyList<String>())
+            path.startsWith("/api/session/") -> {
+                val id = path.substringAfterLast('/')
+                if (method == "PATCH") archived[id] = body.asObjectOrNull().bool("archived")!!
+                Json.obj("data" to record(id))
+            }
+            else -> error("Unexpected $method $path")
+        }) }, OpenCodeV2SessionState(temporary.root.toPath()))
+        val trash = SessionTrash(VarroStore(), { method, path, body, dir ->
+            adapter.request(method, path, body, RequestOptions(directory = dir)).data
+        })
+        trash.recycle("ses_root", null)
+        assertTrue(archived.values.all { it })
+        assertTrue(trash.isHidden("ses_b"))
+        trash.remove("ses_root", restore = true)
+        assertEquals(mapOf("ses_root" to false, "ses_a" to false, "ses_b" to true), archived)
+        assertFalse(trash.isHidden("ses_root"))
     }
 
     @Test fun `ordinary reads avoid discovery and old servers without OpenAPI retain local archives`() {

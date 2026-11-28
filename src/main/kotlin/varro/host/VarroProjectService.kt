@@ -338,7 +338,7 @@ class VarroProjectService(private val project: Project) : Disposable {
             reportStatusFailure(status)
             if (status is ServerStatus.Running && previous !is ServerStatus.Running) {
                 ApplicationManager.getApplication().executeOnPooledThread {
-                    queue.recover(::readQueuedHistory)
+                    queue.recover(::readQueuedHistoryPage)
                     syncQueue()
                     ralph.reattach()
                 }
@@ -438,28 +438,12 @@ class VarroProjectService(private val project: Project) : Disposable {
 
     private fun broadcastQueue() = panels.forEach { it.post("queued-messages/sync", queue.snapshot(it.viewId)) }
 
-    private fun readQueuedHistory(sessionId: String): JsonArray {
-        val messages = JsonArray()
-        var characters = 0L
-        var cursor: String? = null
-        val seen = mutableSetOf<String>()
-        do {
-            val path = "/session/${java.net.URLEncoder.encode(sessionId, Charsets.UTF_8)}/message?limit=200" +
-                (cursor?.let { "&before=${java.net.URLEncoder.encode(it, Charsets.UTF_8)}" } ?: "")
-            val page = server.transport.request("GET", path, options = varro.server.RequestOptions(
-                captureNextCursor = true, directory = server.transport.observedSessionDirectories()[sessionId],
-            ))
-            val items = page.data?.takeIf { it.isJsonArray }?.asJsonArray ?: error("Invalid queued-message history")
-            characters += items.toString().length
-            check(characters <= 64 * 1024 * 1024 && messages.size() + items.size() <= 10000) {
-                "Queued-message recovery history limit exceeded"
-            }
-            items.forEach(messages::add)
-            cursor = page.nextCursor
-            check(cursor == null || seen.add(cursor)) { "Queued-message history cursor did not advance" }
-            check(seen.size <= 1000) { "Queued-message recovery history limit exceeded" }
-        } while (cursor != null)
-        return messages
+    private fun readQueuedHistoryPage(sessionId: String, cursor: String?): varro.server.OpenCodeResponse {
+        val path = "/session/${java.net.URLEncoder.encode(sessionId, Charsets.UTF_8)}/message?limit=200" +
+            (cursor?.let { "&before=${java.net.URLEncoder.encode(it, Charsets.UTF_8)}" } ?: "")
+        return server.transport.request("GET", path, options = varro.server.RequestOptions(
+            captureNextCursor = true, directory = server.transport.observedSessionDirectories()[sessionId],
+        ))
     }
 
     private fun broadcastModelPreferences() {

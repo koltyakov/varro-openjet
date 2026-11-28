@@ -11,6 +11,7 @@ class SessionTrash(
     private val request: (String, String, JsonElement?, String?) -> JsonElement?,
     private val now: () -> Long = System::currentTimeMillis,
     private val journal: varro.store.JsonJournal? = null,
+    private val legacyUnarchive: () -> Boolean = { false },
 ) {
     init {
         synchronized(store) {
@@ -44,29 +45,43 @@ class SessionTrash(
         if (entries().any { it.asObjectOrNull().str("rootID") == id }) return@synchronized
         val root = request("GET", "/session/${encode(id)}", null, directory).asObjectOrNull()
             ?: error("Session could not be loaded")
-        val sessions = JsonArray()
-        val visited = mutableSetOf<String>()
-        fun collect(session: JsonObject) {
-            val childId = session.text("id") ?: error("Missing session id")
-            if (!visited.add(childId)) return
-            check(visited.size <= 10000) { "Session tree is too large" }
-            sessions.add(session)
-            val children = request("GET", "/session/${encode(childId)}/children", null, directory).asArrayOrNull()
-                ?: error("Could not load session children")
-            children.forEach { collect(it.asJsonObject) }
-        }
-        collect(root)
-        // Persist the tombstone first. A failed archive can still be restored or retried.
+        val tree = readTree(root, directory)
+        // Persist the original records before archiving. Incomplete archives remain restorable.
         update { entries ->
-            entries.apply { add(Json.obj("rootID" to id, "root" to root, "sessions" to sessions,
+            entries.apply { add(Json.obj("rootID" to id, "root" to root, "sessions" to tree.values,
+                "archivedTimes" to Json.obj(),
                 "deletedAt" to now(), "expiresAt" to now() + RETENTION_MS, "retained" to true)) }
         }
-        store.removeSessionUnreadState(visited)
-        sessions.forEach { session ->
-            request("PATCH", "/session/${encode(session.asJsonObject.str("id")!!)}",
-                Json.obj("time" to Json.obj("archived" to now())), directory)
+        store.removeSessionUnreadState(tree.keys)
+        val archivedTimes = Json.obj()
+        tree.forEach { (sessionId, record) ->
+            val archived = request("PATCH", "/session/${encode(sessionId)}",
+                Json.obj("time" to Json.obj("archived" to now())), record.str("directory") ?: directory).asObjectOrNull()
+            if (archived.str("id") == sessionId) archived.obj("time")?.let { time ->
+                archivedTimes.add(sessionId, Json.obj("updated" to time.long("updated"), "archived" to time.long("archived")))
+            }
         }
-        synchronized(store) { store.pinnedSessionIds = store.pinnedSessionIds.filterNot { it in visited } }
+        update { entries ->
+            entries.first { it.asJsonObject.str("rootID") == id }.asJsonObject.add("archivedTimes", archivedTimes)
+            entries
+        }
+        synchronized(store) { store.pinnedSessionIds = store.pinnedSessionIds.filterNot { it in tree } }
+    }
+
+    private fun readTree(root: JsonObject, directory: String?): Map<String, JsonObject> {
+        val tree = linkedMapOf<String, JsonObject>()
+        val pending = ArrayDeque<JsonObject>()
+        pending.add(root)
+        while (pending.isNotEmpty()) {
+            val record = pending.removeFirst()
+            val id = record.text("id") ?: error("Missing session id")
+            check(tree.put(id, record) == null) { "Duplicate session in recycled tree" }
+            val children = request("GET", "/session/${encode(id)}/children", null, record.str("directory") ?: directory)
+                .asArrayOrNull() ?: error("Could not load session children")
+            check(tree.size + pending.size + children.size() <= 10_000) { "Session tree is too large" }
+            children.forEach { pending.add(it.asJsonObject) }
+        }
+        return tree
     }
 
     /**
@@ -94,16 +109,38 @@ class SessionTrash(
     private fun expire(id: String, entry: JsonObject) {
         val directory = entry.obj("root").str("directory")
         val current = try {
-            request("GET", "/session/${encode(id)}", null, directory).asObjectOrNull()
+            request("GET", "/session/${encode(id)}", null, directory).asObjectOrNull() ?: error("Invalid recycled session response")
         } catch (failure: Exception) {
             if (failure.message?.startsWith("404 ") != true) throw failure
-            null
+            return forget(id)
         }
-        if (current == null) return forget(id)
-        val archived = current.obj("time").long("archived")?.takeIf { it > 0 } ?: return forget(id)
-        val updated = current.obj("time").long("updated")
-        val recycledAt = maxOf(archived, entry.long("deletedAt") ?: archived)
-        if (updated != null && updated > recycledAt + ARCHIVE_UPDATE_TOLERANCE_MS) return forget(id)
+        check(current.str("id") == id) { "Invalid recycled session response" }
+        val rootTime = current.obj("time") ?: return
+        val archived = rootTime.long("archived")?.takeIf { it > 0 } ?: return forget(id)
+        val saved = entry.obj("archivedTimes")
+        if (saved == null) {
+            // Older journals lack post-archive times. Preserve the existing root-only
+            // expiry policy, but never authorize recursive deletion on that evidence.
+            val recycledAt = maxOf(archived, entry.long("deletedAt") ?: archived)
+            if ((rootTime.long("updated") ?: return) > recycledAt + ARCHIVE_UPDATE_TOLERANCE_MS) return forget(id)
+        }
+        val tree = readTree(current, directory)
+        val original = entry.arr("sessions")?.map { it.asJsonObject }?.associateBy { it.text("id")!! } ?: return
+        if (tree.keys != original.keys + id) return forget(id)
+        for ((key, record) in tree) {
+            val previous = original[key]
+            if (previous != null && (previous.str("parentID") != record.str("parentID") ||
+                previous.str("directory") != record.str("directory") || previous.str("title") != record.str("title"))) return forget(id)
+            val time = record.obj("time") ?: return
+            val archivedAt = time.long("archived")?.takeIf { it > 0 } ?: return forget(id)
+            if (saved == null) continue
+            val before = saved.obj(key) ?: return
+            val expectedArchive = before.long("archived") ?: return
+            val expectedUpdate = before.long("updated") ?: return
+            val updated = time.long("updated") ?: return
+            if (archivedAt != expectedArchive || updated != expectedUpdate) return forget(id)
+        }
+        if (saved == null && tree.size > 1) return
         remove(id, false)
     }
 
@@ -125,8 +162,11 @@ class SessionTrash(
             }
             sessions.forEach { session ->
                 val record = session.asJsonObject
+                val archived = record.obj("time").long("archived")?.takeIf { it > 0 }
+                // V1 uses a numeric timestamp; V2 explicitly unarchives with null.
+                val restoreTime = archived ?: if (legacyUnarchive()) 0L else null
                 request("PATCH", "/session/${encode(record.str("id")!!)}",
-                    Json.obj("time" to Json.obj("archived" to (record.obj("time").long("archived") ?: 0))), record.str("directory"))
+                    Json.obj("time" to Json.obj("archived" to restoreTime)), record.str("directory"))
             }
         } else {
             // Deleting a root recursively removes its children on OpenCode.

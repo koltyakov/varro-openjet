@@ -177,7 +177,7 @@ object Walkthrough {
     private fun isGenerated(path: String) = GENERATED_PATH.containsMatchIn(path)
 
     /** Parses unified diffs from `git diff`, including patches without a `diff --git` header. */
-    fun parseUnifiedDiff(patch: String, section: String): List<WalkthroughFile> {
+    fun parseUnifiedDiff(patch: String, section: String, checkCancelled: () -> Unit = {}): List<WalkthroughFile> {
         val files = mutableListOf<WalkthroughFile>()
         var file: WalkthroughFile? = null
         var hunk: WalkthroughHunk? = null
@@ -188,7 +188,8 @@ object Walkthrough {
             hunk = null
             return next
         }
-        for (line in patch.replace(Regex("\r\n?"), "\n").split('\n')) {
+        for (line in patch.lineSequence()) {
+            checkCancelled()
             val git = GIT_HEADER.find(line)
             if (git != null) {
                 file = startFile(git.groupValues[2])
@@ -237,6 +238,7 @@ object Walkthrough {
         }
         for (parsed in files) {
             for (parsedHunk in parsed.hunks) {
+                checkCancelled()
                 parsedHunk.path = parsed.path
                 while (parsedHunk.lines.lastOrNull().let { it == " " || it == "" }) parsedHunk.lines.removeAt(parsedHunk.lines.lastIndex)
             }

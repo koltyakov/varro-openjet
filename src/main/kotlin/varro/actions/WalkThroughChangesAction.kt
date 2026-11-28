@@ -17,6 +17,7 @@ import com.intellij.openapi.project.Project
 import com.intellij.openapi.project.guessProjectDir
 import com.intellij.openapi.ui.DialogBuilder
 import com.intellij.openapi.ui.DialogWrapper
+import com.intellij.openapi.ui.MessageDialogBuilder
 import com.intellij.openapi.ui.popup.JBPopupFactory
 import com.intellij.openapi.ui.popup.JBPopupListener
 import com.intellij.openapi.ui.popup.LightweightWindowEvent
@@ -79,14 +80,22 @@ class WalkThroughChangesAction : AnAction(), DumbAware {
         })
 
         private fun pickScope(changes: WalkthroughGit.Changes): Boolean {
-            val hasStaged = changes.staged.isNotBlank()
-            val hasUnstaged = changes.unstaged.isNotBlank()
-            if (!hasStaged && !hasUnstaged) {
-                notify(project, "There are no uncommitted changes in $root.")
-                return false
+            when (val choice = chooseScope(changes, root)) {
+                is ScopeChoice.Stop -> {
+                    notify(project, choice.message, if (choice.error) NotificationType.ERROR else NotificationType.INFORMATION)
+                    return false
+                }
+                is ScopeChoice.Start -> return prepare(changes, choice.scope)
+                is ScopeChoice.Confirm -> {
+                    val proceed = MessageDialogBuilder
+                        .okCancel("Walkthrough Limit Exceeded", "${choice.reason}\n\nWalk through the ${choice.scope.label.lowercase()} only?")
+                        .yesText("Walk Through ${choice.scope.label}")
+                        .noText("Cancel")
+                        .ask(project)
+                    return proceed && prepare(changes, choice.scope)
+                }
+                ScopeChoice.Pick -> Unit
             }
-            if (!hasStaged) return prepare(changes, Scope.UNSTAGED)
-            if (!hasUnstaged) return prepare(changes, Scope.STAGED)
             var chosen = false
             JBPopupFactory.getInstance()
                 .createPopupChooserBuilder(Scope.entries.toList())
@@ -109,19 +118,19 @@ class WalkThroughChangesAction : AnAction(), DumbAware {
 
         /** Returns false when nothing was started and the caller must release. */
         private fun prepare(changes: WalkthroughGit.Changes, scope: Scope): Boolean {
-            val files = buildList {
-                if (scope != Scope.UNSTAGED) addAll(Walkthrough.parseUnifiedDiff(changes.staged, "staged"))
-                if (scope != Scope.STAGED) addAll(Walkthrough.parseUnifiedDiff(changes.unstaged, "unstaged"))
-            }
             val service = VarroProjectService.getInstance(project)
             val model = Walkthrough.selectModel(VarroSettings.getInstance().reviewModel,
                 WalkthroughModel.fromJson(service.activeChatModel))
-            if (files.none { it.hunks.isNotEmpty() }) {
-                notify(project, "There are no textual changes to walk through.")
-                return false
-            }
             val generator = WalkthroughService(service.server.transport::request, { service.server.transport.apiVersion })
             runPhase("Preparing changes walkthrough", { indicator ->
+                val files = buildList {
+                    if (scope != Scope.UNSTAGED) addAll(Walkthrough.parseUnifiedDiff(changes.staged.getOrThrow(), "staged") { check(indicator) })
+                    if (scope != Scope.STAGED) addAll(Walkthrough.parseUnifiedDiff(changes.unstaged.getOrThrow(), "unstaged") { check(indicator) })
+                }
+                if (files.none { it.hunks.isNotEmpty() }) return@runPhase {
+                    notify(project, "There are no textual changes to walk through.")
+                    false
+                }
                 awaitServer(service, indicator)
                 // Size the request to the model, and refuse an oversized diff before spending a request.
                 val budget = Walkthrough.digestBudget(generator.readContextLimit(model, root,
@@ -211,12 +220,53 @@ class WalkThroughChangesAction : AnAction(), DumbAware {
         }
     }
 
-    private enum class Scope(val label: String, private val description: String?) {
+    internal enum class Scope(val label: String, private val description: String?) {
         STAGED("Staged changes", "What the next commit contains"),
         UNSTAGED("Unstaged changes", "Working tree edits and new files"),
         ALL("All uncommitted changes", null);
 
         override fun toString() = description?.let { "$label — $it" } ?: label
+    }
+
+    internal sealed interface ScopeChoice {
+        /** Nothing can start; [message] says why. */
+        data class Stop(val message: String, val error: Boolean) : ScopeChoice
+        /** Only [scope] has changes. */
+        data class Start(val scope: Scope) : ScopeChoice
+        /** Only [scope] has readable changes; the other scope exceeded a capture limit for [reason]. Ask before narrowing. */
+        data class Confirm(val scope: Scope, val reason: String) : ScopeChoice
+        /** Both scopes have readable changes, so every option, including all changes, is valid. */
+        data object Pick : ScopeChoice
+    }
+
+    internal companion object {
+        private const val SERVER_START_SECONDS = 30L
+
+        /**
+         * Offers only scopes that were captured. A scope over a capture limit is never
+         * offered on its own or as part of all changes, where it would fail after the pick.
+         */
+        fun chooseScope(changes: WalkthroughGit.Changes, root: String): ScopeChoice {
+            val hasStaged = changes.staged.getOrNull()?.isNotBlank() == true
+            val hasUnstaged = changes.unstaged.getOrNull()?.isNotBlank() == true
+            val stagedFailure = changes.staged.exceptionOrNull()?.message
+            val unstagedFailure = changes.unstaged.exceptionOrNull()?.message
+            return when {
+                hasStaged && hasUnstaged -> ScopeChoice.Pick
+                hasStaged -> unstagedFailure?.let { ScopeChoice.Confirm(Scope.STAGED, it) } ?: ScopeChoice.Start(Scope.STAGED)
+                hasUnstaged -> stagedFailure?.let { ScopeChoice.Confirm(Scope.UNSTAGED, it) } ?: ScopeChoice.Start(Scope.UNSTAGED)
+                stagedFailure != null || unstagedFailure != null ->
+                    ScopeChoice.Stop(listOfNotNull(stagedFailure, unstagedFailure).joinToString(" "), error = true)
+                else -> ScopeChoice.Stop("There are no uncommitted changes in $root.", error = false)
+            }
+        }
+
+        private fun notify(project: Project, message: String, type: NotificationType = NotificationType.INFORMATION) {
+            NotificationGroupManager.getInstance()
+                .getNotificationGroup(VarroProjectService.NOTIFICATION_GROUP)
+                .createNotification("Varro", message, type)
+                .notify(project)
+        }
     }
 
     private fun repositoryRoots(event: AnActionEvent, project: Project): List<String> {
@@ -251,17 +301,6 @@ class WalkThroughChangesAction : AnAction(), DumbAware {
         }
         val result = DialogBuilder(project).title("Varro Changes Walkthrough").centerPanel(panel).show()
         return if (result == DialogWrapper.OK_EXIT_CODE) selection.selectedItem as? String else null
-    }
-
-    private companion object {
-        const val SERVER_START_SECONDS = 30L
-
-        fun notify(project: Project, message: String, type: NotificationType = NotificationType.INFORMATION) {
-            NotificationGroupManager.getInstance()
-                .getNotificationGroup(VarroProjectService.NOTIFICATION_GROUP)
-                .createNotification("Varro", message, type)
-                .notify(project)
-        }
     }
 }
 

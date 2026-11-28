@@ -3,7 +3,10 @@ package varro.actions
 import com.intellij.openapi.actionSystem.ActionUpdateThread
 import com.intellij.openapi.actionSystem.AnAction
 import com.intellij.openapi.actionSystem.AnActionEvent
+import com.intellij.notification.NotificationType
 import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.diagnostic.ControlFlowException
+import com.intellij.openapi.diagnostic.logger
 import com.intellij.openapi.progress.ProgressIndicator
 import com.intellij.openapi.progress.ProgressManager
 import com.intellij.openapi.progress.Task
@@ -82,22 +85,24 @@ class GenerateCommitMessageAction : AnAction(), DumbAware {
                         val service = VarroProjectService.getInstance(project)
                         val generator = CommitMessageService(project, service.server, service.settings)
 
-                        val changes = collectChanges(root, ::check) ?: run {
+                        val changes = readCommitPatch(root, ::check) ?: run {
                             check()
                             notify(project, "There are no changes to describe.")
                             return
                         }
 
                         val rules = project.service<CommitMessageRules>().resolve(root, service.settings.commitMessageRules)
-                        when (val result = generator.generate(changes.diff, changes.recentMessages, root, rules) {
+                        val recent = git(root, ::check, "log", "-n", "20", "--pretty=format:%s")
+                            ?.lines()?.filter(String::isNotBlank).orEmpty()
+                        when (val result = generator.generate(changes.diff, recent, root, rules) {
                             indicator.isCanceled || project.isDisposed || attempt.cancelled.get()
                         }) {
                             is CommitMessageService.Result.Generated -> {
                                 check()
-                                val latest = collectChanges(root, ::check, changes.staged)
+                                val latest = readCommitPatch(root, ::check)
                                 check()
-                                if (latest?.diff != changes.diff) {
-                                    notify(project, "Repository changes changed during generation. Generate the commit message again.")
+                                if (latest != changes) {
+                                    notify(project, "The changes selected for commit changed during generation. Generate the commit message again.")
                                     return
                                 }
                                 ApplicationManager.getApplication().invokeLater {
@@ -119,13 +124,21 @@ class GenerateCommitMessageAction : AnAction(), DumbAware {
                         }
                     } catch (_: java.util.concurrent.CancellationException) {
                         // Cancellation is silent and leaves the commit input untouched.
+                    } catch (failure: Exception) {
+                        if (failure is ControlFlowException) throw failure
+                        // A cancelled attempt can fail as its Git process is torn down; stay silent then.
+                        val cancelled = indicator.isCanceled || project.isDisposed || attempt.cancelled.get()
+                        if (!cancelled) {
+                            log.warn("Commit message generation failed in $root", failure)
+                            notify(project, failureNotice(failure), NotificationType.ERROR)
+                        }
                     } finally { if (!scheduled) generations.finish(root, attempt) }
                 }
             },
         )
     }
 
-    private data class Changes(val diff: String, val recentMessages: List<String>, val staged: Boolean)
+    internal data class CommitPatch(val diff: String, val staged: Boolean)
 
     /**
      * Reads the diff from Git directly rather than from the IDE's change list:
@@ -137,44 +150,34 @@ class GenerateCommitMessageAction : AnAction(), DumbAware {
      * dependency in for two commands, and shelling out works in any IDE that has
      * Git on PATH regardless of which VCS plugins are installed.
      */
-    private fun collectChanges(root: String, check: () -> Unit, stagedOnly: Boolean? = null): Changes? {
-        fun git(vararg parameters: String): String? {
-            check()
-            val process = ProcessBuilder(listOf("git") + parameters)
-                .directory(File(root))
-                // Nothing reads stderr, and an undrained pipe (one CRLF warning per
-                // file on Windows) blocks git until the timeout.
-                .redirectError(ProcessBuilder.Redirect.DISCARD)
-                .start()
-            val reader = java.util.concurrent.Executors.newSingleThreadExecutor()
-            val output = reader.submit<String> { process.inputStream.bufferedReader().use { it.readText() } }
-            try {
-                val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(GIT_TIMEOUT_SECONDS)
-                while (!process.waitFor(50, TimeUnit.MILLISECONDS)) {
-                    check()
-                    if (System.nanoTime() >= deadline) error("Git preparation timed out")
-                }
+    internal fun readCommitPatch(root: String, check: () -> Unit): CommitPatch? {
+        val staged = git(root, check, "diff", "--cached", "--no-color", "--no-ext-diff") ?: error("Git could not read the staged changes in $root.")
+        if (staged.isNotBlank()) return CommitPatch(staged, staged = true)
+        val unstaged = git(root, check, "diff", "--no-color", "--no-ext-diff") ?: error("Git could not read the unstaged changes in $root.")
+        return unstaged.takeIf(String::isNotBlank)?.let { CommitPatch(it, staged = false) }
+    }
+
+    private fun git(root: String, check: () -> Unit, vararg parameters: String): String? {
+        check()
+        val process = ProcessBuilder(listOf("git") + parameters)
+            .directory(File(root))
+            .redirectError(ProcessBuilder.Redirect.DISCARD)
+            .start()
+        val reader = java.util.concurrent.Executors.newSingleThreadExecutor()
+        val output = reader.submit<String> { process.inputStream.bufferedReader().use { it.readText() } }
+        try {
+            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(GIT_TIMEOUT_SECONDS)
+            while (!process.waitFor(50, TimeUnit.MILLISECONDS)) {
                 check()
-                return if (process.exitValue() == 0) output.get(1, TimeUnit.SECONDS) else null
-            } finally {
-                process.destroyForcibly()
-                output.cancel(true)
-                reader.shutdownNow()
+                if (System.nanoTime() >= deadline) error("Git preparation timed out")
             }
+            check()
+            return if (process.exitValue() == 0) output.get(1, TimeUnit.SECONDS) else null
+        } finally {
+            process.destroyForcibly()
+            output.cancel(true)
+            reader.shutdownNow()
         }
-
-        // Staged first; only fall back to the working tree when the index is empty,
-        // so the message always describes exactly one of the two.
-        val staged = if (stagedOnly != false) git("diff", "--cached", "--no-color", "--no-ext-diff").orEmpty() else ""
-        val useStaged = stagedOnly ?: staged.isNotBlank()
-        val diff = (if (useStaged) staged else git("diff", "--no-color", "--no-ext-diff"))?.takeIf { it.isNotBlank() } ?: return null
-
-        val recent = git("log", "-n", "20", "--pretty=format:%s")
-            ?.lines()
-            ?.filter { it.isNotBlank() }
-            .orEmpty()
-
-        return Changes(diff, recent, useStaged)
     }
 
     private fun commitPanel(event: AnActionEvent): CommitMessageI? =
@@ -190,6 +193,7 @@ class GenerateCommitMessageAction : AnAction(), DumbAware {
 
     private companion object {
         const val GIT_TIMEOUT_SECONDS = 30L
+        val log = logger<GenerateCommitMessageAction>()
     }
 
     private fun repositoryRoots(event: AnActionEvent): List<String> =
@@ -208,10 +212,14 @@ class GenerateCommitMessageAction : AnAction(), DumbAware {
         return if (result == DialogWrapper.OK_EXIT_CODE) selection.selectedItem as? String else null
     }
 
-    private fun notify(project: Project, message: String) {
+    /** User-facing text for a failed generation. Failures are notified, never left to the IDE error reporter. */
+    internal fun failureNotice(failure: Throwable): String =
+        "Could not generate the commit message: ${failure.message?.takeIf(String::isNotBlank) ?: failure.javaClass.simpleName}"
+
+    private fun notify(project: Project, message: String, type: NotificationType = NotificationType.INFORMATION) {
         com.intellij.notification.NotificationGroupManager.getInstance()
             .getNotificationGroup(VarroProjectService.NOTIFICATION_GROUP)
-            .createNotification("Varro", message, com.intellij.notification.NotificationType.INFORMATION)
+            .createNotification("Varro", message, type)
             .notify(project)
     }
 }

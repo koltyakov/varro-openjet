@@ -388,7 +388,21 @@ internal class OpenCodeV2Adapter(
                 }
             }
             when (action) {
-                "children" -> return result(objects(data("GET", "/api/session?parentID=${encode(id)}&limit=1000")).map { session(it, options) })
+                "children" -> {
+                    val children = JsonArray()
+                    val list = "/api/session?parentID=${encode(id)}&limit=1000"
+                    val seen = mutableSetOf<String>()
+                    var cursor: String? = null
+                    do {
+                        val page = raw("GET", list + (cursor?.let { "&cursor=${encode(it)}" } ?: "")).asObjectOrNull()
+                        val records = objects(page?.get("data"))
+                        check(children.size() + records.size <= 10_000) { "Session tree is too large" }
+                        records.forEach { children.add(session(it, options)) }
+                        cursor = page.obj("cursor").str("next")
+                        check(cursor == null || records.isNotEmpty() && seen.add(cursor)) { "Invalid child session cursor" }
+                    } while (cursor != null)
+                    return result(children)
+                }
                 "message" -> if (method == "GET") return messages(id, directory, query, options)
                 "abort", "summarize" -> {
                     if (action == "abort" && backgroundWork.isWaiting(id)) {

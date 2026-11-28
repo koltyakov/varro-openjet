@@ -3,6 +3,7 @@ package varro.host
 import com.google.gson.JsonArray
 import com.google.gson.JsonObject
 import varro.protocol.*
+import varro.server.OpenCodeResponse
 import java.nio.file.Path
 
 /** Write-ahead admission journal. Ambiguous sends are never retried automatically. */
@@ -86,7 +87,7 @@ class QueuedDispatches(private val path: Path, initialMessages: JsonArray) {
     @Synchronized fun complete(request: JsonObject, success: Boolean, rejected: Boolean = false) {
         val itemId = request.obj("queuedMessageDispatch").str("itemId") ?: return
         val admission = dispatches().obj(itemId) ?: return
-        if (admission.long("lease") != request.obj("queuedMessageDispatch").long("lease")) return
+        if (admission.str("status") != "admitting" || admission.long("lease") != request.obj("queuedMessageDispatch").long("lease")) return
         if (success) markSent(itemId)
         else if (rejected) dispatches().remove(itemId)
         claims.remove(admission.str("sessionId"))
@@ -100,15 +101,39 @@ class QueuedDispatches(private val path: Path, initialMessages: JsonArray) {
 
     @Synchronized fun detach(viewId: String) { claims.entries.removeIf { it.value.str("viewId") == viewId } }
 
-    fun recover(readMessages: (String) -> JsonArray) {
+    fun recover(readPage: (String, String?) -> OpenCodeResponse) {
         val pending = synchronized(this) { dispatches().entrySet().filter { it.value.asJsonObject.str("status") == "admitting" }
             .map { it.key to it.value.asJsonObject.deepCopy() } }
         pending.forEach { (itemId, admission) ->
-            val found = runCatching { readMessages(admission.str("sessionId")!!).any {
-                it.asObjectOrNull().obj("info").str("id") == admission.str("messageId")
-            } }.getOrDefault(false)
-            if (found) synchronized(this) { markSent(itemId); save() }
+            val sessionId = admission.text("sessionId") ?: return@forEach
+            val messageId = admission.text("messageId") ?: return@forEach
+            val found = try { historyContains(messageId) { readPage(sessionId, it) } }
+                catch (_: Exception) { false }
+            if (found) synchronized(this) {
+                if (dispatches().obj(itemId) == admission) {
+                    markSent(itemId)
+                    if (claims[sessionId].long("lease") == admission.long("lease")) claims.remove(sessionId)
+                    save()
+                }
+            }
         }
+    }
+
+    private fun historyContains(messageId: String, readPage: (String?) -> OpenCodeResponse): Boolean {
+        var count = 0L
+        var characters = 0L
+        var cursor: String? = null
+        val seen = mutableSetOf<String>()
+        while (count < 10_000 && characters < 64L * 1024 * 1024 && seen.size < 1000) {
+            val page = readPage(cursor)
+            val items = page.data.asArrayOrNull() ?: return false
+            if (items.any { it.asObjectOrNull().obj("info").str("id") == messageId }) return true
+            cursor = page.nextCursor ?: return false
+            if (!seen.add(cursor)) return false
+            count += items.size()
+            characters += items.toString().length
+        }
+        return false
     }
 
     private fun markSent(itemId: String) {

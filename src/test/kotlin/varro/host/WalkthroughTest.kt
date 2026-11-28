@@ -40,6 +40,72 @@ class WalkthroughTest {
 
     // --- Diff parsing ----------------------------------------------------------
 
+    private fun withRepository(test: (java.nio.file.Path, (Array<out String>) -> Unit) -> Unit) {
+        val root = Files.createTempDirectory("walkthrough-capture")
+        try {
+            val git = { args: Array<out String> ->
+                val process = ProcessBuilder(listOf("git") + args).directory(root.toFile()).redirectErrorStream(true).start()
+                val output = process.inputStream.bufferedReader().use { it.readText() }
+                assertEquals(output, 0, process.waitFor())
+            }
+            git(arrayOf("init"))
+            test(root, git)
+        } finally {
+            root.toFile().deleteRecursively()
+        }
+    }
+
+    @Test fun `oversized staged diff refuses only that scope with staged advice`() = withRepository { root, git ->
+        Files.writeString(root.resolve("large.txt"), "x".repeat(WalkthroughGit.MAX_DIFF_BYTES + 1))
+        git(arrayOf("add", "large.txt"))
+        Files.writeString(root.resolve("small.txt"), "small unstaged addition\n")
+        val changes = WalkthroughGit.capture(root.toString()) {}
+        assertEquals(WalkthroughGit.STAGED_TOO_LARGE, changes.staged.exceptionOrNull()?.message)
+        assertTrue(WalkthroughGit.STAGED_TOO_LARGE.contains("4 MB") && WalkthroughGit.STAGED_TOO_LARGE.contains("Unstage"))
+        assertTrue(changes.unstaged.getOrThrow().contains("+small unstaged addition"))
+    }
+
+    @Test fun `oversized unstaged diff refuses only that scope and suggests the staged walkthrough`() = withRepository { root, git ->
+        Files.writeString(root.resolve("large.txt"), "small\n")
+        Files.writeString(root.resolve("staged.txt"), "staged addition\n")
+        git(arrayOf("add", "large.txt", "staged.txt"))
+        Files.writeString(root.resolve("large.txt"), "x".repeat(WalkthroughGit.MAX_DIFF_BYTES + 1))
+        val changes = WalkthroughGit.capture(root.toString()) {}
+        assertEquals(WalkthroughGit.UNSTAGED_TOO_LARGE, changes.unstaged.exceptionOrNull()?.message)
+        assertTrue(WalkthroughGit.UNSTAGED_TOO_LARGE.contains("walk through the staged changes"))
+        assertTrue(changes.staged.getOrThrow().contains("+staged addition"))
+    }
+
+    @Test fun `untracked limit counts files rather than path bytes`() = withRepository { root, _ ->
+        // 1,000 long names exceed the previous 128 KiB path-list cap but stay under the file-count limit.
+        val name = "n".repeat(200)
+        repeat(1_000) { Files.writeString(root.resolve("$name-$it.txt"), "") }
+        val captured = WalkthroughGit.capture(root.toString()) {}.unstaged.getOrThrow()
+        assertTrue(captured.contains("$name-999.txt"))
+    }
+
+    @Test fun `too many untracked files refuses unstaged with an actionable message`() = withRepository { root, git ->
+        Files.writeString(root.resolve("staged.txt"), "staged addition\n")
+        git(arrayOf("add", "staged.txt"))
+        val generated = Files.createDirectory(root.resolve("generated"))
+        repeat(WalkthroughGit.MAX_UNTRACKED_PATHS + 1) { Files.writeString(generated.resolve("$it.txt"), "") }
+        val changes = WalkthroughGit.capture(root.toString()) {}
+        assertEquals(WalkthroughGit.TOO_MANY_UNTRACKED, changes.unstaged.exceptionOrNull()?.message)
+        assertTrue(WalkthroughGit.TOO_MANY_UNTRACKED.startsWith("There are more than 4,096 untracked files."))
+        assertTrue(changes.staged.getOrThrow().contains("+staged addition"))
+    }
+
+    @Test fun `diff parsing stops when cancelled within a hunk`() {
+        val patch = gitDiff + "\n+line".repeat(10_000)
+        var checks = 0
+        assertThrows(java.util.concurrent.CancellationException::class.java) {
+            Walkthrough.parseUnifiedDiff(patch, "staged") {
+                if (++checks == 100) throw java.util.concurrent.CancellationException()
+            }
+        }
+        assertEquals(100, checks)
+    }
+
     @Test fun `parses git diffs into files and hunks keeping removed lines that resemble headers`() {
         val files = Walkthrough.parseUnifiedDiff(gitDiff, "staged")
         assertEquals(
